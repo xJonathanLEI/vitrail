@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "vitrail-pg",
+    "vitrail-pg-core",
+    "vitrail-pg-macros",
+]
+resolver = "3"
+
+[workspace.dependencies]
+proc-macro2 = "1.0.106"
+quote = "1.0.45"
+syn = { version = "2.0.117", features = ["parsing", "printing", "proc-macro"] }
+trybuild = "1.0.116"
+vitrail-pg-core = { path = "./vitrail-pg-core" }
+vitrail-pg-macros = { path = "./vitrail-pg-macros" }

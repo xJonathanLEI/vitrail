@@ -1,0 +1,9 @@
+[package]
+name = "vitrail-pg-core"
+version = "0.1.0"
+authors = ["Jonathan LEI <me@xjonathan.dev>"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+description = "Core schema types and validation for the vitrail-pg crate"
+
+[dependencies]

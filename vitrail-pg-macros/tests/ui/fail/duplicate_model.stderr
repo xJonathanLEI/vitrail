@@ -1,0 +1,11 @@
+error: duplicate model `user`
+ --> tests/ui/fail/duplicate_model.rs:8:11
+  |
+8 |     model user {
+  |           ^^^^
+
+error: first declaration of this model
+ --> tests/ui/fail/duplicate_model.rs:4:11
+  |
+4 |     model user {
+  |           ^^^^

@@ -1,0 +1,15 @@
+[package]
+name = "vitrail-pg"
+version = "0.1.0"
+authors = ["Jonathan LEI <me@xjonathan.dev>"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+description = "PostgreSQL support for vitrail"
+
+[dependencies]
+vitrail-pg-core.workspace = true
+vitrail-pg-macros.workspace = true
+
+[[example]]
+name = "schema_definition"
+path = "../examples/pg_schema_definition.rs"

@@ -1,0 +1,5 @@
+error: unknown local field `missing_field` referenced by relation field `user`
+  --> tests/ui/fail/invalid_relation.rs:11:41
+   |
+11 |         user    user @relation(fields: [missing_field], references: [id])
+   |                                         ^^^^^^^^^^^^^

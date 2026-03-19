@@ -1,0 +1,19 @@
+[package]
+name = "vitrail-pg-macros"
+version = "0.1.0"
+authors = ["Jonathan LEI <me@xjonathan.dev>"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+description = "Procedural macros for the vitrail-pg crate"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+vitrail-pg-core.workspace = true
+
+[dev-dependencies]
+trybuild.workspace = true
