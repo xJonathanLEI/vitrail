@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlx::Connection as _;
 use sqlx::postgres::{PgConnection, PgPoolOptions};
-use vitrail_pg::{QueryResult, schema};
+use vitrail_pg::{query, schema};
 
 const DEFAULT_POSTGRES_URL: &str = "postgres://postgres:postgres@127.0.0.1:5432/vitrail";
 
@@ -26,24 +26,6 @@ schema! {
         created_at DateTime @default(now())
         author     user     @relation(fields: [author_id], references: [id])
     }
-}
-
-#[derive(QueryResult)]
-#[vitrail(schema = my_schema::Schema, model = "user")]
-struct ManualQueryUser {
-    id: i64,
-    email: String,
-    name: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(QueryResult)]
-#[vitrail(schema = my_schema::Schema, model = "post")]
-struct ManualQueryPost {
-    id: i64,
-    title: String,
-    #[vitrail(include)]
-    author: ManualQueryUser,
 }
 
 fn postgres_test_setup_help(database_url: &str) -> String {
@@ -237,13 +219,31 @@ async fn simple_query_on_postgres() {
         .expect("should create vitrail client");
 
     let posts = client
-        .find_many(my_schema::query::<ManualQueryPost>())
+        .find_many(query! {
+            crate::my_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                },
+                include: {
+                    author: true,
+                },
+            }
+        })
         .await
-        .expect("derived query should succeed");
+        .expect("query should succeed");
 
     assert_eq!(posts.len(), 1);
 
     let post = &posts[0];
+    let _: &i64 = &post.id;
+    let _: &String = &post.title;
+    let _: &i64 = &post.author.id;
+    let _: &String = &post.author.email;
+    let _: &String = &post.author.name;
+    let _: &chrono::DateTime<chrono::Utc> = &post.author.created_at;
+
     assert_eq!(post.id, 1);
     assert_eq!(post.title, "Hello from Vitrail");
     assert_eq!(post.author.id, author_id);

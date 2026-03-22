@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
-use quote::quote;
+use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream as TokenStream2, TokenTree};
+use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -13,7 +13,11 @@ use vitrail_pg_core as core;
 
 mod kw {
     syn::custom_keyword!(model);
+    syn::custom_keyword!(schema);
     syn::custom_keyword!(name);
+    syn::custom_keyword!(include);
+    syn::custom_keyword!(field);
+    syn::custom_keyword!(relation);
 }
 
 /// Validates a schema DSL declaration at compile time.
@@ -25,6 +29,12 @@ pub fn schema(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
+}
+
+#[proc_macro]
+pub fn query(input: TokenStream) -> TokenStream {
+    let query = syn::parse_macro_input!(input as QueryMacroInput);
+    query.expand().into()
 }
 
 #[proc_macro_derive(QueryResult, attributes(vitrail))]
@@ -199,8 +209,12 @@ impl ParsedSchema {
     fn generate_named_schema(&self) -> Result<TokenStream2> {
         let module_name = &self.module_name;
         let schema = self.generate_schema()?;
+        let helper_macros = self.generate_query_helper_macros(module_name)?;
+        let local_query_macro_ident = format_ident!("__vitrail_query_local_{}", module_name);
 
         Ok(quote! {
+            #helper_macros
+
             pub mod #module_name {
                 static __SCHEMA: ::std::sync::OnceLock<::vitrail_pg::Schema> =
                     ::std::sync::OnceLock::new();
@@ -267,6 +281,8 @@ impl ParsedSchema {
                 {
                     ::vitrail_pg::Query::new()
                 }
+
+                pub(crate) use #local_query_macro_ident as __query;
             }
         })
     }
@@ -381,6 +397,193 @@ impl ParsedSchema {
             )
         })
     }
+
+    fn generate_query_helper_macros(&self, module_name: &Ident) -> Result<TokenStream2> {
+        let main_macro_ident = format_ident!("__vitrail_query_{}", module_name);
+        let local_main_macro_ident = format_ident!("__vitrail_query_local_{}", module_name);
+        let mut helpers = TokenStream2::new();
+        let mut main_arms = Vec::new();
+        let dollar_crate = dollar_crate();
+
+        for model in &self.models {
+            let model_ident = &model.name;
+            let model_name = LitStr::new(&model.name.to_string(), model.name.span());
+            let root_struct_ident =
+                format_ident!("__VitrailQuery{}", to_pascal_case(&model.name.to_string()));
+            let select_assert_ident =
+                format_ident!("__vitrail_assert_select_{}_{}", module_name, model.name);
+            let select_ty_ident =
+                format_ident!("__vitrail_select_ty_{}_{}", module_name, model.name);
+            let include_assert_ident =
+                format_ident!("__vitrail_assert_include_{}_{}", module_name, model.name);
+            let include_ty_ident =
+                format_ident!("__vitrail_include_ty_{}_{}", module_name, model.name);
+            let include_struct_ident =
+                format_ident!("__vitrail_include_struct_{}_{}", module_name, model.name);
+
+            let scalar_fields = model.scalar_fields();
+            let relation_fields = model.relation_fields();
+
+            let select_assert_arms = scalar_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! { (#ident) => {}; }
+            });
+            let select_ty_arms = scalar_fields
+                .iter()
+                .map(|field| {
+                    let ident = &field.name;
+                    let ty = rust_type_tokens(&field.ty)?;
+                    Ok(quote! { (#ident) => { #ty }; })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let include_assert_arms = relation_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! { (#ident) => {}; }
+            });
+
+            let include_ty_arms = relation_fields.iter().map(|field| {
+                let ident = &field.name;
+                let nested_ident = format_ident!(
+                    "__VitrailQuery{}{}",
+                    to_pascal_case(&model.name.to_string()),
+                    to_pascal_case(&field.name.to_string())
+                );
+                let ty = if field.ty.optional {
+                    quote! { Option<#nested_ident> }
+                } else {
+                    quote! { #nested_ident }
+                };
+                quote! { (#ident) => { #ty }; }
+            });
+
+            let include_struct_arms = relation_fields.iter().map(|field| {
+                let ident = &field.name;
+                let nested_ident = format_ident!(
+                    "__VitrailQuery{}{}",
+                    to_pascal_case(&model.name.to_string()),
+                    to_pascal_case(&field.name.to_string())
+                );
+                let target = self.models.iter().find(|candidate| {
+                    candidate.name == field.ty.name || field.ty.name == to_pascal_case(&candidate.name.to_string())
+                }).expect("validated relation target");
+                let target_model_name = LitStr::new(&target.name.to_string(), target.name.span());
+                let target_scalar_fields = target.scalar_fields().iter().map(|target_field| {
+                    let field_ident = &target_field.name;
+                    let field_ty = rust_type_tokens(&target_field.ty)?;
+                    Ok(quote! { pub #field_ident: #field_ty, })
+                }).collect::<Result<Vec<_>>>()?;
+                Ok(quote! {
+                    (#ident) => {
+                        #[allow(dead_code)]
+                        #[derive(::vitrail_pg::QueryResult)]
+                        #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #target_model_name)]
+                        struct #nested_ident {
+                            #(#target_scalar_fields)*
+                        }
+                    };
+                })
+            }).collect::<Result<Vec<_>>>()?;
+
+            helpers.extend(quote! {
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #select_assert_ident {
+                    #(#select_assert_arms)*
+                    ($other:ident) => {
+                        compile_error!(concat!("unknown scalar field `", stringify!($other), "` in model `", #model_name, "`"));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #select_ty_ident {
+                    #(#select_ty_arms)*
+                    ($other:ident) => {
+                        compile_error!(concat!("unknown scalar field `", stringify!($other), "` in model `", #model_name, "`"));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #include_assert_ident {
+                    #(#include_assert_arms)*
+                    ($other:ident) => {
+                        compile_error!(concat!("unknown relation field `", stringify!($other), "` in model `", #model_name, "`"));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #include_ty_ident {
+                    #(#include_ty_arms)*
+                    ($other:ident) => {
+                        compile_error!(concat!("unknown relation field `", stringify!($other), "` in model `", #model_name, "`"));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #include_struct_ident {
+                    #(#include_struct_arms)*
+                    ($other:ident) => {
+                        compile_error!(concat!("unknown relation field `", stringify!($other), "` in model `", #model_name, "`"));
+                    };
+                }
+            });
+
+            main_arms.push(quote! {
+                (
+                    #model_ident {
+                        select: {
+                            $($select_field:ident : true),* $(,)?
+                        }
+                        $(,
+                            include: {
+                                $($include_field:ident : true),* $(,)?
+                            }
+                        )?
+                        $(,)?
+                    }
+                ) => {{
+                    $( #select_assert_ident!($select_field); )*
+                    $( $( #include_assert_ident!($include_field); )* )?
+                    $( $( #include_struct_ident!($include_field); )* )?
+
+                    #[allow(dead_code)]
+                    #[derive(::vitrail_pg::QueryResult)]
+                    #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #model_name)]
+                    struct #root_struct_ident {
+                        $( pub $select_field: #select_ty_ident!($select_field), )*
+                        $( $( #[vitrail(include)] pub $include_field: #include_ty_ident!($include_field), )* )?
+                    }
+
+                    #dollar_crate::#module_name::query::<#root_struct_ident>()
+                }};
+            });
+        }
+
+        helpers.extend(quote! {
+            #[doc(hidden)]
+            macro_rules! #local_main_macro_ident {
+                #(#main_arms)*
+                ($($tokens:tt)*) => {
+                    compile_error!("unsupported query shape");
+                };
+            }
+
+            #[doc(hidden)]
+            #[macro_export(local_inner_macros)]
+            macro_rules! #main_macro_ident {
+                #(#main_arms)*
+                ($($tokens:tt)*) => {
+                    compile_error!("unsupported query shape");
+                };
+            }
+        });
+
+        Ok(helpers)
+    }
 }
 
 /// Parsed model declaration.
@@ -434,6 +637,20 @@ impl ParsedModel {
                 .build()
                 .expect("model was validated during macro expansion")
         })
+    }
+
+    fn scalar_fields(&self) -> Vec<&ParsedField> {
+        self.fields
+            .iter()
+            .filter(|field| scalar_type_from_ident(&field.ty.name).is_some())
+            .collect()
+    }
+
+    fn relation_fields(&self) -> Vec<&ParsedField> {
+        self.fields
+            .iter()
+            .filter(|field| scalar_type_from_ident(&field.ty.name).is_none())
+            .collect()
     }
 }
 
@@ -887,6 +1104,42 @@ fn scalar_type_from_ident(ident: &Ident) -> Option<core::ScalarType> {
     }
 }
 
+fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
+    let base = match ty.name.to_string().as_str() {
+        "Int" => quote! { i64 },
+        "String" => quote! { String },
+        "Boolean" => quote! { bool },
+        "DateTime" => quote! { ::chrono::DateTime<::chrono::Utc> },
+        "Float" => quote! { f64 },
+        other => {
+            return Err(Error::new(
+                ty.name.span(),
+                format!("unsupported query field type `{other}`"),
+            ));
+        }
+    };
+
+    Ok(if ty.optional {
+        quote! { Option<#base> }
+    } else {
+        base
+    })
+}
+
+fn to_pascal_case(name: &str) -> String {
+    let mut result = String::new();
+
+    for segment in name.split('_').filter(|segment| !segment.is_empty()) {
+        let mut chars = segment.chars();
+        if let Some(first) = chars.next() {
+            result.extend(first.to_uppercase());
+            result.push_str(chars.as_str());
+        }
+    }
+
+    result
+}
+
 /// Adds an error to the accumulator, preserving earlier failures.
 fn push_error(target: &mut Option<Error>, error: Error) {
     match target {
@@ -905,6 +1158,69 @@ fn scalar_type_variant(scalar: core::ScalarType) -> Ident {
         core::ScalarType::Decimal => Ident::new("Decimal", Span::call_site()),
         core::ScalarType::Bytes => Ident::new("Bytes", Span::call_site()),
         core::ScalarType::Json => Ident::new("Json", Span::call_site()),
+    }
+}
+
+fn dollar_crate() -> TokenStream2 {
+    let mut tokens = TokenStream2::new();
+    tokens.extend([
+        TokenTree::Punct(Punct::new('$', Spacing::Joint)),
+        TokenTree::Ident(Ident::new("crate", Span::call_site())),
+    ]);
+    tokens
+}
+
+struct QueryMacroInput {
+    schema_path: Path,
+    body: TokenStream2,
+}
+
+impl Parse for QueryMacroInput {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let schema_path = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let body: TokenStream2 = input.parse()?;
+        Ok(Self { schema_path, body })
+    }
+}
+
+impl QueryMacroInput {
+    fn expand(self) -> TokenStream2 {
+        let schema_path = self.schema_path;
+        let body = self.body;
+        let segments = schema_path.segments.iter().collect::<Vec<_>>();
+        let module_segment = segments
+            .last()
+            .expect("schema path should contain at least one segment");
+        let macro_ident = format_ident!("__vitrail_query_{}", module_segment.ident);
+
+        if segments.len() == 1
+            || segments
+                .first()
+                .is_some_and(|segment| segment.ident == "crate")
+            || segments
+                .first()
+                .is_some_and(|segment| segment.ident == "self")
+        {
+            quote! {
+                #schema_path::__query! {
+                    #body
+                }
+            }
+        } else {
+            let root_path = Path {
+                leading_colon: schema_path.leading_colon,
+                segments: segments[..segments.len() - 1]
+                    .iter()
+                    .map(|segment| (*segment).clone())
+                    .collect(),
+            };
+            quote! {
+                #root_path::#macro_ident! {
+                    #body
+                }
+            }
+        }
     }
 }
 
@@ -1229,7 +1545,7 @@ mod tests {
 
         let generated = schema.expand().expect("schema should expand").to_string();
         assert!(generated.contains("pub mod my_schema"));
-        assert!(generated.contains("pub struct Schema"));
         assert!(generated.contains("pub fn query < T > ()"));
+        assert!(generated.contains("macro_rules ! __vitrail_query_my_schema"));
     }
 }

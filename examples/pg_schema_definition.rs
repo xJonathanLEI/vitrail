@@ -1,4 +1,4 @@
-use vitrail_pg::{QueryResult, schema};
+use vitrail_pg::{query, schema};
 
 schema! {
     name my_schema
@@ -21,24 +21,6 @@ schema! {
     }
 }
 
-#[derive(QueryResult)]
-#[vitrail(schema = my_schema::Schema, model = "user")]
-struct QueryUser {
-    id: i64,
-    email: String,
-    name: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(QueryResult)]
-#[vitrail(schema = my_schema::Schema, model = "post")]
-struct QueryPost {
-    id: i64,
-    title: String,
-    #[vitrail(include)]
-    author: QueryUser,
-}
-
 #[tokio::main]
 async fn main() {
     let client = my_schema::VitrailClient::new("postgres://127.0.0.1:5432/vitrail")
@@ -46,7 +28,18 @@ async fn main() {
         .unwrap();
 
     let posts = client
-        .find_many(my_schema::query::<QueryPost>())
+        .find_many(query! {
+            crate::my_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                },
+                include: {
+                    author: true,
+                },
+            }
+        })
         .await
         .unwrap();
     let post = &posts[0];
