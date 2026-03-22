@@ -14,5 +14,9 @@ vitrail-pg-core.workspace = true
 vitrail-pg-macros.workspace = true
 
 [[example]]
-name = "schema_definition"
-path = "../examples/pg_schema_definition.rs"
+name = "pg_query_ad_hoc"
+path = "../examples/pg_query_ad_hoc.rs"
+
+[[example]]
+name = "pg_query_model_first"
+path = "../examples/pg_query_model_first.rs"

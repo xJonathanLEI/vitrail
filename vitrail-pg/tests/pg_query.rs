@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlx::Connection as _;
 use sqlx::postgres::{PgConnection, PgPoolOptions};
-use vitrail_pg::{query, schema};
+use vitrail_pg::{QueryResult, query, schema};
 
 const DEFAULT_POSTGRES_URL: &str = "postgres://postgres:postgres@127.0.0.1:5432/vitrail";
 
@@ -26,6 +26,24 @@ schema! {
         created_at DateTime @default(now())
         author     user     @relation(fields: [author_id], references: [id])
     }
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = user)]
+struct UserSummary {
+    id: i64,
+    email: String,
+    name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = post)]
+struct PostWithAuthor {
+    id: i64,
+    title: String,
+    #[vitrail(include)]
+    author: UserSummary,
 }
 
 fn postgres_test_setup_help(database_url: &str) -> String {
@@ -237,13 +255,34 @@ async fn simple_query_on_postgres() {
     assert_eq!(posts.len(), 1);
 
     let post = &posts[0];
-    let _: &i64 = &post.id;
-    let _: &String = &post.title;
-    let _: &i64 = &post.author.id;
-    let _: &String = &post.author.email;
-    let _: &String = &post.author.name;
-    let _: &chrono::DateTime<chrono::Utc> = &post.author.created_at;
+    assert_eq!(post.id, 1);
+    assert_eq!(post.title, "Hello from Vitrail");
+    assert_eq!(post.author.id, author_id);
+    assert_eq!(post.author.email, "alice@example.com");
+    assert_eq!(post.author.name, "Alice");
+    assert!(post.author.created_at <= chrono::Utc::now());
 
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_named_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = my_schema::VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(my_schema::query::<PostWithAuthor>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+
+    let post = &posts[0];
     assert_eq!(post.id, 1);
     assert_eq!(post.title, "Hello from Vitrail");
     assert_eq!(post.author.id, author_id);
