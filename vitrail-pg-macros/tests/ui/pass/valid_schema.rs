@@ -1,28 +1,23 @@
 use vitrail_pg_macros::schema;
 
 schema! {
+    name my_schema
+
     model user {
-        id      Int     @id @default(autoincrement())
-        uid     String  @unique @db.Uuid
-        status  String
-        post    post?
-        comment comment?
+        id         Int      @id @default(autoincrement())
+        email      String   @unique
+        name       String
+        created_at DateTime @default(now())
     }
 
     model post {
         id         Int      @id @default(autoincrement())
-        uid        String   @unique @db.Uuid
-        user_id    Int      @unique
+        title      String
+        body       String?
+        published  Boolean
+        author_id  Int
         created_at DateTime @default(now())
-        user       user     @relation(fields: [user_id], references: [id])
-        comment    comment?
-    }
-
-    model comment {
-        id      Int    @id @default(autoincrement())
-        post_id Int    @unique
-        body    String
-        post    post   @relation(fields: [post_id], references: [id])
+        author     user     @relation(fields: [author_id], references: [id])
     }
 }
 

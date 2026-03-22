@@ -1,5 +1,5 @@
 error: `@default(autoincrement())` is only supported on `Int` fields
- --> tests/ui/fail/invalid_default.rs:5:24
+ --> tests/ui/fail/invalid_default.rs:7:24
   |
-5 |         id String @id @default(autoincrement())
+7 |         id String @id @default(autoincrement())
   |                        ^^^^^^^

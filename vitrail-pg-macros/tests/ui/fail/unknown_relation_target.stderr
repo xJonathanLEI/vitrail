@@ -1,0 +1,5 @@
+error: unknown relation target model `User` for field `user`
+ --> tests/ui/fail/unknown_relation_target.rs:9:17
+  |
+9 |         user    User @relation(fields: [user_id], references: [id])
+  |                 ^^^^

@@ -4,7 +4,8 @@ schema! {
     name my_schema
 
     model user {
-        id String @id @default(autoincrement())
+        id Int @id
+        id Int
     }
 }
 

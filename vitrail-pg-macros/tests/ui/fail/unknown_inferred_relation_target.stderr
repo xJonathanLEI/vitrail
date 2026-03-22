@@ -1,0 +1,5 @@
+error: unknown relation target model `Missing` for field `comment`
+ --> tests/ui/fail/unknown_inferred_relation_target.rs:8:17
+  |
+8 |         comment Missing?
+  |                 ^^^^^^^

@@ -1,12 +1,15 @@
 use proc_macro::TokenStream;
-use proc_macro2::Span;
+use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
+use quote::quote;
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::{Error, Ident, Result, Token, bracketed, parenthesized};
+use syn::punctuated::Punctuated;
+use syn::{Error, Result, Token, bracketed, parenthesized};
 use vitrail_pg_core as core;
 
 mod kw {
     syn::custom_keyword!(model);
+    syn::custom_keyword!(name);
 }
 
 /// Validates a schema DSL declaration at compile time.
@@ -14,8 +17,8 @@ mod kw {
 pub fn schema(input: TokenStream) -> TokenStream {
     let schema = syn::parse_macro_input!(input as ParsedSchema);
 
-    match schema.validate() {
-        Ok(()) => TokenStream::new(),
+    match schema.expand() {
+        Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
 }
@@ -24,22 +27,33 @@ pub fn schema(input: TokenStream) -> TokenStream {
 /// clean core validation errors back into compiler diagnostics with spans.
 #[derive(Debug)]
 struct ParsedSchema {
+    module_name: Ident,
     models: Vec<ParsedModel>,
 }
 
 impl Parse for ParsedSchema {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut models = Vec::new();
+        input.parse::<kw::name>()?;
+        let module_name = input.call(Ident::parse_any)?;
 
+        let mut models = Vec::new();
         while !input.is_empty() {
             models.push(input.parse()?);
         }
 
-        Ok(Self { models })
+        Ok(Self {
+            module_name,
+            models,
+        })
     }
 }
 
 impl ParsedSchema {
+    fn expand(&self) -> Result<TokenStream2> {
+        self.validate()?;
+        self.generate_named_schema()
+    }
+
     fn validate(&self) -> Result<()> {
         match self.to_core() {
             Ok(_) => Ok(()),
@@ -167,6 +181,192 @@ impl ParsedSchema {
             .map(|field| field.name.span())
             .unwrap_or_else(|| self.model_span(model_name, prefer_first))
     }
+
+    fn generate_named_schema(&self) -> Result<TokenStream2> {
+        let module_name = &self.module_name;
+        let schema = self.generate_schema()?;
+
+        Ok(quote! {
+            pub mod #module_name {
+                static __SCHEMA: ::std::sync::OnceLock<::vitrail_pg::Schema> =
+                    ::std::sync::OnceLock::new();
+
+                #[derive(Clone, Copy, Debug, Default)]
+                pub struct Schema;
+
+                impl ::vitrail_pg::SchemaAccess for Schema {
+                    fn schema() -> &'static ::vitrail_pg::Schema {
+                        __SCHEMA.get_or_init(|| #schema)
+                    }
+                }
+
+                #[derive(Clone, Debug)]
+                pub struct VitrailClient(::vitrail_pg::SqlxVitrailClient);
+
+                impl VitrailClient {
+                    pub async fn new(database_url: &str) -> Result<Self, ::sqlx::Error> {
+                        Ok(Self(::vitrail_pg::SqlxVitrailClient::new(database_url).await?))
+                    }
+
+                    pub fn from_inner(inner: ::vitrail_pg::SqlxVitrailClient) -> Self {
+                        Self(inner)
+                    }
+
+                    pub fn inner(&self) -> &::vitrail_pg::SqlxVitrailClient {
+                        &self.0
+                    }
+
+                    pub async fn find_many<Q>(
+                        &self,
+                        query: Q,
+                    ) -> Result<Vec<Q::Output>, ::sqlx::Error>
+                    where
+                        Q: ::vitrail_pg::QuerySpec,
+                    {
+                        self.0.find_many(query).await
+                    }
+
+                    pub async fn find_optional<Q>(
+                        &self,
+                        query: Q,
+                    ) -> Result<Option<Q::Output>, ::sqlx::Error>
+                    where
+                        Q: ::vitrail_pg::QuerySpec,
+                    {
+                        self.0.find_optional(query).await
+                    }
+
+                    pub async fn find_unique<Q>(
+                        &self,
+                        query: Q,
+                    ) -> Result<Q::Output, ::sqlx::Error>
+                    where
+                        Q: ::vitrail_pg::QuerySpec,
+                    {
+                        self.0.find_unique(query).await
+                    }
+                }
+
+                pub fn query<T>() -> ::vitrail_pg::Query<Schema, T>
+                where
+                    T: ::vitrail_pg::QueryModel<Schema = Schema> + Sync,
+                {
+                    ::vitrail_pg::Query::new()
+                }
+            }
+        })
+    }
+
+    fn generate_schema(&self) -> Result<TokenStream2> {
+        let mut models = Vec::with_capacity(self.models.len());
+
+        for model in &self.models {
+            models.push(model.generate_schema_model(self)?);
+        }
+
+        Ok(quote! {
+            ::vitrail_pg::Schema::builder()
+                .models(vec![#(#models),*])
+                .build()
+                .expect("schema was validated during macro expansion")
+        })
+    }
+
+    fn find_model(&self, name: &str) -> Option<&ParsedModel> {
+        self.models
+            .iter()
+            .find(|model| self.model_names_match(&model.name.to_string(), name))
+    }
+
+    fn model_names_match(&self, left: &str, right: &str) -> bool {
+        left.eq_ignore_ascii_case(right)
+    }
+
+    fn infer_relation_fields(
+        &self,
+        model: &ParsedModel,
+        field: &ParsedField,
+        target_model: &ParsedModel,
+    ) -> Result<(Vec<syn::LitStr>, Vec<syn::LitStr>)> {
+        let reverse_relation = target_model
+            .fields
+            .iter()
+            .find(|candidate| {
+                self.model_names_match(&candidate.ty.name.to_string(), &model.name.to_string())
+                    && candidate.relation().is_some()
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    field.ty.name.span(),
+                    format!(
+                        "could not infer relation metadata for `{}.{}`",
+                        model.name, field.name
+                    ),
+                )
+            })?;
+
+        let reverse_relation = reverse_relation
+            .relation()
+            .expect("reverse relation existence checked above");
+
+        let local_fields = reverse_relation
+            .references
+            .iter()
+            .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
+            .collect::<Vec<_>>();
+        let referenced_fields = reverse_relation
+            .fields
+            .iter()
+            .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
+            .collect::<Vec<_>>();
+
+        Ok((local_fields, referenced_fields))
+    }
+
+    fn generate_relation_attribute(
+        &self,
+        model: &ParsedModel,
+        field: &ParsedField,
+    ) -> Result<TokenStream2> {
+        let (fields, references) = match field.relation() {
+            Some(relation) => (
+                relation
+                    .fields
+                    .iter()
+                    .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
+                    .collect::<Vec<_>>(),
+                relation
+                    .references
+                    .iter()
+                    .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
+                    .collect::<Vec<_>>(),
+            ),
+            None => {
+                let target_model =
+                    self.find_model(&field.ty.name.to_string()).ok_or_else(|| {
+                        Error::new(
+                            field.ty.name.span(),
+                            format!(
+                                "unknown relation target model `{}` for field `{}`",
+                                field.ty.name, field.name
+                            ),
+                        )
+                    })?;
+
+                self.infer_relation_fields(model, field, target_model)?
+            }
+        };
+
+        Ok(quote! {
+            ::vitrail_pg::Attribute::Relation(
+                ::vitrail_pg::RelationAttribute::builder()
+                    .fields(vec![#(#fields.to_owned()),*])
+                    .references(vec![#(#references.to_owned()),*])
+                    .build()
+                    .expect("relation attribute was validated during macro expansion")
+            )
+        })
+    }
 }
 
 /// Parsed model declaration.
@@ -204,6 +404,22 @@ impl ParsedModel {
         core::Model::builder(self.name.to_string())
             .fields(fields)
             .build()
+    }
+
+    fn generate_schema_model(&self, schema: &ParsedSchema) -> Result<TokenStream2> {
+        let model_name = syn::LitStr::new(&self.name.to_string(), self.name.span());
+        let mut fields = Vec::with_capacity(self.fields.len());
+
+        for field in &self.fields {
+            fields.push(field.generate_schema_field(schema, self)?);
+        }
+
+        Ok(quote! {
+            ::vitrail_pg::Model::builder(#model_name)
+                .fields(vec![#(#fields),*])
+                .build()
+                .expect("model was validated during macro expansion")
+        })
     }
 }
 
@@ -247,6 +463,33 @@ impl ParsedField {
         core::Field::builder(self.name.to_string(), self.ty.to_core())
             .attributes(attributes)
             .build_for_model(model_name)
+    }
+
+    fn generate_schema_field(
+        &self,
+        schema: &ParsedSchema,
+        model: &ParsedModel,
+    ) -> Result<TokenStream2> {
+        let field_name = syn::LitStr::new(&self.name.to_string(), self.name.span());
+        let ty = self.ty.generate_schema_field_type();
+        let mut attributes = Vec::with_capacity(self.attributes.len() + 1);
+
+        for attribute in &self.attributes {
+            attributes.push(attribute.generate_schema_attribute()?);
+        }
+
+        if matches!(self.ty.to_core(), core::FieldType::Relation { .. })
+            && self.relation().is_none()
+        {
+            attributes.push(schema.generate_relation_attribute(model, self)?);
+        }
+
+        Ok(quote! {
+            ::vitrail_pg::Field::builder(#field_name, #ty)
+                .attributes(vec![#(#attributes),*])
+                .build()
+                .expect("field was validated during macro expansion")
+        })
     }
 
     fn relation(&self) -> Option<&ParsedRelationAttribute> {
@@ -302,6 +545,21 @@ impl ParsedFieldType {
         match scalar_type_from_ident(&self.name) {
             Some(scalar) => core::FieldType::scalar(scalar, self.optional),
             None => core::FieldType::relation(self.name.to_string(), self.optional),
+        }
+    }
+
+    fn generate_schema_field_type(&self) -> TokenStream2 {
+        match scalar_type_from_ident(&self.name) {
+            Some(scalar) => {
+                let variant = scalar_type_variant(scalar);
+                let optional = self.optional;
+                quote! { ::vitrail_pg::FieldType::scalar(::vitrail_pg::ScalarType::#variant, #optional) }
+            }
+            None => {
+                let model = syn::LitStr::new(&self.name.to_string(), self.name.span());
+                let optional = self.optional;
+                quote! { ::vitrail_pg::FieldType::relation(#model, #optional) }
+            }
         }
     }
 }
@@ -370,6 +628,22 @@ impl ParsedAttribute {
         }
     }
 
+    fn generate_schema_attribute(&self) -> Result<TokenStream2> {
+        Ok(match &self.kind {
+            ParsedAttributeKind::Id => quote! { ::vitrail_pg::Attribute::Id },
+            ParsedAttributeKind::Unique => quote! { ::vitrail_pg::Attribute::Unique },
+            ParsedAttributeKind::Default(default) => {
+                let default = default.generate_schema_default_attribute();
+                quote! { ::vitrail_pg::Attribute::Default(#default) }
+            }
+            ParsedAttributeKind::Relation(relation) => {
+                let relation = relation.generate_schema_relation_attribute()?;
+                quote! { ::vitrail_pg::Attribute::Relation(#relation) }
+            }
+            ParsedAttributeKind::DbUuid => quote! { ::vitrail_pg::Attribute::DbUuid },
+        })
+    }
+
     fn name(&self) -> &'static str {
         match self.kind {
             ParsedAttributeKind::Id => "@id",
@@ -431,6 +705,19 @@ impl ParsedDefaultAttribute {
             "now" => core::DefaultFunction::Now,
             other => core::DefaultFunction::Other(other.to_owned()),
         })
+    }
+
+    fn generate_schema_default_attribute(&self) -> TokenStream2 {
+        let function = match self.function.to_string().as_str() {
+            "autoincrement" => quote! { ::vitrail_pg::DefaultFunction::Autoincrement },
+            "now" => quote! { ::vitrail_pg::DefaultFunction::Now },
+            other => {
+                let other = syn::LitStr::new(other, self.function.span());
+                quote! { ::vitrail_pg::DefaultFunction::Other(#other.to_owned()) }
+            }
+        };
+
+        quote! { ::vitrail_pg::DefaultAttribute::new(#function) }
     }
 }
 
@@ -511,6 +798,27 @@ impl ParsedRelationAttribute {
             .build_for_field(model_name, field_name)
     }
 
+    fn generate_schema_relation_attribute(&self) -> Result<TokenStream2> {
+        let fields = self
+            .fields
+            .iter()
+            .map(|field| syn::LitStr::new(&field.to_string(), field.span()))
+            .collect::<Vec<_>>();
+        let references = self
+            .references
+            .iter()
+            .map(|reference| syn::LitStr::new(&reference.to_string(), reference.span()))
+            .collect::<Vec<_>>();
+
+        Ok(quote! {
+            ::vitrail_pg::RelationAttribute::builder()
+                .fields(vec![#(#fields.to_owned()),*])
+                .references(vec![#(#references.to_owned()),*])
+                .build()
+                .expect("relation attribute was validated during macro expansion")
+        })
+    }
+
     fn field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
         if prefer_first {
             self.fields
@@ -547,16 +855,8 @@ fn parse_ident_list(input: ParseStream<'_>) -> Result<Vec<Ident>> {
     let content;
     bracketed!(content in input);
 
-    let mut items = Vec::new();
-    while !content.is_empty() {
-        items.push(content.call(Ident::parse_any)?);
-
-        if content.peek(Token![,]) {
-            content.parse::<Token![,]>()?;
-        }
-    }
-
-    Ok(items)
+    Punctuated::<Ident, Token![,]>::parse_terminated(&content)
+        .map(|items| items.into_iter().collect())
 }
 
 fn scalar_type_from_ident(ident: &Ident) -> Option<core::ScalarType> {
@@ -581,6 +881,19 @@ fn push_error(target: &mut Option<Error>, error: Error) {
     }
 }
 
+fn scalar_type_variant(scalar: core::ScalarType) -> Ident {
+    match scalar {
+        core::ScalarType::Int => Ident::new("Int", Span::call_site()),
+        core::ScalarType::String => Ident::new("String", Span::call_site()),
+        core::ScalarType::Boolean => Ident::new("Boolean", Span::call_site()),
+        core::ScalarType::DateTime => Ident::new("DateTime", Span::call_site()),
+        core::ScalarType::Float => Ident::new("Float", Span::call_site()),
+        core::ScalarType::Decimal => Ident::new("Decimal", Span::call_site()),
+        core::ScalarType::Bytes => Ident::new("Bytes", Span::call_site()),
+        core::ScalarType::Json => Ident::new("Json", Span::call_site()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,6 +906,8 @@ mod tests {
     #[test]
     fn accepts_valid_schema_definition() {
         let schema = parse_schema(quote! {
+            name my_schema
+
             model user {
                 id      Int     @id @default(autoincrement())
                 uid     String  @unique @db.Uuid
@@ -618,84 +933,35 @@ mod tests {
             }
         });
 
-        assert!(schema.validate().is_ok());
+        schema.validate().expect("schema should validate");
     }
 
     #[test]
-    fn rejects_duplicate_fields() {
+    fn generates_named_schema_support_items() {
         let schema = parse_schema(quote! {
+            name my_schema
+
             model user {
-                id Int @id
-                id Int
-            }
-        });
-
-        let error = schema.validate().expect_err("schema should fail");
-        assert!(error.to_string().contains("duplicate field"));
-    }
-
-    #[test]
-    fn rejects_unknown_relation_target() {
-        let schema = parse_schema(quote! {
-            model post {
-                id      Int  @id
-                user_id Int
-                user    User @relation(fields: [user_id], references: [id])
-            }
-        });
-
-        let error = schema.validate().expect_err("schema should fail");
-        assert!(error.to_string().contains("unknown relation target model"));
-    }
-
-    #[test]
-    fn rejects_invalid_default_usage() {
-        let schema = parse_schema(quote! {
-            model user {
-                id String @id @default(autoincrement())
-            }
-        });
-
-        let error = schema.validate().expect_err("schema should fail");
-        assert!(error.to_string().contains("only supported on `Int` fields"));
-    }
-
-    #[test]
-    fn allows_inferred_relation_fields() {
-        let schema = parse_schema(quote! {
-            model user {
-                id      Int      @id
-                post    Post?
-                comment Comment?
+                id         Int      @id @default(autoincrement())
+                email      String   @unique
+                name       String
+                created_at DateTime @default(now())
             }
 
             model post {
-                id      Int      @id
-                user_id Int
-                user    user     @relation(fields: [user_id], references: [id])
-                comment Comment?
-            }
-
-            model comment {
-                id      Int  @id
-                post_id Int
-                post    post @relation(fields: [post_id], references: [id])
+                id         Int      @id @default(autoincrement())
+                title      String
+                body       String?
+                published  Boolean
+                author_id  Int
+                created_at DateTime @default(now())
+                author     user     @relation(fields: [author_id], references: [id])
             }
         });
 
-        assert!(schema.validate().is_ok());
-    }
-
-    #[test]
-    fn rejects_unknown_inferred_relation_target() {
-        let schema = parse_schema(quote! {
-            model user {
-                id      Int      @id
-                comment Missing?
-            }
-        });
-
-        let error = schema.validate().expect_err("schema should fail");
-        assert!(error.to_string().contains("unknown relation target model"));
+        let generated = schema.expand().expect("schema should expand").to_string();
+        assert!(generated.contains("pub mod my_schema"));
+        assert!(generated.contains("pub struct Schema"));
+        assert!(generated.contains("pub fn query < T > ()"));
     }
 }

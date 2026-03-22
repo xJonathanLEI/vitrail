@@ -7,6 +7,9 @@ edition = "2024"
 description = "PostgreSQL support for vitrail"
 
 [dependencies]
+chrono.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
 vitrail-pg-core.workspace = true
 vitrail-pg-macros.workspace = true
 
