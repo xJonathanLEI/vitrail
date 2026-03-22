@@ -1,9 +1,9 @@
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use sqlx::Connection as _;
 use sqlx::postgres::{PgConnection, PgPoolOptions};
-use sqlx::{Connection as _, Row as _, postgres::PgRow};
-use vitrail_pg::{QueryModel, QueryRelationSelection, QuerySelection, alias_name, schema};
+use vitrail_pg::{QueryResult, schema};
 
 const DEFAULT_POSTGRES_URL: &str = "postgres://postgres:postgres@127.0.0.1:5432/vitrail";
 
@@ -28,6 +28,8 @@ schema! {
     }
 }
 
+#[derive(QueryResult)]
+#[vitrail(schema = my_schema::Schema, model = "user")]
 struct ManualQueryUser {
     id: i64,
     email: String,
@@ -35,62 +37,13 @@ struct ManualQueryUser {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl QueryModel for ManualQueryUser {
-    type Schema = my_schema::Schema;
-
-    fn model_name() -> &'static str {
-        "user"
-    }
-
-    fn selection() -> QuerySelection {
-        QuerySelection {
-            model: Self::model_name(),
-            scalar_fields: vec!["id", "email", "name", "created_at"],
-            relations: Vec::new(),
-        }
-    }
-
-    fn from_row(row: &PgRow, prefix: &str) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get(alias_name(prefix, "id").as_str())?,
-            email: row.try_get(alias_name(prefix, "email").as_str())?,
-            name: row.try_get(alias_name(prefix, "name").as_str())?,
-            created_at: row.try_get(alias_name(prefix, "created_at").as_str())?,
-        })
-    }
-}
-
+#[derive(QueryResult)]
+#[vitrail(schema = my_schema::Schema, model = "post")]
 struct ManualQueryPost {
     id: i64,
     title: String,
+    #[vitrail(include)]
     author: ManualQueryUser,
-}
-
-impl QueryModel for ManualQueryPost {
-    type Schema = my_schema::Schema;
-
-    fn model_name() -> &'static str {
-        "post"
-    }
-
-    fn selection() -> QuerySelection {
-        QuerySelection {
-            model: Self::model_name(),
-            scalar_fields: vec!["id", "title"],
-            relations: vec![QueryRelationSelection {
-                field: "author",
-                selection: ManualQueryUser::selection(),
-            }],
-        }
-    }
-
-    fn from_row(row: &PgRow, prefix: &str) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get(alias_name(prefix, "id").as_str())?,
-            title: row.try_get(alias_name(prefix, "title").as_str())?,
-            author: ManualQueryUser::from_row(row, &alias_name(prefix, "author"))?,
-        })
-    }
 }
 
 fn postgres_test_setup_help(database_url: &str) -> String {
@@ -286,7 +239,7 @@ async fn simple_query_on_postgres() {
     let posts = client
         .find_many(my_schema::query::<ManualQueryPost>())
         .await
-        .expect("manual query should succeed");
+        .expect("derived query should succeed");
 
     assert_eq!(posts.len(), 1);
 

@@ -4,7 +4,11 @@ use quote::quote;
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Error, Result, Token, bracketed, parenthesized};
+use syn::spanned::Spanned;
+use syn::{
+    Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Token, Type, bracketed,
+    parenthesized,
+};
 use vitrail_pg_core as core;
 
 mod kw {
@@ -18,6 +22,16 @@ pub fn schema(input: TokenStream) -> TokenStream {
     let schema = syn::parse_macro_input!(input as ParsedSchema);
 
     match schema.expand() {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(QueryResult, attributes(vitrail))]
+pub fn derive_query_result(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match QueryResultDerive::parse(input).and_then(|derive| derive.expand()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -892,6 +906,260 @@ fn scalar_type_variant(scalar: core::ScalarType) -> Ident {
         core::ScalarType::Bytes => Ident::new("Bytes", Span::call_site()),
         core::ScalarType::Json => Ident::new("Json", Span::call_site()),
     }
+}
+
+struct QueryResultDerive {
+    ident: Ident,
+    fields: Vec<QueryResultField>,
+    schema_path: Path,
+    model_name: LitStr,
+}
+
+impl QueryResultDerive {
+    fn parse(input: syn::DeriveInput) -> Result<Self> {
+        let ident = input.ident;
+        let (schema_path, model_name) = parse_container_attrs(&input.attrs)?;
+
+        let Data::Struct(DataStruct {
+            fields: Fields::Named(fields),
+            ..
+        }) = input.data
+        else {
+            return Err(Error::new(
+                ident.span(),
+                "`QueryResult` can only be derived for structs with named fields",
+            ));
+        };
+
+        let fields = fields
+            .named
+            .into_iter()
+            .map(QueryResultField::parse)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            ident,
+            fields,
+            schema_path,
+            model_name,
+        })
+    }
+
+    fn expand(self) -> Result<TokenStream2> {
+        let ident = self.ident;
+        let schema_path = self.schema_path;
+        let model_name = self.model_name;
+        let scalar_fields: Vec<_> = self.fields.iter().filter(|field| !field.include).collect();
+        let relation_fields: Vec<_> = self.fields.iter().filter(|field| field.include).collect();
+
+        let selection_scalars = scalar_fields.iter().map(|field| {
+            let name = &field.query_name;
+            quote! { #name }
+        });
+        let selection_relations = relation_fields.iter().map(|field| {
+            let name = &field.query_name;
+            let nested_ty = field.nested_type().expect("include field");
+            quote! {
+                ::vitrail_pg::QueryRelationSelection {
+                    field: #name,
+                    selection: <#nested_ty as ::vitrail_pg::QueryModel>::selection(),
+                }
+            }
+        });
+
+        let decode_fields = self
+            .fields
+            .iter()
+            .map(|field| {
+                let ident = &field.ident;
+                let field_name = &field.query_name;
+
+                if field.include {
+                    let nested_ty = field.nested_type().expect("include field");
+                    let decode_relation = field.decode_relation_tokens(&nested_ty);
+                    quote! {
+                        #ident: {
+                            let __vitrail_prefix = ::vitrail_pg::alias_name(prefix, #field_name);
+                            #decode_relation
+                        }
+                    }
+                } else {
+                    quote! {
+                        #ident: {
+                            let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                            row.try_get(__vitrail_alias.as_str())?
+                        }
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Ok(quote! {
+            impl ::vitrail_pg::QueryModel for #ident {
+                type Schema = #schema_path;
+
+                fn model_name() -> &'static str {
+                    #model_name
+                }
+
+                fn selection() -> ::vitrail_pg::QuerySelection {
+                    ::vitrail_pg::QuerySelection {
+                        model: #model_name,
+                        scalar_fields: vec![#(#selection_scalars),*],
+                        relations: vec![#(#selection_relations),*],
+                    }
+                }
+
+                fn from_row(
+                    row: &::sqlx::postgres::PgRow,
+                    prefix: &str,
+                ) -> Result<Self, ::sqlx::Error> {
+                    use ::sqlx::Row as _;
+
+                    Ok(Self {
+                        #(#decode_fields),*
+                    })
+                }
+            }
+        })
+    }
+}
+
+struct QueryResultField {
+    ident: Ident,
+    ty: Type,
+    query_name: LitStr,
+    include: bool,
+}
+
+impl QueryResultField {
+    fn parse(field: syn::Field) -> Result<Self> {
+        let span = field.span();
+        let ident = field
+            .ident
+            .ok_or_else(|| Error::new(span, "expected a named field"))?;
+        let mut include = false;
+        let mut rename = None;
+
+        for attribute in &field.attrs {
+            if !attribute.path().is_ident("vitrail") {
+                continue;
+            }
+
+            attribute.parse_nested_meta(|meta| {
+                if meta.path.is_ident("include") {
+                    include = true;
+                    return Ok(());
+                }
+                if meta.path.is_ident("field") || meta.path.is_ident("relation") {
+                    let value = meta.value()?;
+                    rename = Some(value.parse::<LitStr>()?);
+                    return Ok(());
+                }
+                Err(meta.error("unsupported `#[vitrail(...)]` field attribute"))
+            })?;
+        }
+
+        let query_name = rename.unwrap_or_else(|| LitStr::new(&ident.to_string(), ident.span()));
+
+        Ok(Self {
+            ident,
+            ty: field.ty,
+            query_name,
+            include,
+        })
+    }
+
+    fn nested_type(&self) -> Option<TokenStream2> {
+        if !self.include {
+            return None;
+        }
+
+        if let Some(inner) = option_inner_type(&self.ty) {
+            Some(quote! { #inner })
+        } else {
+            let ty = &self.ty;
+            Some(quote! { #ty })
+        }
+    }
+
+    fn decode_relation_tokens(&self, nested_ty: &TokenStream2) -> TokenStream2 {
+        if option_inner_type(&self.ty).is_some() {
+            quote! {
+                if ::vitrail_pg::query_model_is_null::<#nested_ty>(row, &__vitrail_prefix)? {
+                    None
+                } else {
+                    Some(<#nested_ty as ::vitrail_pg::QueryModel>::from_row(row, &__vitrail_prefix)?)
+                }
+            }
+        } else {
+            quote! {
+                <#nested_ty as ::vitrail_pg::QueryModel>::from_row(row, &__vitrail_prefix)?
+            }
+        }
+    }
+}
+
+fn parse_container_attrs(attrs: &[Attribute]) -> Result<(Path, LitStr)> {
+    let mut schema_path = None;
+    let mut model_name = None;
+
+    for attribute in attrs {
+        if !attribute.path().is_ident("vitrail") {
+            continue;
+        }
+
+        attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("schema") {
+                schema_path = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("model") {
+                let value = meta.value()?;
+                if value.peek(LitStr) {
+                    model_name = Some(value.parse::<LitStr>()?);
+                } else {
+                    let ident = value.parse::<Ident>()?;
+                    model_name = Some(LitStr::new(&ident.to_string(), ident.span()));
+                }
+                return Ok(());
+            }
+            Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
+        })?;
+    }
+
+    let schema_path = schema_path.ok_or_else(|| {
+        Error::new(
+            Span::call_site(),
+            "`#[derive(QueryResult)]` requires `#[vitrail(schema = ...)]`",
+        )
+    })?;
+    let model_name = model_name.ok_or_else(|| {
+        Error::new(
+            Span::call_site(),
+            "`#[derive(QueryResult)]` requires `#[vitrail(model = ...)]`",
+        )
+    })?;
+
+    Ok((schema_path, model_name))
+}
+
+fn option_inner_type(ty: &Type) -> Option<Type> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    let generic = arguments.args.first()?;
+    let syn::GenericArgument::Type(inner) = generic else {
+        return None;
+    };
+    Some(inner.clone())
 }
 
 #[cfg(test)]

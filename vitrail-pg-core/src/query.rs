@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 
 use heck::ToUpperCamelCase;
 use sqlx::postgres::{PgPool, PgRow};
+use sqlx::{Row as _, ValueRef as _};
 
 pub use futures_util::future::BoxFuture;
 
@@ -92,6 +93,32 @@ where
             Ok(values)
         })
     }
+}
+
+pub fn query_model_is_null<T: QueryModel>(row: &PgRow, prefix: &str) -> Result<bool, sqlx::Error> {
+    selection_is_null(row, prefix, &T::selection())
+}
+
+fn selection_is_null(
+    row: &PgRow,
+    prefix: &str,
+    selection: &QuerySelection,
+) -> Result<bool, sqlx::Error> {
+    for field in &selection.scalar_fields {
+        let alias = alias_name(prefix, field);
+        if !row.try_get_raw(alias.as_str())?.is_null() {
+            return Ok(false);
+        }
+    }
+
+    for relation in &selection.relations {
+        let nested_prefix = alias_name(prefix, relation.field);
+        if !selection_is_null(row, &nested_prefix, &relation.selection)? {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 pub fn alias_name(prefix: &str, field: &str) -> String {
