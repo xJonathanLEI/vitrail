@@ -68,6 +68,17 @@ impl<S, T> Query<S, T> {
     }
 }
 
+impl<S, T> Query<S, T>
+where
+    S: SchemaAccess,
+    T: QueryModel<Schema = S>,
+{
+    pub fn to_sql(&self) -> Result<String, sqlx::Error> {
+        let selection = T::selection();
+        build_query_sql(S::schema(), &selection)
+    }
+}
+
 impl<S, T> QuerySpec for Query<S, T>
 where
     S: SchemaAccess,
@@ -81,7 +92,7 @@ where
     ) -> BoxFuture<'a, Result<Vec<Self::Output>, sqlx::Error>> {
         Box::pin(async move {
             let selection = T::selection();
-            let sql = build_query_sql(S::schema(), &selection)?;
+            let sql = self.to_sql()?;
             let rows = sqlx::query(&sql).fetch_all(pool).await?;
             let mut values = Vec::with_capacity(rows.len());
             let root_prefix = selection.model;
