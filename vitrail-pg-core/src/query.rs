@@ -190,9 +190,31 @@ pub fn json_as_datetime_utc(
         .as_str()
         .ok_or_else(|| schema_error("expected JSON datetime string in query result".to_owned()))?;
 
-    chrono::DateTime::parse_from_rfc3339(value)
-        .map(|datetime| datetime.with_timezone(&chrono::Utc))
-        .map_err(|error| schema_error(format!("invalid JSON datetime in query result: {error}")))
+    if let Ok(datetime) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(datetime.with_timezone(&chrono::Utc));
+    }
+
+    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+        if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(value, format) {
+            return Ok(datetime.and_utc());
+        }
+    }
+
+    Err(schema_error(format!(
+        "invalid JSON datetime in query result: unsupported format `{value}`"
+    )))
+}
+
+pub fn row_as_datetime_utc(
+    row: &PgRow,
+    alias: &str,
+) -> Result<chrono::DateTime<chrono::Utc>, sqlx::Error> {
+    if let Ok(value) = row.try_get::<chrono::DateTime<chrono::Utc>, _>(alias) {
+        return Ok(value);
+    }
+
+    let value: chrono::NaiveDateTime = row.try_get(alias)?;
+    Ok(value.and_utc())
 }
 
 fn build_query_sql(schema: &Schema, selection: &QuerySelection) -> Result<String, sqlx::Error> {
@@ -462,11 +484,7 @@ impl<'a> SqlBuilder<'a> {
                 }
             };
 
-            items.push(column_expr(
-                table_alias,
-                field.name(),
-                matches!(scalar, ScalarType::Int),
-            ));
+            items.push(column_expr(table_alias, field.name(), scalar));
         }
 
         for relation in &selection.relations {
@@ -585,17 +603,17 @@ fn quoted_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
-fn column_expr(table_alias: &str, field_name: &str, cast_int: bool) -> String {
+fn column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> String {
     let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
-    if cast_int {
-        format!("({column_sql})::bigint")
-    } else {
-        column_sql
+    match scalar {
+        ScalarType::Int => format!("({column_sql})::bigint"),
+        ScalarType::DateTime => format!("({column_sql} AT TIME ZONE 'UTC')"),
+        _ => column_sql,
     }
 }
 
 fn select_expr(table_alias: &str, field_name: &str, scalar: ScalarType, alias: &str) -> String {
-    let expr = column_expr(table_alias, field_name, matches!(scalar, ScalarType::Int));
+    let expr = column_expr(table_alias, field_name, scalar);
     format!("{expr} AS \"{alias}\"")
 }
 

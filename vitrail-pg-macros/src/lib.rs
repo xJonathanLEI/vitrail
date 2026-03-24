@@ -1415,10 +1415,23 @@ impl QueryResultDerive {
                         }
                     }
                 } else {
-                    quote! {
-                        #ident: {
-                            let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                            row.try_get(__vitrail_alias.as_str())?
+                    let type_name = field.ty.to_token_stream().to_string().replace(' ', "");
+
+                    if type_name == "chrono::DateTime<chrono::Utc>"
+                        || type_name == "::chrono::DateTime<::chrono::Utc>"
+                    {
+                        quote! {
+                            #ident: {
+                                let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                                ::vitrail_pg::row_as_datetime_utc(row, __vitrail_alias.as_str())?
+                            }
+                        }
+                    } else {
+                        quote! {
+                            #ident: {
+                                let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                                row.try_get(__vitrail_alias.as_str())?
+                            }
                         }
                     }
                 }

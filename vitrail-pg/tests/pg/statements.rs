@@ -1,7 +1,7 @@
 use vitrail_pg::{QueryResult, query, schema};
 
 schema! {
-    name my_schema
+    name statements_schema
 
     model user {
         id         Int      @id @default(autoincrement())
@@ -30,58 +30,60 @@ schema! {
     }
 }
 
+pub(crate) use self::statements_schema as pg_statements_schema;
+
 #[allow(dead_code)]
 #[derive(QueryResult)]
-#[vitrail(schema = crate::my_schema::Schema, model = user)]
-struct UserSummary {
-    id: i64,
-    email: String,
-    name: String,
-    created_at: chrono::DateTime<chrono::Utc>,
+#[vitrail(schema = crate::statements_schema::Schema, model = user)]
+pub struct UserSummary {
+    pub id: i64,
+    pub email: String,
+    pub name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
-#[vitrail(schema = crate::my_schema::Schema, model = comment)]
-struct CommentSummary {
-    id: i64,
-    body: String,
+#[vitrail(schema = crate::statements_schema::Schema, model = comment)]
+pub struct CommentSummary {
+    pub id: i64,
+    pub body: String,
 }
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
-#[vitrail(schema = crate::my_schema::Schema, model = post)]
-struct PostWithAuthor {
-    id: i64,
-    title: String,
+#[vitrail(schema = crate::statements_schema::Schema, model = post)]
+pub struct PostWithAuthor {
+    pub id: i64,
+    pub title: String,
     #[vitrail(include)]
-    author: UserSummary,
+    pub author: UserSummary,
 }
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
-#[vitrail(schema = crate::my_schema::Schema, model = post)]
-struct PostWithComments {
-    id: i64,
-    title: String,
+#[vitrail(schema = crate::statements_schema::Schema, model = post)]
+pub struct PostWithComments {
+    pub id: i64,
+    pub title: String,
     #[vitrail(include)]
-    comments: Vec<CommentSummary>,
+    pub comments: Vec<CommentSummary>,
 }
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
-#[vitrail(schema = crate::my_schema::Schema, model = user)]
-struct UserWithPostsAndComments {
-    id: i64,
-    email: String,
+#[vitrail(schema = crate::statements_schema::Schema, model = user)]
+pub struct UserWithPostsAndComments {
+    pub id: i64,
+    pub email: String,
     #[vitrail(include)]
-    posts: Vec<PostWithComments>,
+    pub posts: Vec<PostWithComments>,
 }
 
 #[test]
 fn scalar_only_query_generates_expected_sql() {
     let sql = query! {
-        crate::my_schema,
+        crate::statements_schema,
         user {
             select: {
                 id: true,
@@ -101,7 +103,7 @@ fn scalar_only_query_generates_expected_sql() {
             r#"("t0"."id")::bigint AS "user__id","#,
             r#""t0"."email" AS "user__email","#,
             r#""t0"."name" AS "user__name","#,
-            r#""t0"."created_at" AS "user__created_at""#,
+            r#"("t0"."created_at" AT TIME ZONE 'UTC') AS "user__created_at""#,
             r#"FROM "user" AS "t0""#,
         ]
         .join(" ")
@@ -111,7 +113,7 @@ fn scalar_only_query_generates_expected_sql() {
 #[test]
 fn nested_query_generates_expected_sql() {
     let sql = query! {
-        crate::my_schema,
+        crate::statements_schema,
         user {
             select: {
                 id: true,
@@ -133,7 +135,7 @@ fn nested_query_generates_expected_sql() {
             r#""t0"."email" AS "user__email","#,
             r#""t1"."data" AS "user__posts""#,
             r#"FROM "user" AS "t0""#,
-            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t2"."id")::bigint, "t2"."title", "t2"."body", "t2"."published", ("t2"."author_id")::bigint, "t2"."created_at") ORDER BY "t2"."id"), '[]'::json) AS "data" FROM "post" AS "t2" WHERE "t2"."author_id" = "t0"."id") AS "t1" ON TRUE"#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t2"."id")::bigint, "t2"."title", "t2"."body", "t2"."published", ("t2"."author_id")::bigint, ("t2"."created_at" AT TIME ZONE 'UTC')) ORDER BY "t2"."id"), '[]'::json) AS "data" FROM "post" AS "t2" WHERE "t2"."author_id" = "t0"."id") AS "t1" ON TRUE"#,
         ]
         .join(" ")
     );
@@ -142,7 +144,7 @@ fn nested_query_generates_expected_sql() {
 #[test]
 fn explicit_nested_query_selection_generates_expected_sql() {
     let sql = query! {
-        crate::my_schema,
+        crate::statements_schema,
         user {
             select: {
                 id: true,
@@ -177,7 +179,9 @@ fn explicit_nested_query_selection_generates_expected_sql() {
 
 #[test]
 fn to_one_include_generates_expected_sql() {
-    let sql = my_schema::query::<PostWithAuthor>().to_sql().unwrap();
+    let sql = crate::statements_schema::query::<PostWithAuthor>()
+        .to_sql()
+        .unwrap();
 
     assert_eq!(
         sql,
@@ -187,7 +191,7 @@ fn to_one_include_generates_expected_sql() {
             r#""t0"."title" AS "post__title","#,
             r#""t1"."data" AS "post__author""#,
             r#"FROM "post" AS "t0""#,
-            r#"LEFT JOIN LATERAL (SELECT json_build_array(("t2"."id")::bigint, "t2"."email", "t2"."name", "t2"."created_at") AS "data" FROM "user" AS "t2" WHERE "t2"."id" = "t0"."author_id" LIMIT 1) AS "t1" ON TRUE"#,
+            r#"LEFT JOIN LATERAL (SELECT json_build_array(("t2"."id")::bigint, "t2"."email", "t2"."name", ("t2"."created_at" AT TIME ZONE 'UTC')) AS "data" FROM "user" AS "t2" WHERE "t2"."id" = "t0"."author_id" LIMIT 1) AS "t1" ON TRUE"#,
         ]
         .join(" ")
     );
@@ -195,7 +199,7 @@ fn to_one_include_generates_expected_sql() {
 
 #[test]
 fn nested_query_recursively_lateralizes_nested_includes() {
-    let sql = my_schema::query::<UserWithPostsAndComments>()
+    let sql = crate::statements_schema::query::<UserWithPostsAndComments>()
         .to_sql()
         .unwrap();
 
