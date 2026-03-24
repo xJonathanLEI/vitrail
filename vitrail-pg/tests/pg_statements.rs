@@ -140,6 +140,42 @@ fn nested_query_generates_expected_sql() {
 }
 
 #[test]
+fn explicit_nested_query_selection_generates_expected_sql() {
+    let sql = query! {
+        crate::my_schema,
+        user {
+            select: {
+                id: true,
+                email: true,
+            },
+            include: {
+                posts: {
+                    select: {
+                        id: true,
+                        title: true,
+                    },
+                },
+            },
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t2"."id")::bigint, "t2"."title") ORDER BY "t2"."id"), '[]'::json) AS "data" FROM "post" AS "t2" WHERE "t2"."author_id" = "t0"."id") AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
 fn to_one_include_generates_expected_sql() {
     let sql = my_schema::query::<PostWithAuthor>().to_sql().unwrap();
 

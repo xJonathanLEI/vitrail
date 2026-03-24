@@ -432,33 +432,65 @@ impl ParsedSchema {
                 quote! { (#ident) => {}; }
             });
 
-            let include_struct_arms = relation_fields.iter().map(|field| {
-                let ident = &field.name;
-                let nested_ident = format_ident!(
-                    "__VitrailQuery{}{}",
-                    to_pascal_case(&model.name.to_string()),
-                    to_pascal_case(&field.name.to_string())
-                );
-                let target = self.models.iter().find(|candidate| {
-                    candidate.name == field.ty.name || field.ty.name == to_pascal_case(&candidate.name.to_string())
-                }).expect("validated relation target");
-                let target_model_name = LitStr::new(&target.name.to_string(), target.name.span());
-                let target_scalar_fields = target.scalar_fields().iter().map(|target_field| {
-                    let field_ident = &target_field.name;
-                    let field_ty = rust_type_tokens(&target_field.ty)?;
-                    Ok(quote! { pub #field_ident: #field_ty, })
-                }).collect::<Result<Vec<_>>>()?;
-                Ok(quote! {
-                    (#ident) => {
-                        #[allow(dead_code)]
-                        #[derive(::vitrail_pg::QueryResult)]
-                        #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #target_model_name)]
-                        struct #nested_ident {
-                            #(#target_scalar_fields)*
-                        }
-                    };
+            let include_struct_arms = relation_fields
+                .iter()
+                .map(|field| {
+                    let ident = &field.name;
+                    let target = self
+                        .models
+                        .iter()
+                        .find(|candidate| {
+                            candidate.name == field.ty.name
+                                || field.ty.name == to_pascal_case(&candidate.name.to_string())
+                        })
+                        .expect("validated relation target");
+                    let target_model_name =
+                        LitStr::new(&target.name.to_string(), target.name.span());
+                    let target_scalar_fields = target
+                        .scalar_fields()
+                        .iter()
+                        .map(|target_field| {
+                            let field_ident = &target_field.name;
+                            let field_ty = rust_type_tokens(&target_field.ty)?;
+                            Ok(quote! { pub #field_ident: #field_ty, })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let target_root_struct_macro_ident =
+                        format_ident!("__vitrail_root_struct_{}_{}", module_name, target.name);
+
+                    Ok(quote! {
+                        (#ident, $nested_ident:ident, true) => {
+                            #[allow(dead_code)]
+                            #[derive(::vitrail_pg::QueryResult)]
+                            #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #target_model_name)]
+                            struct $nested_ident {
+                                #(#target_scalar_fields)*
+                            }
+                        };
+                        (
+                            #ident,
+                            $nested_ident:ident,
+                            {
+                                select: {
+                                    $($select_field:ident : true),* $(,)?
+                                }
+                                $(,
+                                    include: {
+                                        $($include_field:ident : $include_value:tt),* $(,)?
+                                    }
+                                )?
+                                $(,)?
+                            }
+                        ) => {
+                            #target_root_struct_macro_ident! {
+                                $nested_ident;
+                                select { $($select_field),* }
+                                $( include { $($include_field : $include_value),* } )?
+                            }
+                        };
+                    })
                 })
-            }).collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             let root_struct_arms = scalar_fields
                 .iter()
@@ -471,14 +503,14 @@ impl ParsedSchema {
                             $root_ident:ident
                             [ $($fields:tt)* ]
                             [ #ident, $($rest_select:ident,)* ]
-                            [ $($include_field:ident,)* ]
+                            [ $($include_field:ident => $include_value:tt,)* ]
                         ) => {
                             #root_struct_macro_ident! {
                                 @struct
                                 $root_ident
                                 [ $($fields)* pub #ident: #ty, ]
                                 [ $($rest_select,)* ]
-                                [ $($include_field,)* ]
+                                [ $($include_field => $include_value,)* ]
                             }
                         };
                     })
@@ -503,8 +535,10 @@ impl ParsedSchema {
                             $root_ident:ident
                             [ $($fields:tt)* ]
                             [ ]
-                            [ #ident, $($rest_include:ident,)* ]
+                            [ #ident => $include_value:tt, $($rest_include:ident => $rest_include_value:tt,)* ]
                         ) => {
+                            #include_struct_ident!(#ident, #nested_ident, $include_value);
+
                             #root_struct_macro_ident! {
                                 @struct
                                 $root_ident
@@ -514,7 +548,7 @@ impl ParsedSchema {
                                     pub #ident: #ty,
                                 ]
                                 [ ]
-                                [ $($rest_include,)* ]
+                                [ $($rest_include => $rest_include_value,)* ]
                             }
                         };
                     })
@@ -544,7 +578,7 @@ impl ParsedSchema {
                 #[macro_export]
                 macro_rules! #include_struct_ident {
                     #(#include_struct_arms)*
-                    ($other:ident) => {
+                    ($other:ident, $nested_ident:ident, $($tokens:tt)*) => {
                         compile_error!(concat!("unknown relation field `", stringify!($other), "` in model `", #model_name, "`"));
                     };
                 }
@@ -556,14 +590,17 @@ impl ParsedSchema {
                     (
                         $root_ident:ident;
                         select { $($select_field:ident),* $(,)? }
-                        $( include { $($include_field:ident),* $(,)? } )?
+                        $( include { $($include_field:ident : $include_value:tt),* $(,)? } )?
                     ) => {
+                        $( #select_assert_ident!($select_field); )*
+                        $( $( #include_assert_ident!($include_field); )* )?
+
                         #root_struct_macro_ident! {
                             @struct
                             $root_ident
                             [ ]
                             [ $($select_field,)* ]
-                            [ $($($include_field,)*)? ]
+                            [ $($( $include_field => $include_value, )*)? ]
                         }
                     };
                     (
@@ -591,20 +628,16 @@ impl ParsedSchema {
                         }
                         $(,
                             include: {
-                                $($include_field:ident : true),* $(,)?
+                                $($include_field:ident : $include_value:tt),* $(,)?
                             }
                         )?
                         $(,)?
                     }
                 ) => {{
-                    $( #select_assert_ident!($select_field); )*
-                    $( $( #include_assert_ident!($include_field); )* )?
-                    $( $( #include_struct_ident!($include_field); )* )?
-
                     #root_struct_macro_ident! {
                         #root_struct_ident;
                         select { $($select_field),* }
-                        $( include { $($include_field),* } )?
+                        $( include { $($include_field : $include_value),* } )?
                     }
 
                     #dollar_crate::#module_name::query::<#root_struct_ident>()

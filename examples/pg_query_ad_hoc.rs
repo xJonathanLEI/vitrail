@@ -39,7 +39,12 @@ async fn main() {
                     name: true,
                 },
                 include: {
-                    posts: true,
+                    posts: {
+                        select: {
+                            id: true,
+                            title: true,
+                        },
+                    },
                 },
             }
         })

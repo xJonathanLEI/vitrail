@@ -339,7 +339,12 @@ async fn simple_query_on_postgres() {
                     name: true,
                 },
                 include: {
-                    posts: true,
+                    posts: {
+                        select: {
+                            id: true,
+                            title: true,
+                        },
+                    },
                 },
             }
         })
