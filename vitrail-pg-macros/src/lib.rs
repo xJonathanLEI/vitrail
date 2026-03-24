@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream as TokenStream2, TokenTree};
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -410,14 +410,12 @@ impl ParsedSchema {
             let model_name = LitStr::new(&model.name.to_string(), model.name.span());
             let root_struct_ident =
                 format_ident!("__VitrailQuery{}", to_pascal_case(&model.name.to_string()));
+            let root_struct_macro_ident =
+                format_ident!("__vitrail_root_struct_{}_{}", module_name, model.name);
             let select_assert_ident =
                 format_ident!("__vitrail_assert_select_{}_{}", module_name, model.name);
-            let select_ty_ident =
-                format_ident!("__vitrail_select_ty_{}_{}", module_name, model.name);
             let include_assert_ident =
                 format_ident!("__vitrail_assert_include_{}_{}", module_name, model.name);
-            let include_ty_ident =
-                format_ident!("__vitrail_include_ty_{}_{}", module_name, model.name);
             let include_struct_ident =
                 format_ident!("__vitrail_include_struct_{}_{}", module_name, model.name);
 
@@ -428,33 +426,10 @@ impl ParsedSchema {
                 let ident = &field.name;
                 quote! { (#ident) => {}; }
             });
-            let select_ty_arms = scalar_fields
-                .iter()
-                .map(|field| {
-                    let ident = &field.name;
-                    let ty = rust_type_tokens(&field.ty)?;
-                    Ok(quote! { (#ident) => { #ty }; })
-                })
-                .collect::<Result<Vec<_>>>()?;
 
             let include_assert_arms = relation_fields.iter().map(|field| {
                 let ident = &field.name;
                 quote! { (#ident) => {}; }
-            });
-
-            let include_ty_arms = relation_fields.iter().map(|field| {
-                let ident = &field.name;
-                let nested_ident = format_ident!(
-                    "__VitrailQuery{}{}",
-                    to_pascal_case(&model.name.to_string()),
-                    to_pascal_case(&field.name.to_string())
-                );
-                let ty = if field.ty.optional {
-                    quote! { Option<#nested_ident> }
-                } else {
-                    quote! { #nested_ident }
-                };
-                quote! { (#ident) => { #ty }; }
             });
 
             let include_struct_arms = relation_fields.iter().map(|field| {
@@ -485,20 +460,72 @@ impl ParsedSchema {
                 })
             }).collect::<Result<Vec<_>>>()?;
 
+            let root_struct_arms = scalar_fields
+                .iter()
+                .map(|field| {
+                    let ident = &field.name;
+                    let ty = rust_type_tokens(&field.ty)?;
+                    Ok(quote! {
+                        (
+                            @struct
+                            $root_ident:ident
+                            [ $($fields:tt)* ]
+                            [ #ident, $($rest_select:ident,)* ]
+                            [ $($include_field:ident,)* ]
+                        ) => {
+                            #root_struct_macro_ident! {
+                                @struct
+                                $root_ident
+                                [ $($fields)* pub #ident: #ty, ]
+                                [ $($rest_select,)* ]
+                                [ $($include_field,)* ]
+                            }
+                        };
+                    })
+                })
+                .chain(relation_fields.iter().map(|field| {
+                    let ident = &field.name;
+                    let nested_ident = format_ident!(
+                        "__VitrailQuery{}{}",
+                        to_pascal_case(&model.name.to_string()),
+                        to_pascal_case(&field.name.to_string())
+                    );
+                    let ty = if field.ty.many {
+                        quote! { Vec<#nested_ident> }
+                    } else if field.ty.optional {
+                        quote! { Option<#nested_ident> }
+                    } else {
+                        quote! { #nested_ident }
+                    };
+                    Ok(quote! {
+                        (
+                            @struct
+                            $root_ident:ident
+                            [ $($fields:tt)* ]
+                            [ ]
+                            [ #ident, $($rest_include:ident,)* ]
+                        ) => {
+                            #root_struct_macro_ident! {
+                                @struct
+                                $root_ident
+                                [
+                                    $($fields)*
+                                    #[vitrail(include)]
+                                    pub #ident: #ty,
+                                ]
+                                [ ]
+                                [ $($rest_include,)* ]
+                            }
+                        };
+                    })
+                }))
+                .collect::<Result<Vec<_>>>()?;
+
             helpers.extend(quote! {
                 #[doc(hidden)]
                 #[macro_export]
                 macro_rules! #select_assert_ident {
                     #(#select_assert_arms)*
-                    ($other:ident) => {
-                        compile_error!(concat!("unknown scalar field `", stringify!($other), "` in model `", #model_name, "`"));
-                    };
-                }
-
-                #[doc(hidden)]
-                #[macro_export]
-                macro_rules! #select_ty_ident {
-                    #(#select_ty_arms)*
                     ($other:ident) => {
                         compile_error!(concat!("unknown scalar field `", stringify!($other), "` in model `", #model_name, "`"));
                     };
@@ -515,8 +542,8 @@ impl ParsedSchema {
 
                 #[doc(hidden)]
                 #[macro_export]
-                macro_rules! #include_ty_ident {
-                    #(#include_ty_arms)*
+                macro_rules! #include_struct_ident {
+                    #(#include_struct_arms)*
                     ($other:ident) => {
                         compile_error!(concat!("unknown relation field `", stringify!($other), "` in model `", #model_name, "`"));
                     };
@@ -524,10 +551,34 @@ impl ParsedSchema {
 
                 #[doc(hidden)]
                 #[macro_export]
-                macro_rules! #include_struct_ident {
-                    #(#include_struct_arms)*
-                    ($other:ident) => {
-                        compile_error!(concat!("unknown relation field `", stringify!($other), "` in model `", #model_name, "`"));
+                macro_rules! #root_struct_macro_ident {
+                    #(#root_struct_arms)*
+                    (
+                        $root_ident:ident;
+                        select { $($select_field:ident),* $(,)? }
+                        $( include { $($include_field:ident),* $(,)? } )?
+                    ) => {
+                        #root_struct_macro_ident! {
+                            @struct
+                            $root_ident
+                            [ ]
+                            [ $($select_field,)* ]
+                            [ $($($include_field,)*)? ]
+                        }
+                    };
+                    (
+                        @struct
+                        $root_ident:ident
+                        [ $($fields:tt)* ]
+                        [ ]
+                        [ ]
+                    ) => {
+                        #[allow(dead_code)]
+                        #[derive(::vitrail_pg::QueryResult)]
+                        #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #model_name)]
+                        struct $root_ident {
+                            $($fields)*
+                        }
                     };
                 }
             });
@@ -550,12 +601,10 @@ impl ParsedSchema {
                     $( $( #include_assert_ident!($include_field); )* )?
                     $( $( #include_struct_ident!($include_field); )* )?
 
-                    #[allow(dead_code)]
-                    #[derive(::vitrail_pg::QueryResult)]
-                    #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #model_name)]
-                    struct #root_struct_ident {
-                        $( pub $select_field: #select_ty_ident!($select_field), )*
-                        $( $( #[vitrail(include)] pub $include_field: #include_ty_ident!($include_field), )* )?
+                    #root_struct_macro_ident! {
+                        #root_struct_ident;
+                        select { $($select_field),* }
+                        $( include { $($include_field),* } )?
                     }
 
                     #dollar_crate::#module_name::query::<#root_struct_ident>()
@@ -709,8 +758,10 @@ impl ParsedField {
             attributes.push(attribute.generate_schema_attribute()?);
         }
 
-        if matches!(self.ty.to_core(), core::FieldType::Relation { .. })
-            && self.relation().is_none()
+        if matches!(
+            self.ty.to_core(),
+            core::FieldType::Relation { many: false, .. }
+        ) && self.relation().is_none()
         {
             attributes.push(schema.generate_relation_attribute(model, self)?);
         }
@@ -750,24 +801,55 @@ impl ParsedField {
     }
 }
 
-/// Parsed field type, including optionality.
+/// Parsed field type, including optionality and relation cardinality.
 #[derive(Debug)]
 struct ParsedFieldType {
     name: Ident,
     optional: bool,
+    many: bool,
 }
 
 impl Parse for ParsedFieldType {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let name = input.call(Ident::parse_any)?;
+        let many = if input.peek(syn::token::Bracket) {
+            let content;
+            bracketed!(content in input);
+            if !content.is_empty() {
+                return Err(Error::new(
+                    content.span(),
+                    "expected `[]` for relation list syntax",
+                ));
+            }
+            true
+        } else {
+            false
+        };
         let optional = if input.peek(Token![?]) {
+            if many {
+                return Err(Error::new(
+                    input.span(),
+                    "relation list fields cannot be optional",
+                ));
+            }
             input.parse::<Token![?]>()?;
             true
         } else {
             false
         };
 
-        Ok(Self { name, optional })
+        if many && scalar_type_from_ident(&name).is_some() {
+            return Err(Error::new(
+                name.span(),
+                "list syntax is only supported for relation fields",
+            ));
+        }
+
+        Ok(Self {
+            name,
+            optional,
+            many,
+        })
     }
 }
 
@@ -775,7 +857,7 @@ impl ParsedFieldType {
     fn to_core(&self) -> core::FieldType {
         match scalar_type_from_ident(&self.name) {
             Some(scalar) => core::FieldType::scalar(scalar, self.optional),
-            None => core::FieldType::relation(self.name.to_string(), self.optional),
+            None => core::FieldType::relation(self.name.to_string(), self.optional, self.many),
         }
     }
 
@@ -789,7 +871,8 @@ impl ParsedFieldType {
             None => {
                 let model = syn::LitStr::new(&self.name.to_string(), self.name.span());
                 let optional = self.optional;
-                quote! { ::vitrail_pg::FieldType::relation(#model, #optional) }
+                let many = self.many;
+                quote! { ::vitrail_pg::FieldType::relation(#model, #optional, #many) }
             }
         }
     }
@@ -1295,7 +1378,6 @@ impl QueryResultDerive {
                     let decode_relation = field.decode_relation_tokens(&nested_ty);
                     quote! {
                         #ident: {
-                            let __vitrail_prefix = ::vitrail_pg::alias_name(prefix, #field_name);
                             #decode_relation
                         }
                     }
@@ -1309,8 +1391,22 @@ impl QueryResultDerive {
                 }
             })
             .collect::<Vec<_>>();
+        let json_decode_fields = self
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| field.decode_json_field_tokens(index))
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(quote! {
+            impl ::vitrail_pg::QueryValue for #ident {
+                fn from_json(value: &::vitrail_pg::serde_json::Value) -> Result<Self, ::sqlx::Error> {
+                    Ok(Self {
+                        #(#json_decode_fields),*
+                    })
+                }
+            }
+
             impl ::vitrail_pg::QueryModel for #ident {
                 type Schema = #schema_path;
 
@@ -1393,6 +1489,8 @@ impl QueryResultField {
 
         if let Some(inner) = option_inner_type(&self.ty) {
             Some(quote! { #inner })
+        } else if let Some(inner) = vec_inner_type(&self.ty) {
+            Some(quote! { #inner })
         } else {
             let ty = &self.ty;
             Some(quote! { #ty })
@@ -1400,18 +1498,92 @@ impl QueryResultField {
     }
 
     fn decode_relation_tokens(&self, nested_ty: &TokenStream2) -> TokenStream2 {
+        let field_name = &self.query_name;
+
         if option_inner_type(&self.ty).is_some() {
             quote! {
-                if ::vitrail_pg::query_model_is_null::<#nested_ty>(row, &__vitrail_prefix)? {
-                    None
-                } else {
-                    Some(<#nested_ty as ::vitrail_pg::QueryModel>::from_row(row, &__vitrail_prefix)?)
+                {
+                    let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                    let __vitrail_value: Option<::vitrail_pg::serde_json::Value> = row.try_get(__vitrail_alias.as_str())?;
+                    __vitrail_value
+                        .as_ref()
+                        .map(<#nested_ty as ::vitrail_pg::QueryValue>::from_json)
+                        .transpose()?
+                }
+            }
+        } else if vec_inner_type(&self.ty).is_some() {
+            quote! {
+                {
+                    let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                    let __vitrail_value: ::vitrail_pg::serde_json::Value = row.try_get(__vitrail_alias.as_str())?;
+                    let __vitrail_items = __vitrail_value.as_array().ok_or_else(|| {
+                        ::vitrail_pg::schema_error("expected JSON array in query result".to_owned())
+                    })?;
+                    let mut __vitrail_values = Vec::with_capacity(__vitrail_items.len());
+                    for __vitrail_item in __vitrail_items {
+                        __vitrail_values.push(<#nested_ty as ::vitrail_pg::QueryValue>::from_json(__vitrail_item)?);
+                    }
+                    __vitrail_values
                 }
             }
         } else {
             quote! {
-                <#nested_ty as ::vitrail_pg::QueryModel>::from_row(row, &__vitrail_prefix)?
+                {
+                    let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                    let __vitrail_value: ::vitrail_pg::serde_json::Value = row.try_get(__vitrail_alias.as_str())?;
+                    <#nested_ty as ::vitrail_pg::QueryValue>::from_json(&__vitrail_value)?
+                }
             }
+        }
+    }
+
+    fn decode_json_field_tokens(&self, json_index: usize) -> Result<TokenStream2> {
+        let ident = &self.ident;
+        let json_index = syn::Index::from(json_index);
+
+        if self.include {
+            let nested_ty = self.nested_type().expect("include field");
+            if option_inner_type(&self.ty).is_some() {
+                Ok(quote! {
+                    #ident: {
+                        let __vitrail_value = ::vitrail_pg::json_array_field(value, #json_index)?;
+                        if __vitrail_value.is_null() {
+                            None
+                        } else {
+                            Some(<#nested_ty as ::vitrail_pg::QueryValue>::from_json(__vitrail_value)?)
+                        }
+                    }
+                })
+            } else if vec_inner_type(&self.ty).is_some() {
+                Ok(quote! {
+                    #ident: {
+                        let __vitrail_value = ::vitrail_pg::json_array_field(value, #json_index)?;
+                        let __vitrail_items = __vitrail_value.as_array().ok_or_else(|| {
+                            ::vitrail_pg::schema_error("expected JSON array in query result".to_owned())
+                        })?;
+                        let mut __vitrail_values = Vec::with_capacity(__vitrail_items.len());
+                        for __vitrail_item in __vitrail_items {
+                            __vitrail_values.push(<#nested_ty as ::vitrail_pg::QueryValue>::from_json(__vitrail_item)?);
+                        }
+                        __vitrail_values
+                    }
+                })
+            } else {
+                Ok(quote! {
+                    #ident: {
+                        let __vitrail_value = ::vitrail_pg::json_array_field(value, #json_index)?;
+                        <#nested_ty as ::vitrail_pg::QueryValue>::from_json(__vitrail_value)?
+                    }
+                })
+            }
+        } else {
+            let decode = json_decode_tokens_for_type(
+                &self.ty,
+                quote! { ::vitrail_pg::json_array_field(value, #json_index)? },
+            )?;
+            Ok(quote! {
+                #ident: { #decode }
+            })
         }
     }
 }
@@ -1461,11 +1633,19 @@ fn parse_container_attrs(attrs: &[Attribute]) -> Result<(Path, LitStr)> {
 }
 
 fn option_inner_type(ty: &Type) -> Option<Type> {
+    generic_inner_type(ty, "Option")
+}
+
+fn vec_inner_type(ty: &Type) -> Option<Type> {
+    generic_inner_type(ty, "Vec")
+}
+
+fn generic_inner_type(ty: &Type, expected: &str) -> Option<Type> {
     let Type::Path(type_path) = ty else {
         return None;
     };
     let segment = type_path.path.segments.last()?;
-    if segment.ident != "Option" {
+    if segment.ident != expected {
         return None;
     }
     let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
@@ -1476,6 +1656,47 @@ fn option_inner_type(ty: &Type) -> Option<Type> {
         return None;
     };
     Some(inner.clone())
+}
+
+fn json_decode_tokens_for_type(value_ty: &Type, value_expr: TokenStream2) -> Result<TokenStream2> {
+    if let Some(inner) = option_inner_type(value_ty) {
+        let inner_decode = json_decode_tokens_for_type(&inner, quote! { __vitrail_value })?;
+        return Ok(quote! {
+            {
+                let __vitrail_value = #value_expr;
+                if __vitrail_value.is_null() {
+                    None
+                } else {
+                    Some({ #inner_decode })
+                }
+            }
+        });
+    }
+
+    let type_name = value_ty.to_token_stream().to_string().replace(' ', "");
+
+    if type_name == "i64" {
+        return Ok(quote! { ::vitrail_pg::json_as_i64(#value_expr)? });
+    }
+    if type_name == "String" {
+        return Ok(quote! { ::vitrail_pg::json_as_string(#value_expr)? });
+    }
+    if type_name == "bool" {
+        return Ok(quote! { ::vitrail_pg::json_as_bool(#value_expr)? });
+    }
+    if type_name == "f64" {
+        return Ok(quote! { ::vitrail_pg::json_as_f64(#value_expr)? });
+    }
+    if type_name == "chrono::DateTime<chrono::Utc>"
+        || type_name == "::chrono::DateTime<::chrono::Utc>"
+    {
+        return Ok(quote! { ::vitrail_pg::json_as_datetime_utc(#value_expr)? });
+    }
+
+    Err(Error::new(
+        value_ty.span(),
+        format!("unsupported query field type `{}`", type_name),
+    ))
 }
 
 #[cfg(test)]
@@ -1547,5 +1768,26 @@ mod tests {
         assert!(generated.contains("pub mod my_schema"));
         assert!(generated.contains("pub fn query < T > ()"));
         assert!(generated.contains("macro_rules ! __vitrail_query_my_schema"));
+    }
+
+    #[test]
+    fn accepts_relation_list_schema_definition() {
+        let schema: ParsedSchema = syn::parse2(quote! {
+            name relation_list_schema
+
+            model user {
+                id    Int    @id @default(autoincrement())
+                posts post[]
+            }
+
+            model post {
+                id        Int    @id @default(autoincrement())
+                author_id Int
+                author    user   @relation(fields: [author_id], references: [id])
+            }
+        })
+        .expect("schema should parse");
+
+        schema.validate().expect("schema should validate");
     }
 }

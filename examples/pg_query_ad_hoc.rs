@@ -8,6 +8,7 @@ schema! {
         email      String   @unique
         name       String
         created_at DateTime @default(now())
+        posts      post[]
     }
 
     model post {
@@ -23,34 +24,27 @@ schema! {
 
 #[tokio::main]
 async fn main() {
-    let client = my_schema::VitrailClient::new("postgres://127.0.0.1:5432/vitrail")
-        .await
-        .unwrap();
+    let client =
+        my_schema::VitrailClient::new("postgres://postgres:postgres@127.0.0.1:5432/vitrail")
+            .await
+            .unwrap();
 
-    let posts = client
+    let users = client
         .find_many(query! {
             crate::my_schema,
-            post {
+            user {
                 select: {
                     id: true,
-                    title: true,
+                    email: true,
+                    name: true,
                 },
                 include: {
-                    author: true,
+                    posts: true,
                 },
             }
         })
         .await
         .unwrap();
-    let post = &posts[0];
 
-    println!(
-        "Post #{}: {} (#{} {} [{}]; joined {})",
-        post.id,
-        post.title,
-        post.author.id,
-        post.author.name,
-        post.author.email,
-        post.author.created_at
-    );
+    println!("fetched {} users", users.len());
 }

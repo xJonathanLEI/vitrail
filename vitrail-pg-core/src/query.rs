@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use heck::ToUpperCamelCase;
+use serde_json::Value as JsonValue;
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Row as _, ValueRef as _};
 
@@ -43,6 +44,10 @@ pub struct QuerySelection {
 pub struct QueryRelationSelection {
     pub field: &'static str,
     pub selection: QuerySelection,
+}
+
+pub trait QueryValue: Sized + Send + 'static {
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error>;
 }
 
 pub trait QueryModel: Sized + Send + 'static {
@@ -123,8 +128,8 @@ fn selection_is_null(
     }
 
     for relation in &selection.relations {
-        let nested_prefix = alias_name(prefix, relation.field);
-        if !selection_is_null(row, &nested_prefix, &relation.selection)? {
+        let alias = alias_name(prefix, relation.field);
+        if !row.try_get_raw(alias.as_str())?.is_null() {
             return Ok(false);
         }
     }
@@ -136,28 +141,81 @@ pub fn alias_name(prefix: &str, field: &str) -> String {
     format!("{prefix}__{field}")
 }
 
+pub fn json_object_field<'a>(
+    value: &'a JsonValue,
+    field: &str,
+) -> Result<&'a JsonValue, sqlx::Error> {
+    value
+        .get(field)
+        .ok_or_else(|| schema_error(format!("missing JSON field `{field}` in query result")))
+}
+
+pub fn json_array_field(value: &JsonValue, index: usize) -> Result<&JsonValue, sqlx::Error> {
+    value.get(index).ok_or_else(|| {
+        schema_error(format!(
+            "missing JSON array index `{index}` in query result"
+        ))
+    })
+}
+
+pub fn json_as_i64(value: &JsonValue) -> Result<i64, sqlx::Error> {
+    value
+        .as_i64()
+        .ok_or_else(|| schema_error("expected JSON integer in query result".to_owned()))
+}
+
+pub fn json_as_string(value: &JsonValue) -> Result<String, sqlx::Error> {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| schema_error("expected JSON string in query result".to_owned()))
+}
+
+pub fn json_as_bool(value: &JsonValue) -> Result<bool, sqlx::Error> {
+    value
+        .as_bool()
+        .ok_or_else(|| schema_error("expected JSON boolean in query result".to_owned()))
+}
+
+pub fn json_as_f64(value: &JsonValue) -> Result<f64, sqlx::Error> {
+    value
+        .as_f64()
+        .ok_or_else(|| schema_error("expected JSON float in query result".to_owned()))
+}
+
+pub fn json_as_datetime_utc(
+    value: &JsonValue,
+) -> Result<chrono::DateTime<chrono::Utc>, sqlx::Error> {
+    let value = value
+        .as_str()
+        .ok_or_else(|| schema_error("expected JSON datetime string in query result".to_owned()))?;
+
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|datetime| datetime.with_timezone(&chrono::Utc))
+        .map_err(|error| schema_error(format!("invalid JSON datetime in query result: {error}")))
+}
+
 fn build_query_sql(schema: &Schema, selection: &QuerySelection) -> Result<String, sqlx::Error> {
     let root_model = schema_model(schema, selection.model)
         .ok_or_else(|| schema_error(format!("unknown model `{}`", selection.model)))?;
 
     let mut builder = SqlBuilder {
         schema,
-        selects: Vec::new(),
         joins: Vec::new(),
         next_alias: 1,
     };
 
-    builder.push_selection(root_model, selection, selection.model, "t0")?;
+    let selects = builder.root_selects(root_model, selection, selection.model, "t0")?;
 
     Ok(format!(
         "SELECT {} FROM {} AS \"t0\"{}",
-        builder.selects.join(", "),
+        selects.join(", "),
         quoted_ident(root_model.name()),
         if builder.joins.is_empty() {
             String::new()
         } else {
             format!(" {}", builder.joins.join(" "))
-        }
+        },
     ))
 }
 
@@ -197,12 +255,12 @@ fn infer_relation_fields<'a>(
 
     Ok((
         reverse_relation
-            .references()
+            .fields()
             .iter()
             .map(String::as_str)
             .collect(),
         reverse_relation
-            .fields()
+            .references()
             .iter()
             .map(String::as_str)
             .collect(),
@@ -211,19 +269,30 @@ fn infer_relation_fields<'a>(
 
 struct SqlBuilder<'a> {
     schema: &'a Schema,
-    selects: Vec<String>,
     joins: Vec<String>,
     next_alias: usize,
 }
 
+struct RelationSql<'a> {
+    many: bool,
+    target_model: &'a Model,
+    selection: QuerySelection,
+    parent_table_alias: String,
+    nested_alias: String,
+    nested_field: String,
+    parent_field: String,
+}
+
 impl<'a> SqlBuilder<'a> {
-    fn push_selection(
+    fn root_selects(
         &mut self,
         model: &'a Model,
         selection: &QuerySelection,
         prefix: &str,
         table_alias: &str,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<Vec<String>, sqlx::Error> {
+        let mut selects = Vec::new();
+
         for field_name in &selection.scalar_fields {
             let field = model.field_named(field_name).ok_or_else(|| {
                 schema_error(format!(
@@ -244,7 +313,7 @@ impl<'a> SqlBuilder<'a> {
                 }
             };
 
-            self.selects.push(select_expr(
+            selects.push(select_expr(
                 table_alias,
                 field.name(),
                 scalar,
@@ -253,106 +322,283 @@ impl<'a> SqlBuilder<'a> {
         }
 
         for relation in &selection.relations {
-            let field = model.field_named(relation.field).ok_or_else(|| {
-                schema_error(format!(
-                    "unknown relation `{}.{}` in query include",
-                    model.name(),
-                    relation.field
-                ))
-            })?;
-
-            if field.kind().is_scalar() {
-                return Err(schema_error(format!(
-                    "field `{}.{}` is not a relation and cannot appear in `include`",
-                    model.name(),
-                    relation.field
-                )));
-            }
-
-            let target_model = schema_model(self.schema, field.ty().name()).ok_or_else(|| {
-                schema_error(format!(
-                    "relation `{}.{}` points at unknown model `{}`",
-                    model.name(),
-                    relation.field,
-                    field.ty().name()
-                ))
-            })?;
-
-            let (local_fields, referenced_fields) = match field.relation() {
-                Some(relation_info) => (
-                    relation_info
-                        .fields()
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                    relation_info
-                        .references()
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                ),
-                None => infer_relation_fields(model, field, target_model)?,
-            };
-
-            if local_fields.len() != 1 || referenced_fields.len() != 1 {
-                return Err(schema_error(format!(
-                    "relation `{}.{}` currently requires exactly one local field and one referenced field",
-                    model.name(),
-                    relation.field
-                )));
-            }
-
-            let join_alias = format!("t{}", self.next_alias);
-            self.next_alias += 1;
-            let join_kind = if field.ty().is_optional() {
-                "LEFT JOIN"
-            } else {
-                "INNER JOIN"
-            };
-
-            self.joins.push(format!(
-                "{join_kind} {} AS \"{}\" ON \"{}\".{} = \"{}\".{}",
-                quoted_ident(target_model.name()),
-                join_alias,
-                table_alias,
-                quoted_ident(local_fields[0]),
-                join_alias,
-                quoted_ident(referenced_fields[0]),
-            ));
-
-            let nested_prefix = alias_name(prefix, relation.field);
-            self.push_selection(
-                target_model,
-                &relation.selection,
-                &nested_prefix,
-                &join_alias,
-            )?;
+            selects.push(self.relation_select(model, relation, prefix, table_alias)?);
         }
 
-        Ok(())
+        Ok(selects)
     }
+
+    fn relation_select(
+        &mut self,
+        model: &'a Model,
+        relation: &QueryRelationSelection,
+        prefix: &str,
+        table_alias: &str,
+    ) -> Result<String, sqlx::Error> {
+        let field = model.field_named(relation.field).ok_or_else(|| {
+            schema_error(format!(
+                "unknown relation `{}.{}` in query include",
+                model.name(),
+                relation.field
+            ))
+        })?;
+
+        if field.kind().is_scalar() {
+            return Err(schema_error(format!(
+                "field `{}.{}` is not a relation and cannot appear in `include`",
+                model.name(),
+                relation.field
+            )));
+        }
+
+        let target_model = schema_model(self.schema, field.ty().name()).ok_or_else(|| {
+            schema_error(format!(
+                "relation `{}.{}` points at unknown model `{}`",
+                model.name(),
+                relation.field,
+                field.ty().name()
+            ))
+        })?;
+
+        let (nested_fields, parent_fields) = self.relation_fields(model, field, target_model)?;
+
+        if nested_fields.len() != 1 || parent_fields.len() != 1 {
+            return Err(schema_error(format!(
+                "relation `{}.{}` currently requires exactly one parent field and one nested field",
+                model.name(),
+                relation.field
+            )));
+        }
+
+        let join_alias = format!("t{}", self.next_alias);
+        self.next_alias += 1;
+
+        let nested_alias = format!("t{}", self.next_alias);
+        self.next_alias += 1;
+
+        let subquery = self.relation_subquery_sql(RelationSql {
+            many: field.ty().is_many(),
+            target_model,
+            selection: relation.selection.clone(),
+            parent_table_alias: table_alias.to_owned(),
+            nested_alias: nested_alias.clone(),
+            nested_field: nested_fields[0].to_owned(),
+            parent_field: parent_fields[0].to_owned(),
+        })?;
+
+        self.joins.push(format!(
+            "LEFT JOIN LATERAL ({subquery}) AS \"{join_alias}\" ON TRUE"
+        ));
+
+        let alias = alias_name(prefix, relation.field);
+        Ok(format!("\"{join_alias}\".\"data\" AS \"{alias}\""))
+    }
+
+    fn relation_subquery_sql(&mut self, relation: RelationSql<'a>) -> Result<String, sqlx::Error> {
+        let where_clause = format!(
+            "\"{}\".{} = \"{}\".{}",
+            relation.nested_alias,
+            quoted_ident(&relation.nested_field),
+            relation.parent_table_alias,
+            quoted_ident(&relation.parent_field),
+        );
+        let mut joins = Vec::new();
+        let row_expr = self.json_row_expr(
+            relation.target_model,
+            &relation.selection,
+            &relation.nested_alias,
+            &mut joins,
+        )?;
+        let joins_sql = if joins.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", joins.join(" "))
+        };
+
+        if relation.many {
+            Ok(format!(
+                "SELECT COALESCE(json_agg({row_expr}{}), '[]'::json) AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}",
+                aggregate_order_by(relation.target_model, &relation.nested_alias),
+                quoted_ident(relation.target_model.name()),
+                relation.nested_alias,
+                joins_sql,
+            ))
+        } else {
+            Ok(format!(
+                "SELECT {row_expr} AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause} LIMIT 1",
+                quoted_ident(relation.target_model.name()),
+                relation.nested_alias,
+                joins_sql,
+            ))
+        }
+    }
+
+    fn json_row_expr(
+        &mut self,
+        model: &'a Model,
+        selection: &QuerySelection,
+        table_alias: &str,
+        joins: &mut Vec<String>,
+    ) -> Result<String, sqlx::Error> {
+        let mut items = Vec::new();
+
+        for field_name in &selection.scalar_fields {
+            let field = model.field_named(field_name).ok_or_else(|| {
+                schema_error(format!(
+                    "unknown field `{}.{}` in query selection",
+                    model.name(),
+                    field_name
+                ))
+            })?;
+
+            let scalar = match field.ty() {
+                FieldType::Scalar(scalar) => scalar.scalar(),
+                FieldType::Relation { .. } => {
+                    return Err(schema_error(format!(
+                        "field `{}.{}` is not scalar and cannot appear in `select`",
+                        model.name(),
+                        field_name
+                    )));
+                }
+            };
+
+            items.push(column_expr(
+                table_alias,
+                field.name(),
+                matches!(scalar, ScalarType::Int),
+            ));
+        }
+
+        for relation in &selection.relations {
+            items.push(self.nested_relation_json_expr(model, relation, table_alias, joins)?);
+        }
+
+        Ok(format!("json_build_array({})", items.join(", ")))
+    }
+
+    fn nested_relation_json_expr(
+        &mut self,
+        model: &'a Model,
+        relation: &QueryRelationSelection,
+        table_alias: &str,
+        joins: &mut Vec<String>,
+    ) -> Result<String, sqlx::Error> {
+        let field = model.field_named(relation.field).ok_or_else(|| {
+            schema_error(format!(
+                "unknown relation `{}.{}` in query include",
+                model.name(),
+                relation.field
+            ))
+        })?;
+
+        if field.kind().is_scalar() {
+            return Err(schema_error(format!(
+                "field `{}.{}` is not a relation and cannot appear in `include`",
+                model.name(),
+                relation.field
+            )));
+        }
+
+        let target_model = schema_model(self.schema, field.ty().name()).ok_or_else(|| {
+            schema_error(format!(
+                "relation `{}.{}` points at unknown model `{}`",
+                model.name(),
+                relation.field,
+                field.ty().name()
+            ))
+        })?;
+
+        let (nested_fields, parent_fields) = self.relation_fields(model, field, target_model)?;
+
+        if nested_fields.len() != 1 || parent_fields.len() != 1 {
+            return Err(schema_error(format!(
+                "relation `{}.{}` currently requires exactly one parent field and one nested field",
+                model.name(),
+                relation.field
+            )));
+        }
+
+        let join_alias = format!("t{}", self.next_alias);
+        self.next_alias += 1;
+
+        let nested_alias = format!("t{}", self.next_alias);
+        self.next_alias += 1;
+
+        let subquery = self.relation_subquery_sql(RelationSql {
+            many: field.ty().is_many(),
+            target_model,
+            selection: relation.selection.clone(),
+            parent_table_alias: table_alias.to_owned(),
+            nested_alias: nested_alias.clone(),
+            nested_field: nested_fields[0].to_owned(),
+            parent_field: parent_fields[0].to_owned(),
+        })?;
+
+        joins.push(format!(
+            "LEFT JOIN LATERAL ({subquery}) AS \"{join_alias}\" ON TRUE"
+        ));
+
+        Ok(format!("\"{join_alias}\".\"data\""))
+    }
+
+    fn relation_fields(
+        &self,
+        model: &'a Model,
+        field: &'a crate::Field,
+        target_model: &'a Model,
+    ) -> Result<(Vec<&'a str>, Vec<&'a str>), sqlx::Error> {
+        match field.relation() {
+            Some(relation_info) => Ok((
+                relation_info
+                    .references()
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                relation_info
+                    .fields()
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )),
+            None => infer_relation_fields(model, field, target_model),
+        }
+    }
+}
+
+fn aggregate_order_by(model: &Model, table_alias: &str) -> String {
+    let field_name = model
+        .field_named("id")
+        .map(|field| field.name())
+        .or_else(|| {
+            model
+                .fields()
+                .iter()
+                .find(|field| field.kind().is_scalar())
+                .map(|field| field.name())
+        })
+        .unwrap_or("id");
+
+    format!(" ORDER BY \"{table_alias}\".{}", quoted_ident(field_name))
 }
 
 fn quoted_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
-fn select_expr(table_alias: &str, field_name: &str, scalar: ScalarType, alias: &str) -> String {
+fn column_expr(table_alias: &str, field_name: &str, cast_int: bool) -> String {
     let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
-    let expr = match scalar {
-        ScalarType::Int => format!("({column_sql})::bigint"),
-        ScalarType::String
-        | ScalarType::Boolean
-        | ScalarType::DateTime
-        | ScalarType::Float
-        | ScalarType::Decimal
-        | ScalarType::Bytes
-        | ScalarType::Json => column_sql,
-    };
+    if cast_int {
+        format!("({column_sql})::bigint")
+    } else {
+        column_sql
+    }
+}
 
+fn select_expr(table_alias: &str, field_name: &str, scalar: ScalarType, alias: &str) -> String {
+    let expr = column_expr(table_alias, field_name, matches!(scalar, ScalarType::Int));
     format!("{expr} AS \"{alias}\"")
 }
 
-const fn schema_error(message: String) -> sqlx::Error {
+pub fn schema_error(message: String) -> sqlx::Error {
     sqlx::Error::Protocol(message)
 }

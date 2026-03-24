@@ -768,7 +768,11 @@ impl FieldBuilder {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FieldType {
     Scalar(ScalarFieldType),
-    Relation { model: String, optional: bool },
+    Relation {
+        model: String,
+        optional: bool,
+        many: bool,
+    },
 }
 
 impl FieldType {
@@ -776,11 +780,16 @@ impl FieldType {
         Self::Scalar(ScalarFieldType { scalar, optional })
     }
 
-    pub fn relation(model: impl Into<String>, optional: bool) -> Self {
+    pub fn relation(model: impl Into<String>, optional: bool, many: bool) -> Self {
         Self::Relation {
             model: model.into(),
             optional,
+            many,
         }
+    }
+
+    pub fn relation_many(model: impl Into<String>) -> Self {
+        Self::relation(model, false, true)
     }
 
     pub fn int() -> Self {
@@ -799,6 +808,13 @@ impl FieldType {
         match self {
             FieldType::Scalar(scalar) => scalar.optional,
             FieldType::Relation { optional, .. } => *optional,
+        }
+    }
+
+    pub fn is_many(&self) -> bool {
+        match self {
+            FieldType::Scalar(_) => false,
+            FieldType::Relation { many, .. } => *many,
         }
     }
 

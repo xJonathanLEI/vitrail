@@ -8,6 +8,7 @@ schema! {
         email      String   @unique
         name       String
         created_at DateTime @default(now())
+        posts      post[]
     }
 
     model post {
@@ -21,43 +22,36 @@ schema! {
     }
 }
 
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = post)]
+struct PostSummary {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
 #[derive(QueryResult)]
 #[vitrail(schema = crate::my_schema::Schema, model = user)]
-struct UserSummary {
+struct UserWithPosts {
     id: i64,
     email: String,
     name: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(QueryResult)]
-#[vitrail(schema = crate::my_schema::Schema, model = post)]
-struct PostWithAuthor {
-    id: i64,
-    title: String,
     #[vitrail(include)]
-    author: UserSummary,
+    posts: Vec<PostSummary>,
 }
 
 #[tokio::main]
 async fn main() {
-    let client = my_schema::VitrailClient::new("postgres://127.0.0.1:5432/vitrail")
+    let client =
+        my_schema::VitrailClient::new("postgres://postgres:postgres@127.0.0.1:5432/vitrail")
+            .await
+            .unwrap();
+
+    let users = client
+        .find_many(my_schema::query::<UserWithPosts>())
         .await
         .unwrap();
 
-    let posts = client
-        .find_many(my_schema::query::<PostWithAuthor>())
-        .await
-        .unwrap();
-    let post = &posts[0];
-
-    println!(
-        "Post #{}: {} (#{} {} [{}]; joined {})",
-        post.id,
-        post.title,
-        post.author.id,
-        post.author.name,
-        post.author.email,
-        post.author.created_at
-    );
+    println!("fetched {} users", users.len());
 }

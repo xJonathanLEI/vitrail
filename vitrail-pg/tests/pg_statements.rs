@@ -1,4 +1,4 @@
-use vitrail_pg::{query, schema};
+use vitrail_pg::{QueryResult, query, schema};
 
 schema! {
     name my_schema
@@ -8,6 +8,7 @@ schema! {
         email      String   @unique
         name       String
         created_at DateTime @default(now())
+        posts      post[]
     }
 
     model post {
@@ -18,7 +19,63 @@ schema! {
         author_id  Int
         created_at DateTime @default(now())
         author     user     @relation(fields: [author_id], references: [id])
+        comments   comment[]
     }
+
+    model comment {
+        id      Int    @id @default(autoincrement())
+        body    String
+        post_id Int
+        post    post   @relation(fields: [post_id], references: [id])
+    }
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = user)]
+struct UserSummary {
+    id: i64,
+    email: String,
+    name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = comment)]
+struct CommentSummary {
+    id: i64,
+    body: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = post)]
+struct PostWithAuthor {
+    id: i64,
+    title: String,
+    #[vitrail(include)]
+    author: UserSummary,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = post)]
+struct PostWithComments {
+    id: i64,
+    title: String,
+    #[vitrail(include)]
+    comments: Vec<CommentSummary>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = user)]
+struct UserWithPostsAndComments {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostWithComments>,
 }
 
 #[test]
@@ -55,13 +112,13 @@ fn scalar_only_query_generates_expected_sql() {
 fn nested_query_generates_expected_sql() {
     let sql = query! {
         crate::my_schema,
-        post {
+        user {
             select: {
                 id: true,
-                title: true,
+                email: true,
             },
             include: {
-                author: true,
+                posts: true,
             },
         }
     }
@@ -72,14 +129,49 @@ fn nested_query_generates_expected_sql() {
         sql,
         [
             r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t2"."id")::bigint, "t2"."title", "t2"."body", "t2"."published", ("t2"."author_id")::bigint, "t2"."created_at") ORDER BY "t2"."id"), '[]'::json) AS "data" FROM "post" AS "t2" WHERE "t2"."author_id" = "t0"."id") AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn to_one_include_generates_expected_sql() {
+    let sql = my_schema::query::<PostWithAuthor>().to_sql().unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
             r#"("t0"."id")::bigint AS "post__id","#,
             r#""t0"."title" AS "post__title","#,
-            r#"("t1"."id")::bigint AS "post__author__id","#,
-            r#""t1"."email" AS "post__author__email","#,
-            r#""t1"."name" AS "post__author__name","#,
-            r#""t1"."created_at" AS "post__author__created_at""#,
+            r#""t1"."data" AS "post__author""#,
             r#"FROM "post" AS "t0""#,
-            r#"INNER JOIN "user" AS "t1" ON "t0"."author_id" = "t1"."id""#,
+            r#"LEFT JOIN LATERAL (SELECT json_build_array(("t2"."id")::bigint, "t2"."email", "t2"."name", "t2"."created_at") AS "data" FROM "user" AS "t2" WHERE "t2"."id" = "t0"."author_id" LIMIT 1) AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn nested_query_recursively_lateralizes_nested_includes() {
+    let sql = my_schema::query::<UserWithPostsAndComments>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t2"."id")::bigint, "t2"."title", "t3"."data") ORDER BY "t2"."id"), '[]'::json) AS "data" FROM "post" AS "t2" LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t4"."id")::bigint, "t4"."body") ORDER BY "t4"."id"), '[]'::json) AS "data" FROM "comment" AS "t4" WHERE "t4"."post_id" = "t2"."id") AS "t3" ON TRUE WHERE "t2"."author_id" = "t0"."id") AS "t1" ON TRUE"#,
         ]
         .join(" ")
     );

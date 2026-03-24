@@ -15,6 +15,7 @@ schema! {
         email      String   @unique
         name       String
         created_at DateTime @default(now())
+        posts      post[]
     }
 
     model post {
@@ -25,6 +26,14 @@ schema! {
         author_id  Int
         created_at DateTime @default(now())
         author     user     @relation(fields: [author_id], references: [id])
+        comments   comment[]
+    }
+
+    model comment {
+        id      Int    @id @default(autoincrement())
+        body    String
+        post_id Int
+        post    post   @relation(fields: [post_id], references: [id])
     }
 }
 
@@ -39,11 +48,54 @@ struct UserSummary {
 
 #[derive(QueryResult)]
 #[vitrail(schema = crate::my_schema::Schema, model = post)]
+struct PostSummary {
+    id: i64,
+    title: String,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = comment)]
+struct CommentSummary {
+    id: i64,
+    body: String,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = post)]
 struct PostWithAuthor {
     id: i64,
     title: String,
     #[vitrail(include)]
     author: UserSummary,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = post)]
+struct PostWithComments {
+    id: i64,
+    title: String,
+    #[vitrail(include)]
+    comments: Vec<CommentSummary>,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = user)]
+struct UserWithPosts {
+    id: i64,
+    email: String,
+    name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[vitrail(include)]
+    posts: Vec<PostSummary>,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = user)]
+struct UserWithPostsAndComments {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostWithComments>,
 }
 
 fn postgres_test_setup_help(database_url: &str) -> String {
@@ -197,6 +249,19 @@ async fn setup_database(database_url: &str) -> i64 {
     .await
     .expect("should create post table");
 
+    sqlx::query(
+        r#"
+        CREATE TABLE "comment" (
+            "id" BIGSERIAL PRIMARY KEY,
+            "body" TEXT NOT NULL,
+            "post_id" BIGINT NOT NULL REFERENCES "post" ("id")
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("should create comment table");
+
     let author_id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO "user" ("email", "name")
@@ -208,19 +273,47 @@ async fn setup_database(database_url: &str) -> i64 {
     .await
     .expect("should insert author");
 
-    sqlx::query(
-        r#"
-        INSERT INTO "post" ("title", "body", "published", "author_id")
-        VALUES ($1, $2, $3, $4)
-        "#,
-    )
-    .bind("Hello from Vitrail")
-    .bind(Some("This is the post body"))
-    .bind(true)
-    .bind(author_id)
-    .execute(&pool)
-    .await
-    .expect("should insert post");
+    let mut post_ids = Vec::new();
+
+    for (title, body, published) in [
+        ("Hello from Vitrail", Some("This is the post body"), true),
+        ("Second post", None, false),
+    ] {
+        let post_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO "post" ("title", "body", "published", "author_id")
+            VALUES ($1, $2, $3, $4)
+            RETURNING "id"::bigint
+            "#,
+        )
+        .bind(title)
+        .bind(body)
+        .bind(published)
+        .bind(author_id)
+        .fetch_one(&pool)
+        .await
+        .expect("should insert post");
+
+        post_ids.push(post_id);
+    }
+
+    for (post_id, body) in [
+        (post_ids[0], "First comment on first post"),
+        (post_ids[0], "Second comment on first post"),
+        (post_ids[1], "Only comment on second post"),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO "comment" ("body", "post_id")
+            VALUES ($1, $2)
+            "#,
+        )
+        .bind(body)
+        .bind(post_id)
+        .execute(&pool)
+        .await
+        .expect("should insert comment");
+    }
 
     pool.close().await;
     author_id
@@ -236,31 +329,34 @@ async fn simple_query_on_postgres() {
         .await
         .expect("should create vitrail client");
 
-    let posts = client
+    let users = client
         .find_many(query! {
             crate::my_schema,
-            post {
+            user {
                 select: {
                     id: true,
-                    title: true,
+                    email: true,
+                    name: true,
                 },
                 include: {
-                    author: true,
+                    posts: true,
                 },
             }
         })
         .await
         .expect("query should succeed");
 
-    assert_eq!(posts.len(), 1);
+    assert_eq!(users.len(), 1);
 
-    let post = &posts[0];
-    assert_eq!(post.id, 1);
-    assert_eq!(post.title, "Hello from Vitrail");
-    assert_eq!(post.author.id, author_id);
-    assert_eq!(post.author.email, "alice@example.com");
-    assert_eq!(post.author.name, "Alice");
-    assert!(post.author.created_at <= chrono::Utc::now());
+    let user = &users[0];
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.email, "alice@example.com");
+    assert_eq!(user.name, "Alice");
+    assert_eq!(user.posts.len(), 2);
+    assert_eq!(user.posts[0].id, 1);
+    assert_eq!(user.posts[0].title, "Hello from Vitrail");
+    assert_eq!(user.posts[1].id, 2);
+    assert_eq!(user.posts[1].title, "Second post");
 
     database.cleanup().await;
 }
@@ -275,12 +371,43 @@ async fn model_first_named_query_on_postgres() {
         .await
         .expect("should create vitrail client");
 
+    let users = client
+        .find_many(my_schema::query::<UserWithPosts>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+
+    let user = &users[0];
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.email, "alice@example.com");
+    assert_eq!(user.name, "Alice");
+    assert!(user.created_at <= chrono::Utc::now());
+    assert_eq!(user.posts.len(), 2);
+    assert_eq!(user.posts[0].id, 1);
+    assert_eq!(user.posts[0].title, "Hello from Vitrail");
+    assert_eq!(user.posts[1].id, 2);
+    assert_eq!(user.posts[1].title, "Second post");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_to_one_include_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = my_schema::VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
     let posts = client
         .find_many(my_schema::query::<PostWithAuthor>())
         .await
         .expect("query should succeed");
 
-    assert_eq!(posts.len(), 1);
+    assert_eq!(posts.len(), 2);
 
     let post = &posts[0];
     assert_eq!(post.id, 1);
@@ -289,6 +416,54 @@ async fn model_first_named_query_on_postgres() {
     assert_eq!(post.author.email, "alice@example.com");
     assert_eq!(post.author.name, "Alice");
     assert!(post.author.created_at <= chrono::Utc::now());
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_recursive_nested_include_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = my_schema::VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(my_schema::query::<UserWithPostsAndComments>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+
+    let user = &users[0];
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.email, "alice@example.com");
+    assert_eq!(user.posts.len(), 2);
+
+    assert_eq!(user.posts[0].id, 1);
+    assert_eq!(user.posts[0].title, "Hello from Vitrail");
+    assert_eq!(user.posts[0].comments.len(), 2);
+    assert_eq!(user.posts[0].comments[0].id, 1);
+    assert_eq!(
+        user.posts[0].comments[0].body,
+        "First comment on first post"
+    );
+    assert_eq!(user.posts[0].comments[1].id, 2);
+    assert_eq!(
+        user.posts[0].comments[1].body,
+        "Second comment on first post"
+    );
+
+    assert_eq!(user.posts[1].id, 2);
+    assert_eq!(user.posts[1].title, "Second post");
+    assert_eq!(user.posts[1].comments.len(), 1);
+    assert_eq!(user.posts[1].comments[0].id, 3);
+    assert_eq!(
+        user.posts[1].comments[0].body,
+        "Only comment on second post"
+    );
 
     database.cleanup().await;
 }

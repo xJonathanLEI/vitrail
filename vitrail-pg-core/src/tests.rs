@@ -17,10 +17,10 @@ fn accepts_valid_schema_definition() {
                         .attributes(vec![Attribute::Unique, Attribute::DbUuid])
                         .build()
                         .expect("field should build"),
-                    Field::builder("post", FieldType::relation("post", true))
+                    Field::builder("post", FieldType::relation("post", true, false))
                         .build()
                         .expect("field should build"),
-                    Field::builder("comment", FieldType::relation("comment", true))
+                    Field::builder("comment", FieldType::relation("comment", true, false))
                         .build()
                         .expect("field should build"),
                     Field::builder("status", FieldType::string())
@@ -50,7 +50,7 @@ fn accepts_valid_schema_definition() {
                         .attributes(vec![Attribute::Default(DefaultAttribute::now())])
                         .build()
                         .expect("field should build"),
-                    Field::builder("user", FieldType::relation("User", false))
+                    Field::builder("user", FieldType::relation("User", false, false))
                         .attributes(vec![Attribute::Relation(
                             RelationAttribute::builder()
                                 .fields(vec!["user_id".into()])
@@ -60,7 +60,7 @@ fn accepts_valid_schema_definition() {
                         )])
                         .build()
                         .expect("field should build"),
-                    Field::builder("comment", FieldType::relation("comment", true))
+                    Field::builder("comment", FieldType::relation("comment", true, false))
                         .build()
                         .expect("field should build"),
                 ])
@@ -82,7 +82,7 @@ fn accepts_valid_schema_definition() {
                     Field::builder("body", FieldType::string())
                         .build()
                         .expect("field should build"),
-                    Field::builder("post", FieldType::relation("post", false))
+                    Field::builder("post", FieldType::relation("post", false, false))
                         .attributes(vec![Attribute::Relation(
                             RelationAttribute::builder()
                                 .fields(vec!["post_id".into()])
@@ -132,7 +132,7 @@ fn rejects_unknown_relation_target() {
                     Field::builder("user_id", FieldType::int())
                         .build()
                         .expect("field should build"),
-                    Field::builder("user", FieldType::relation("User", false))
+                    Field::builder("user", FieldType::relation("User", false, false))
                         .attributes(vec![Attribute::Relation(
                             RelationAttribute::builder()
                                 .fields(vec!["user_id".into()])
@@ -175,10 +175,10 @@ fn allows_inferred_relation_fields() {
                         .attributes(vec![Attribute::Id])
                         .build()
                         .expect("field should build"),
-                    Field::builder("post", FieldType::relation("Post", true))
+                    Field::builder("post", FieldType::relation("Post", true, false))
                         .build()
                         .expect("field should build"),
-                    Field::builder("comment", FieldType::relation("Comment", true))
+                    Field::builder("comment", FieldType::relation("Comment", true, false))
                         .build()
                         .expect("field should build"),
                 ])
@@ -193,7 +193,7 @@ fn allows_inferred_relation_fields() {
                     Field::builder("user_id", FieldType::int())
                         .build()
                         .expect("field should build"),
-                    Field::builder("user", FieldType::relation("user", false))
+                    Field::builder("user", FieldType::relation("user", false, false))
                         .attributes(vec![Attribute::Relation(
                             RelationAttribute::builder()
                                 .fields(vec!["user_id".into()])
@@ -203,7 +203,7 @@ fn allows_inferred_relation_fields() {
                         )])
                         .build()
                         .expect("field should build"),
-                    Field::builder("comment", FieldType::relation("Comment", true))
+                    Field::builder("comment", FieldType::relation("Comment", true, false))
                         .build()
                         .expect("field should build"),
                 ])
@@ -218,7 +218,7 @@ fn allows_inferred_relation_fields() {
                     Field::builder("post_id", FieldType::int())
                         .build()
                         .expect("field should build"),
-                    Field::builder("post", FieldType::relation("post", false))
+                    Field::builder("post", FieldType::relation("post", false, false))
                         .attributes(vec![Attribute::Relation(
                             RelationAttribute::builder()
                                 .fields(vec!["post_id".into()])
@@ -247,7 +247,7 @@ fn rejects_unknown_inferred_relation_target() {
                         .attributes(vec![Attribute::Id])
                         .build()
                         .expect("field should build"),
-                    Field::builder("comment", FieldType::relation("Missing", true))
+                    Field::builder("comment", FieldType::relation("Missing", true, false))
                         .build()
                         .expect("field should build"),
                 ])
@@ -258,4 +258,48 @@ fn rejects_unknown_inferred_relation_target() {
 
     let error = schema.expect_err("schema should fail");
     assert!(error.to_string().contains("unknown relation target model"));
+}
+
+#[test]
+fn allows_inferred_one_to_many_relation_fields() {
+    let schema = Schema::builder()
+        .models(vec![
+            Model::builder("user")
+                .fields(vec![
+                    Field::builder("id", FieldType::int())
+                        .attributes(vec![Attribute::Id])
+                        .build()
+                        .expect("field should build"),
+                    Field::builder("posts", FieldType::relation("Post", false, true))
+                        .build()
+                        .expect("field should build"),
+                ])
+                .build()
+                .expect("model should build"),
+            Model::builder("post")
+                .fields(vec![
+                    Field::builder("id", FieldType::int())
+                        .attributes(vec![Attribute::Id])
+                        .build()
+                        .expect("field should build"),
+                    Field::builder("author_id", FieldType::int())
+                        .build()
+                        .expect("field should build"),
+                    Field::builder("author", FieldType::relation("user", false, false))
+                        .attributes(vec![Attribute::Relation(
+                            RelationAttribute::builder()
+                                .fields(vec!["author_id".into()])
+                                .references(vec!["id".into()])
+                                .build()
+                                .expect("relation should build"),
+                        )])
+                        .build()
+                        .expect("field should build"),
+                ])
+                .build()
+                .expect("model should build"),
+        ])
+        .build();
+
+    assert!(schema.is_ok());
 }
