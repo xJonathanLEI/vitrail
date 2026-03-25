@@ -17,16 +17,6 @@ pub trait QuerySpec: Send + Sync {
         &'a self,
         pool: &'a PgPool,
     ) -> BoxFuture<'a, Result<Vec<Self::Output>, sqlx::Error>>;
-
-    fn fetch_optional<'a>(
-        &'a self,
-        pool: &'a PgPool,
-    ) -> BoxFuture<'a, Result<Option<Self::Output>, sqlx::Error>> {
-        Box::pin(async move {
-            let mut rows = self.fetch_many(pool).await?;
-            Ok(rows.drain(..).next())
-        })
-    }
 }
 
 pub trait SchemaAccess: Send + Sync + 'static {
@@ -139,15 +129,6 @@ fn selection_is_null(
 
 pub fn alias_name(prefix: &str, field: &str) -> String {
     format!("{prefix}__{field}")
-}
-
-pub fn json_object_field<'a>(
-    value: &'a JsonValue,
-    field: &str,
-) -> Result<&'a JsonValue, sqlx::Error> {
-    value
-        .get(field)
-        .ok_or_else(|| schema_error(format!("missing JSON field `{field}` in query result")))
 }
 
 pub fn json_array_field(value: &JsonValue, index: usize) -> Result<&JsonValue, sqlx::Error> {

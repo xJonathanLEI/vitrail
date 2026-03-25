@@ -28,23 +28,6 @@ impl VitrailClient {
         query.fetch_many(&self.pool).await
     }
 
-    pub async fn find_optional<Q>(&self, query: Q) -> Result<Option<Q::Output>, sqlx::Error>
-    where
-        Q: QuerySpec,
-    {
-        query.fetch_optional(&self.pool).await
-    }
-
-    pub async fn find_unique<Q>(&self, query: Q) -> Result<Q::Output, sqlx::Error>
-    where
-        Q: QuerySpec,
-    {
-        match query.fetch_optional(&self.pool).await? {
-            Some(value) => Ok(value),
-            None => Err(sqlx::Error::RowNotFound),
-        }
-    }
-
     pub async fn close(&self) {
         self.pool.close().await;
     }

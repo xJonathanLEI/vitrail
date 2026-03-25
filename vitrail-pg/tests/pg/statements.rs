@@ -35,49 +35,49 @@ pub(crate) use self::statements_schema as pg_statements_schema;
 #[allow(dead_code)]
 #[derive(QueryResult)]
 #[vitrail(schema = crate::statements_schema::Schema, model = user)]
-pub struct UserSummary {
-    pub id: i64,
-    pub email: String,
-    pub name: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+struct UserSummary {
+    id: i64,
+    email: String,
+    name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
 #[vitrail(schema = crate::statements_schema::Schema, model = comment)]
-pub struct CommentSummary {
-    pub id: i64,
-    pub body: String,
+struct CommentSummary {
+    id: i64,
+    body: String,
 }
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
 #[vitrail(schema = crate::statements_schema::Schema, model = post)]
-pub struct PostWithAuthor {
-    pub id: i64,
-    pub title: String,
+struct PostWithAuthor {
+    id: i64,
+    title: String,
     #[vitrail(include)]
-    pub author: UserSummary,
+    author: UserSummary,
 }
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
 #[vitrail(schema = crate::statements_schema::Schema, model = post)]
-pub struct PostWithComments {
-    pub id: i64,
-    pub title: String,
+struct PostWithComments {
+    id: i64,
+    title: String,
     #[vitrail(include)]
-    pub comments: Vec<CommentSummary>,
+    comments: Vec<CommentSummary>,
 }
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
 #[vitrail(schema = crate::statements_schema::Schema, model = user)]
-pub struct UserWithPostsAndComments {
-    pub id: i64,
-    pub email: String,
+struct UserWithPostsAndComments {
+    id: i64,
+    email: String,
     #[vitrail(include)]
-    pub posts: Vec<PostWithComments>,
+    posts: Vec<PostWithComments>,
 }
 
 #[test]
