@@ -28,6 +28,8 @@ async fn main() {
         .await
         .unwrap();
 
+    let user_id = 1_i64;
+
     let users = client
         .find_many(query! {
             crate::my_schema,
@@ -43,6 +45,11 @@ async fn main() {
                             id: true,
                             title: true,
                         },
+                    },
+                },
+                where: {
+                    id: {
+                        eq: user_id
                     },
                 },
             }

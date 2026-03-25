@@ -47,6 +47,16 @@ pub fn derive_query_result(input: TokenStream) -> TokenStream {
     }
 }
 
+#[proc_macro_derive(QueryVariables)]
+pub fn derive_query_variables(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match QueryVariablesDerive::parse(input).and_then(|derive| derive.expand()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
 /// Parsed top-level schema definition plus enough source metadata to translate
 /// clean core validation errors back into compiler diagnostics with spans.
 #[derive(Debug)]
@@ -230,9 +240,18 @@ impl ParsedSchema {
 
                 pub fn query<T>() -> ::vitrail_pg::Query<Schema, T>
                 where
-                    T: ::vitrail_pg::QueryModel<Schema = Schema> + Sync,
+                    T: ::vitrail_pg::QueryModel<Schema = Schema, Variables = ()> + Sync,
                 {
                     ::vitrail_pg::Query::new()
+                }
+
+                pub fn query_with_variables<T>(
+                    variables: T::Variables,
+                ) -> ::vitrail_pg::Query<Schema, T, T::Variables>
+                where
+                    T: ::vitrail_pg::QueryModel<Schema = Schema> + Sync,
+                {
+                    ::vitrail_pg::Query::<Schema, T, ()>::new_with_variables(variables)
                 }
 
                 pub(crate) use #local_query_macro_ident as __query;
@@ -365,12 +384,18 @@ impl ParsedSchema {
                 format_ident!("__VitrailQuery{}", to_pascal_case(&model.name.to_string()));
             let root_struct_macro_ident =
                 format_ident!("__vitrail_root_struct_{}_{}", module_name, model.name);
+            let selection_macro_ident =
+                format_ident!("__vitrail_selection_{}_{}", module_name, model.name);
             let select_assert_ident =
                 format_ident!("__vitrail_assert_select_{}_{}", module_name, model.name);
             let include_assert_ident =
                 format_ident!("__vitrail_assert_include_{}_{}", module_name, model.name);
+            let where_assert_ident =
+                format_ident!("__vitrail_assert_where_{}_{}", module_name, model.name);
             let include_struct_ident =
                 format_ident!("__vitrail_include_struct_{}_{}", module_name, model.name);
+            let include_selection_ident =
+                format_ident!("__vitrail_include_selection_{}_{}", module_name, model.name);
 
             let scalar_fields = model.scalar_fields();
             let relation_fields = model.relation_fields();
@@ -381,6 +406,11 @@ impl ParsedSchema {
             });
 
             let include_assert_arms = relation_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! { (#ident) => {}; }
+            });
+
+            let where_assert_arms = scalar_fields.iter().map(|field| {
                 let ident = &field.name;
                 quote! { (#ident) => {}; }
             });
@@ -420,25 +450,46 @@ impl ParsedSchema {
                                 #(#target_scalar_fields)*
                             }
                         };
-                        (
-                            #ident,
-                            $nested_ident:ident,
-                            {
-                                select: {
-                                    $($select_field:ident : true),* $(,)?
-                                }
-                                $(,
-                                    include: {
-                                        $($include_field:ident : $include_value:tt),* $(,)?
-                                    }
-                                )?
-                                $(,)?
-                            }
-                        ) => {
+                        (#ident, $nested_ident:ident, $nested_query:tt) => {
                             #target_root_struct_macro_ident! {
                                 $nested_ident;
-                                select { $($select_field),* }
-                                $( include { $($include_field : $include_value),* } )?
+                                $nested_query
+                            }
+                        };
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let include_selection_arms = relation_fields
+                .iter()
+                .map(|field| {
+                    let ident = &field.name;
+                    let target = self
+                        .models
+                        .iter()
+                        .find(|candidate| {
+                            candidate.name == field.ty.name
+                                || field.ty.name == to_pascal_case(&candidate.name.to_string())
+                        })
+                        .expect("validated relation target");
+                    let target_selection_macro_ident =
+                        format_ident!("__vitrail_selection_{}_{}", module_name, target.name);
+                    let target_scalar_fields = target.scalar_fields();
+                    let target_scalar_field_idents =
+                        target_scalar_fields.iter().map(|target_field| {
+                            let field_ident = &target_field.name;
+                            quote! { #field_ident }
+                        });
+
+                    Ok(quote! {
+                        (#ident, true) => {
+                            #target_selection_macro_ident! {
+                                select { #( #target_scalar_field_idents : true ),* }
+                            }
+                        };
+                        (#ident, $nested_query:tt) => {
+                            #target_selection_macro_ident! {
+                                $nested_query
                             }
                         };
                     })
@@ -454,6 +505,7 @@ impl ParsedSchema {
                         (
                             @struct
                             $root_ident:ident
+                            [ $($attrs:tt)* ]
                             [ $($fields:tt)* ]
                             [ #ident, $($rest_select:ident,)* ]
                             [ $($include_field:ident => $include_value:tt,)* ]
@@ -461,6 +513,7 @@ impl ParsedSchema {
                             #root_struct_macro_ident! {
                                 @struct
                                 $root_ident
+                                [ $($attrs)* ]
                                 [ $($fields)* pub #ident: #ty, ]
                                 [ $($rest_select,)* ]
                                 [ $($include_field => $include_value,)* ]
@@ -486,6 +539,7 @@ impl ParsedSchema {
                         (
                             @struct
                             $root_ident:ident
+                            [ $($attrs:tt)* ]
                             [ $($fields:tt)* ]
                             [ ]
                             [ #ident => $include_value:tt, $($rest_include:ident => $rest_include_value:tt,)* ]
@@ -495,6 +549,7 @@ impl ParsedSchema {
                             #root_struct_macro_ident! {
                                 @struct
                                 $root_ident
+                                [ $($attrs)* ]
                                 [
                                     $($fields)*
                                     #[vitrail(include)]
@@ -529,6 +584,21 @@ impl ParsedSchema {
 
                 #[doc(hidden)]
                 #[macro_export]
+                macro_rules! #where_assert_ident {
+                    #(#where_assert_arms)*
+                    ($other:ident) => {
+                        compile_error!(concat!(
+                            "unknown scalar field `",
+                            stringify!($other),
+                            "` in `where(...)` filter for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
                 macro_rules! #include_struct_ident {
                     #(#include_struct_arms)*
                     ($other:ident, $nested_ident:ident, $($tokens:tt)*) => {
@@ -538,12 +608,122 @@ impl ParsedSchema {
 
                 #[doc(hidden)]
                 #[macro_export]
+                macro_rules! #include_selection_ident {
+                    #(#include_selection_arms)*
+                    ($other:ident, $($tokens:tt)*) => {
+                        compile_error!(concat!("unknown relation field `", stringify!($other), "` in model `", #model_name, "`"));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #selection_macro_ident {
+                    (
+                        {
+                            select: {
+                                $($select_field:ident : true),* $(,)?
+                            }
+                            $(,
+                                include: {
+                                    $($include_field:ident : $include_value:tt),* $(,)?
+                                }
+                            )?
+                            $(,
+                                where: {
+                                    $($where_field:ident : { eq: $where_value:expr }),* $(,)?
+                                }
+                            )?
+                            $(,)?
+                        }
+                    ) => {
+                        #selection_macro_ident! {
+                            select { $($select_field : true),* }
+                            $(, include { $($include_field : $include_value),* })?
+                            $(, where { $($where_field : { eq: $where_value }),* })?
+                        }
+                    };
+                    (
+                        select { $($select_field:ident : true),* $(,)? }
+                        $(, include { $($include_field:ident : $include_value:tt),* $(,)? })?
+                        $(, where { $($where_field:ident : { eq: $where_value:expr }),* $(,)? })?
+                        $(,)?
+                    ) => {{
+                        $( #select_assert_ident!($select_field); )*
+                        $( $( #include_assert_ident!($include_field); )* )?
+                        $( $( #where_assert_ident!($where_field); )* )?
+
+                        ::vitrail_pg::QuerySelection {
+                            model: #model_name,
+                            scalar_fields: vec![$( stringify!($select_field) ),*],
+                            relations: vec![
+                                $(
+                                    $(
+                                        ::vitrail_pg::QueryRelationSelection {
+                                            field: stringify!($include_field),
+                                            selection: #include_selection_ident!($include_field, $include_value),
+                                        }
+                                    ),*
+                                )?
+                            ],
+                            filter: {
+                                let __vitrail_filters = vec![
+                                    $(
+                                        $(
+                                            ::vitrail_pg::QueryFilter::eq(
+                                                stringify!($where_field),
+                                                ::vitrail_pg::QueryFilterValue::value($where_value),
+                                            )
+                                        ),*
+                                    )?
+                                ];
+
+                                if __vitrail_filters.is_empty() {
+                                    None
+                                } else if __vitrail_filters.len() == 1 {
+                                    Some(__vitrail_filters.into_iter().next().expect("single filter should exist"))
+                                } else {
+                                    Some(::vitrail_pg::QueryFilter::And(__vitrail_filters))
+                                }
+                            },
+                        }
+                    }};
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
                 macro_rules! #root_struct_macro_ident {
                     #(#root_struct_arms)*
                     (
                         $root_ident:ident;
+                        {
+                            select: {
+                                $($select_field:ident : true),* $(,)?
+                            }
+                            $(,
+                                include: {
+                                    $($include_field:ident : $include_value:tt),* $(,)?
+                                }
+                            )?
+                            $(,
+                                where: {
+                                    $($where_field:ident : { eq: $where_value:expr }),* $(,)?
+                                }
+                            )?
+                            $(,)?
+                        }
+                    ) => {
+                        #root_struct_macro_ident! {
+                            $root_ident;
+                            select { $($select_field),* }
+                            $(, include { $($include_field : $include_value),* } )?
+                            $(, where { $($where_field : { eq: $where_value }),* } )?
+                        }
+                    };
+                    (
+                        $root_ident:ident;
                         select { $($select_field:ident),* $(,)? }
-                        $( include { $($include_field:ident : $include_value:tt),* $(,)? } )?
+                        $(, include { $($include_field:ident : $include_value:tt),* $(,)? } )?
+                        $(, where { $($where_field:ident : { eq: $where_value:expr }),* $(,)? } )?
                     ) => {
                         $( #select_assert_ident!($select_field); )*
                         $( $( #include_assert_ident!($include_field); )* )?
@@ -552,6 +732,7 @@ impl ParsedSchema {
                             @struct
                             $root_ident
                             [ ]
+                            [ ]
                             [ $($select_field,)* ]
                             [ $($( $include_field => $include_value, )*)? ]
                         }
@@ -559,6 +740,7 @@ impl ParsedSchema {
                     (
                         @struct
                         $root_ident:ident
+                        [ $($attrs:tt)* ]
                         [ $($fields:tt)* ]
                         [ ]
                         [ ]
@@ -566,6 +748,7 @@ impl ParsedSchema {
                         #[allow(dead_code)]
                         #[derive(::vitrail_pg::QueryResult)]
                         #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #model_name)]
+                        $($attrs)*
                         struct $root_ident {
                             $($fields)*
                         }
@@ -575,25 +758,18 @@ impl ParsedSchema {
 
             main_arms.push(quote! {
                 (
-                    #model_ident {
-                        select: {
-                            $($select_field:ident : true),* $(,)?
-                        }
-                        $(,
-                            include: {
-                                $($include_field:ident : $include_value:tt),* $(,)?
-                            }
-                        )?
-                        $(,)?
-                    }
+                    #model_ident $query_body:tt
                 ) => {{
                     #root_struct_macro_ident! {
                         #root_struct_ident;
-                        select { $($select_field),* }
-                        $( include { $($include_field : $include_value),* } )?
+                        $query_body
                     }
 
-                    #dollar_crate::#module_name::query::<#root_struct_ident>()
+                    ::vitrail_pg::Query::<#dollar_crate::#module_name::Schema, #root_struct_ident>::with_selection(
+                        #selection_macro_ident! {
+                            $query_body
+                        }
+                    )
                 }};
             });
         }
@@ -1239,6 +1415,36 @@ fn dollar_crate() -> TokenStream2 {
     tokens
 }
 
+fn normalize_query_macro_body(tokens: TokenStream2) -> TokenStream2 {
+    let mut normalized = TokenStream2::new();
+    let mut iter = tokens.into_iter().peekable();
+
+    while let Some(token) = iter.next() {
+        match token {
+            TokenTree::Group(group) => {
+                let mut normalized_group = proc_macro2::Group::new(
+                    group.delimiter(),
+                    normalize_query_macro_body(group.stream()),
+                );
+                normalized_group.set_span(group.span());
+                normalized.extend([TokenTree::Group(normalized_group)]);
+            }
+            TokenTree::Punct(punct) if punct.as_char() == '$' => {
+                if let Some(TokenTree::Ident(ident)) = iter.peek() {
+                    let ident = ident.clone();
+                    iter.next();
+                    normalized.extend([TokenTree::Ident(ident)]);
+                } else {
+                    normalized.extend([TokenTree::Punct(punct)]);
+                }
+            }
+            other => normalized.extend([other]),
+        }
+    }
+
+    normalized
+}
+
 struct QueryMacroInput {
     schema_path: Path,
     body: TokenStream2,
@@ -1256,7 +1462,7 @@ impl Parse for QueryMacroInput {
 impl QueryMacroInput {
     fn expand(self) -> TokenStream2 {
         let schema_path = self.schema_path;
-        let body = self.body;
+        let body = normalize_query_macro_body(self.body);
         let segments = schema_path.segments.iter().collect::<Vec<_>>();
         let module_segment = segments
             .last()
@@ -1295,15 +1501,20 @@ impl QueryMacroInput {
 
 struct QueryResultDerive {
     ident: Ident,
+    generics: syn::Generics,
     fields: Vec<QueryResultField>,
     schema_path: Path,
     model_name: LitStr,
+    variables_ty: Option<Type>,
+    root_filters: Vec<QueryResultRootFilter>,
 }
 
 impl QueryResultDerive {
     fn parse(input: syn::DeriveInput) -> Result<Self> {
         let ident = input.ident;
-        let (schema_path, model_name) = parse_container_attrs(&input.attrs)?;
+        let generics = input.generics;
+        let (schema_path, model_name, variables_ty, root_filters) =
+            parse_container_attrs(&input.attrs)?;
 
         let Data::Struct(DataStruct {
             fields: Fields::Named(fields),
@@ -1324,23 +1535,42 @@ impl QueryResultDerive {
 
         Ok(Self {
             ident,
+            generics,
             fields,
             schema_path,
             model_name,
+            variables_ty,
+            root_filters,
         })
     }
 
     fn expand(self) -> Result<TokenStream2> {
         let ident = self.ident;
+        let generics = self.generics;
         let schema_path = self.schema_path;
         let model_name = self.model_name;
+        let variables_ty = self.variables_ty;
+        let root_filters = self.root_filters;
         let scalar_fields: Vec<_> = self.fields.iter().filter(|field| !field.include).collect();
         let relation_fields: Vec<_> = self.fields.iter().filter(|field| field.include).collect();
+        let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-        let selection_scalars = scalar_fields.iter().map(|field| {
-            let name = &field.query_name;
-            quote! { #name }
-        });
+        if (self.fields.iter().any(|field| field.filter.is_some()) || !root_filters.is_empty())
+            && variables_ty.is_none()
+        {
+            return Err(Error::new(
+                ident.span(),
+                "filtered queries require `#[vitrail(variables = YourVariablesType)]`",
+            ));
+        }
+
+        let selection_scalars = scalar_fields
+            .iter()
+            .map(|field| {
+                let name = &field.query_name;
+                quote! { #name }
+            })
+            .collect::<Vec<_>>();
         let selection_relations = relation_fields.iter().map(|field| {
             let name = &field.query_name;
             let nested_ty = field.nested_type().expect("include field");
@@ -1351,6 +1581,160 @@ impl QueryResultDerive {
                 }
             }
         });
+        let selection_relation_assertions = if variables_ty.is_none() {
+            relation_fields
+                .iter()
+                .map(|field| {
+                    let nested_ty = field.nested_type().expect("include field");
+                    quote! {
+                        {
+                            fn __vitrail_assert_query_variables_match<
+                                T: ::vitrail_pg::QueryModel<Variables = ()>,
+                            >() {
+                            }
+
+                            __vitrail_assert_query_variables_match::<#nested_ty>();
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let selection_relations_with_variables = relation_fields
+            .iter()
+            .map(|field| {
+                let name = &field.query_name;
+                let nested_ty = field.nested_type().expect("include field");
+                quote! {
+                    ::vitrail_pg::QueryRelationSelection {
+                        field: #name,
+                        selection: <#nested_ty as ::vitrail_pg::QueryModel>::selection_with_variables(variables),
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let selection_with_variables_tokens = if variables_ty.is_some() {
+            let filter_exprs = {
+                let mut filters = root_filters
+                    .iter()
+                    .map(QueryResultRootFilter::expand)
+                    .collect::<Vec<_>>();
+
+                filters.extend(scalar_fields.iter().filter_map(|field| {
+                    let field_name = &field.query_name;
+                    let filter = field.filter.as_ref()?;
+                    match filter {
+                        QueryResultFieldFilter::Eq { variable } => Some(quote! {
+                            ::vitrail_pg::QueryFilter::eq(
+                                #field_name,
+                                ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                            )
+                        }),
+                    }
+                }));
+
+                filters
+            };
+
+            let filter_tokens = if filter_exprs.is_empty() {
+                quote! { None }
+            } else if filter_exprs.len() == 1 {
+                let filter = &filter_exprs[0];
+                quote! { Some(#filter) }
+            } else {
+                quote! { Some(::vitrail_pg::QueryFilter::And(vec![#(#filter_exprs),*])) }
+            };
+
+            quote! {
+                let _ = variables;
+
+                ::vitrail_pg::QuerySelection {
+                    model: #model_name,
+                    scalar_fields: vec![#(#selection_scalars),*],
+                    relations: vec![#(#selection_relations_with_variables),*],
+                    filter: #filter_tokens,
+                }
+            }
+        } else {
+            quote! {
+                let _ = variables;
+                Self::selection()
+            }
+        };
+
+        let root_filter_validation_tokens = {
+            let schema_module_ident = schema_path
+                .segments
+                .iter()
+                .rev()
+                .nth(1)
+                .map(|segment| segment.ident.clone())
+                .ok_or_else(|| {
+                    Error::new(
+                        schema_path.span(),
+                        "`#[vitrail(schema = ...)]` must point to a schema type like `crate::my_schema::Schema` when used with `where(...)`",
+                    )
+                })?;
+            let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
+                Error::new(
+                    model_name.span(),
+                    "`#[vitrail(model = ...)]` must be a valid identifier when used with `where(...)`",
+                )
+            })?;
+            let validations = root_filters
+                .iter()
+                .map(|filter| filter.validation_tokens(&schema_module_ident, &model_ident))
+                .collect::<Vec<_>>();
+
+            quote! {
+                #(#validations)*
+            }
+        };
+
+        let variable_validation_tokens = if let Some(variables_ty) = &variables_ty {
+            let mut validations = root_filters
+                .iter()
+                .map(QueryResultRootFilter::variable)
+                .collect::<Vec<_>>();
+
+            validations.extend(scalar_fields.iter().filter_map(|field| {
+                let filter = field.filter.as_ref()?;
+                match filter {
+                    QueryResultFieldFilter::Eq { variable } => Some(variable),
+                }
+            }));
+
+            quote! {
+                impl #impl_generics #ident #ty_generics
+                #where_clause
+                {
+                    #[doc(hidden)]
+                    fn __vitrail_validate_query(__vitrail_variables: Option<&#variables_ty>) {
+                        #root_filter_validation_tokens
+                        if let Some(__vitrail_variables) = __vitrail_variables {
+                            #(let _ = &__vitrail_variables.#validations;)*
+                        }
+                    }
+                }
+            }
+        } else {
+            quote! {
+                impl #impl_generics #ident #ty_generics
+                #where_clause
+                {
+                    #[doc(hidden)]
+                    fn __vitrail_validate_query() {
+                        #root_filter_validation_tokens
+                    }
+                }
+            }
+        };
+
+        let query_variables_ty = variables_ty
+            .as_ref()
+            .map(|variables_ty| quote! { #variables_ty })
+            .unwrap_or_else(|| quote! { () });
 
         let decode_fields = self
             .fields
@@ -1398,7 +1782,11 @@ impl QueryResultDerive {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(quote! {
-            impl ::vitrail_pg::QueryValue for #ident {
+            #variable_validation_tokens
+
+            impl #impl_generics ::vitrail_pg::QueryValue for #ident #ty_generics
+            #where_clause
+            {
                 fn from_json(value: &::vitrail_pg::serde_json::Value) -> Result<Self, ::sqlx::Error> {
                     Ok(Self {
                         #(#json_decode_fields),*
@@ -1406,19 +1794,31 @@ impl QueryResultDerive {
                 }
             }
 
-            impl ::vitrail_pg::QueryModel for #ident {
+            impl #impl_generics ::vitrail_pg::QueryModel for #ident #ty_generics
+            #where_clause
+            {
                 type Schema = #schema_path;
+                type Variables = #query_variables_ty;
 
                 fn model_name() -> &'static str {
                     #model_name
                 }
 
                 fn selection() -> ::vitrail_pg::QuerySelection {
+                    #(#selection_relation_assertions)*
+
                     ::vitrail_pg::QuerySelection {
                         model: #model_name,
                         scalar_fields: vec![#(#selection_scalars),*],
                         relations: vec![#(#selection_relations),*],
+                        filter: None,
                     }
+                }
+
+                fn selection_with_variables(
+                    variables: &::vitrail_pg::QueryVariables,
+                ) -> ::vitrail_pg::QuerySelection {
+                    #selection_with_variables_tokens
                 }
 
                 fn from_row(
@@ -1441,6 +1841,11 @@ struct QueryResultField {
     ty: Type,
     query_name: LitStr,
     include: bool,
+    filter: Option<QueryResultFieldFilter>,
+}
+
+enum QueryResultFieldFilter {
+    Eq { variable: Ident },
 }
 
 impl QueryResultField {
@@ -1451,6 +1856,7 @@ impl QueryResultField {
             .ok_or_else(|| Error::new(span, "expected a named field"))?;
         let mut include = false;
         let mut rename = None;
+        let mut filter = None;
 
         for attribute in &field.attrs {
             if !attribute.path().is_ident("vitrail") {
@@ -1467,8 +1873,40 @@ impl QueryResultField {
                     rename = Some(value.parse::<LitStr>()?);
                     return Ok(());
                 }
+                if meta.path.is_ident("where") {
+                    let content;
+                    parenthesized!(content in meta.input);
+                    let operator = content.call(Ident::parse_any)?;
+
+                    if operator != "eq" {
+                        return Err(Error::new(
+                            operator.span(),
+                            "unsupported `where` operator; only `eq` is currently supported",
+                        ));
+                    }
+
+                    content.parse::<Token![=]>()?;
+                    let variable = content.call(Ident::parse_any)?;
+                    filter = Some(QueryResultFieldFilter::Eq { variable });
+
+                    if !content.is_empty() {
+                        return Err(Error::new(
+                            content.span(),
+                            "unexpected tokens in `where(...)`",
+                        ));
+                    }
+
+                    return Ok(());
+                }
                 Err(meta.error("unsupported `#[vitrail(...)]` field attribute"))
             })?;
+        }
+
+        if include && filter.is_some() {
+            return Err(Error::new(
+                ident.span(),
+                "relation fields do not support `where(...)`; place filters on the nested query model instead",
+            ));
         }
 
         let query_name = rename.unwrap_or_else(|| LitStr::new(&ident.to_string(), ident.span()));
@@ -1478,6 +1916,7 @@ impl QueryResultField {
             ty: field.ty,
             query_name,
             include,
+            filter,
         })
     }
 
@@ -1587,9 +2026,13 @@ impl QueryResultField {
     }
 }
 
-fn parse_container_attrs(attrs: &[Attribute]) -> Result<(Path, LitStr)> {
+fn parse_container_attrs(
+    attrs: &[Attribute],
+) -> Result<(Path, LitStr, Option<Type>, Vec<QueryResultRootFilter>)> {
     let mut schema_path = None;
     let mut model_name = None;
+    let mut variables_ty = None;
+    let mut root_filters = Vec::new();
 
     for attribute in attrs {
         if !attribute.path().is_ident("vitrail") {
@@ -1611,6 +2054,14 @@ fn parse_container_attrs(attrs: &[Attribute]) -> Result<(Path, LitStr)> {
                 }
                 return Ok(());
             }
+            if meta.path.is_ident("variables") {
+                variables_ty = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("where") {
+                root_filters.push(parse_query_result_root_filter(meta.input)?);
+                return Ok(());
+            }
             Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
         })?;
     }
@@ -1628,7 +2079,159 @@ fn parse_container_attrs(attrs: &[Attribute]) -> Result<(Path, LitStr)> {
         )
     })?;
 
-    Ok((schema_path, model_name))
+    Ok((schema_path, model_name, variables_ty, root_filters))
+}
+
+struct QueryResultRootFilter {
+    field: LitStr,
+    filter: QueryResultFieldFilter,
+}
+
+impl QueryResultRootFilter {
+    fn expand(&self) -> TokenStream2 {
+        let field_name = &self.field;
+
+        match &self.filter {
+            QueryResultFieldFilter::Eq { variable } => quote! {
+                ::vitrail_pg::QueryFilter::eq(
+                    #field_name,
+                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                )
+            },
+        }
+    }
+
+    fn validation_tokens(&self, schema_module_ident: &Ident, model_ident: &Ident) -> TokenStream2 {
+        let field_ident = syn::parse_str::<Ident>(&self.field.value())
+            .expect("root filter fields are parsed as identifiers");
+        let where_assert_macro_ident = format_ident!(
+            "__vitrail_assert_where_{}_{}",
+            schema_module_ident,
+            model_ident,
+            span = self.field.span()
+        );
+
+        quote! {
+            #where_assert_macro_ident!(#field_ident);
+        }
+    }
+
+    fn variable(&self) -> &Ident {
+        match &self.filter {
+            QueryResultFieldFilter::Eq { variable } => variable,
+        }
+    }
+}
+
+fn parse_query_result_root_filter(input: ParseStream<'_>) -> Result<QueryResultRootFilter> {
+    let content;
+    parenthesized!(content in input);
+
+    let field = content.call(Ident::parse_any)?;
+    content.parse::<Token![=]>()?;
+    let operator = content.call(Ident::parse_any)?;
+
+    if operator != "eq" {
+        return Err(Error::new(
+            operator.span(),
+            "unsupported `where` operator; only `eq` is currently supported",
+        ));
+    }
+
+    let operator_args;
+    parenthesized!(operator_args in content);
+    let variable = operator_args.call(Ident::parse_any)?;
+
+    if !operator_args.is_empty() {
+        return Err(Error::new(
+            operator_args.span(),
+            "unexpected tokens in `where(... = eq(...))`",
+        ));
+    }
+
+    if !content.is_empty() {
+        return Err(Error::new(
+            content.span(),
+            "unexpected tokens in `where(...)`",
+        ));
+    }
+
+    Ok(QueryResultRootFilter {
+        field: LitStr::new(&field.to_string(), field.span()),
+        filter: QueryResultFieldFilter::Eq { variable },
+    })
+}
+
+struct QueryVariablesDerive {
+    ident: Ident,
+    generics: syn::Generics,
+    fields: Vec<(Ident, Type)>,
+}
+
+impl QueryVariablesDerive {
+    fn parse(input: syn::DeriveInput) -> Result<Self> {
+        let ident = input.ident;
+        let generics = input.generics;
+
+        let Data::Struct(DataStruct {
+            fields: Fields::Named(fields),
+            ..
+        }) = input.data
+        else {
+            return Err(Error::new(
+                ident.span(),
+                "`QueryVariables` can only be derived for structs with named fields",
+            ));
+        };
+
+        let fields = fields
+            .named
+            .into_iter()
+            .map(|field| {
+                let span = field.span();
+                let ident = field
+                    .ident
+                    .ok_or_else(|| Error::new(span, "expected a named field"))?;
+                Ok((ident, field.ty))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            ident,
+            generics,
+            fields,
+        })
+    }
+
+    fn expand(self) -> Result<TokenStream2> {
+        let ident = self.ident;
+        let mut generics = self.generics;
+        let fields = self.fields;
+
+        for (_, field_ty) in &fields {
+            generics
+                .make_where_clause()
+                .predicates
+                .push(syn::parse_quote!(#field_ty: Into<::vitrail_pg::QueryVariableValue>));
+        }
+
+        let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+        let named_values = fields.iter().map(|(field, _)| {
+            let name = field.to_string();
+            quote! { (#name, self.#field.into()) }
+        });
+
+        Ok(quote! {
+            impl #impl_generics ::vitrail_pg::QueryVariableSet for #ident #ty_generics
+            #where_clause
+            {
+                fn into_query_variables(self) -> ::vitrail_pg::QueryVariables {
+                    ::vitrail_pg::QueryVariables::from_values(vec![#(#named_values),*])
+                }
+            }
+        })
+    }
 }
 
 fn option_inner_type(ty: &Type) -> Option<Type> {

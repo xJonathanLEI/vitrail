@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use heck::ToUpperCamelCase;
 use serde_json::Value as JsonValue;
-use sqlx::postgres::{PgPool, PgRow};
-use sqlx::{Row as _, ValueRef as _};
+use sqlx::postgres::{PgArguments, PgPool, PgRow};
+use sqlx::{Postgres, Row as _, ValueRef as _};
 
 pub use futures_util::future::BoxFuture;
 
@@ -41,17 +42,195 @@ pub trait SchemaAccess: Send + Sync + 'static {
     fn schema() -> &'static Schema;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct QuerySelection {
     pub model: &'static str,
     pub scalar_fields: Vec<&'static str>,
     pub relations: Vec<QueryRelationSelection>,
+    pub filter: Option<QueryFilter>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct QueryRelationSelection {
     pub field: &'static str,
     pub selection: QuerySelection,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QueryVariables {
+    values: Vec<QueryVariableValue>,
+    value_indices: HashMap<String, usize>,
+}
+
+impl QueryVariables {
+    pub fn new() -> Self {
+        Self {
+            values: Vec::new(),
+            value_indices: HashMap::new(),
+        }
+    }
+
+    pub fn from_values(values: Vec<(impl Into<String>, QueryVariableValue)>) -> Self {
+        let mut query_variables = Self::new();
+
+        for (name, value) in values {
+            query_variables
+                .push(name, value)
+                .expect("query variable names must be unique");
+        }
+
+        query_variables
+    }
+
+    pub fn push(
+        &mut self,
+        name: impl Into<String>,
+        value: QueryVariableValue,
+    ) -> Result<usize, sqlx::Error> {
+        let name = name.into();
+
+        if self.value_indices.contains_key(&name) {
+            return Err(schema_error(format!("duplicate query variable `{name}`")));
+        }
+
+        let index = self.values.len();
+        self.values.push(value);
+        self.value_indices.insert(name, index);
+        Ok(index)
+    }
+
+    pub fn get(&self, name: &str) -> Option<&QueryVariableValue> {
+        self.value_indices
+            .get(name)
+            .and_then(|index| self.values.get(*index))
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
+pub trait QueryVariableSet: Send + 'static {
+    fn into_query_variables(self) -> QueryVariables;
+}
+
+impl QueryVariableSet for QueryVariables {
+    fn into_query_variables(self) -> QueryVariables {
+        self
+    }
+}
+
+impl QueryVariableSet for () {
+    fn into_query_variables(self) -> QueryVariables {
+        QueryVariables::new()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum QueryVariableValue {
+    Null,
+    Int(i64),
+    String(String),
+    Bool(bool),
+    Float(f64),
+    DateTime(chrono::DateTime<chrono::Utc>),
+}
+
+impl From<i64> for QueryVariableValue {
+    fn from(value: i64) -> Self {
+        Self::Int(value)
+    }
+}
+
+impl From<String> for QueryVariableValue {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for QueryVariableValue {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_owned())
+    }
+}
+
+impl From<bool> for QueryVariableValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<f64> for QueryVariableValue {
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
+
+impl From<chrono::DateTime<chrono::Utc>> for QueryVariableValue {
+    fn from(value: chrono::DateTime<chrono::Utc>) -> Self {
+        Self::DateTime(value)
+    }
+}
+
+impl<T> From<Option<T>> for QueryVariableValue
+where
+    T: Into<QueryVariableValue>,
+{
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(value) => value.into(),
+            None => Self::Null,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum QueryFilterValue {
+    Variable(String),
+    Value(QueryVariableValue),
+}
+
+impl QueryFilterValue {
+    pub fn variable(name: impl Into<String>) -> Self {
+        Self::Variable(name.into())
+    }
+
+    pub fn value(value: impl Into<QueryVariableValue>) -> Self {
+        Self::Value(value.into())
+    }
+}
+
+impl<T> From<T> for QueryFilterValue
+where
+    T: Into<QueryVariableValue>,
+{
+    fn from(value: T) -> Self {
+        Self::Value(value.into())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum QueryFilter {
+    And(Vec<QueryFilter>),
+    Or(Vec<QueryFilter>),
+    Not(Box<QueryFilter>),
+    Eq {
+        field: &'static str,
+        value: QueryFilterValue,
+    },
+}
+
+impl QueryFilter {
+    pub fn eq(field: &'static str, value: impl Into<QueryFilterValue>) -> Self {
+        Self::Eq {
+            field,
+            value: value.into(),
+        }
+    }
 }
 
 pub trait QueryValue: Sized + Send + 'static {
@@ -60,42 +239,111 @@ pub trait QueryValue: Sized + Send + 'static {
 
 pub trait QueryModel: Sized + Send + 'static {
     type Schema: SchemaAccess;
+    type Variables: QueryVariableSet;
 
     fn model_name() -> &'static str;
 
     fn selection() -> QuerySelection;
 
+    fn selection_with_variables(_variables: &QueryVariables) -> QuerySelection {
+        Self::selection()
+    }
+
     fn from_row(row: &PgRow, prefix: &str) -> Result<Self, sqlx::Error>;
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Query<S, T> {
-    _marker: PhantomData<(S, T)>,
+#[derive(Clone, Debug)]
+pub struct Query<S, T, V = ()> {
+    selection: Option<QuerySelection>,
+    variables: QueryVariables,
+    _marker: PhantomData<(S, T, V)>,
 }
 
-impl<S, T> Query<S, T> {
+impl<S, T> Query<S, T, ()>
+where
+    T: QueryModel<Variables = ()>,
+{
     pub fn new() -> Self {
         Self {
+            selection: None,
+            variables: QueryVariables::new(),
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn with_selection(selection: QuerySelection) -> Self {
+        Self {
+            selection: Some(selection),
+            variables: QueryVariables::new(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<S, T> Query<S, T>
+impl<S, T> Default for Query<S, T, ()>
 where
-    S: SchemaAccess,
-    T: QueryModel<Schema = S>,
+    T: QueryModel<Variables = ()>,
 {
-    pub fn to_sql(&self) -> Result<String, sqlx::Error> {
-        let selection = T::selection();
-        build_query_sql(S::schema(), &selection)
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl<S, T> QuerySpec for Query<S, T>
+impl<S, T> Query<S, T, ()>
+where
+    T: QueryModel,
+{
+    pub fn new_with_variables(variables: T::Variables) -> Query<S, T, T::Variables> {
+        Query {
+            selection: None,
+            variables: variables.into_query_variables(),
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn with_selection_and_variables(
+        selection: QuerySelection,
+        variables: T::Variables,
+    ) -> Query<S, T, T::Variables> {
+        Query {
+            selection: Some(selection),
+            ..Self::new_with_variables(variables)
+        }
+    }
+
+    pub fn with_variables(self, variables: T::Variables) -> Query<S, T, T::Variables> {
+        Query {
+            selection: self.selection,
+            variables: variables.into_query_variables(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<S, T, V> Query<S, T, V>
 where
     S: SchemaAccess,
-    T: QueryModel<Schema = S> + Sync,
+    T: QueryModel<Schema = S, Variables = V>,
+    V: QueryVariableSet,
+{
+    fn selection(&self) -> QuerySelection {
+        self.selection
+            .clone()
+            .unwrap_or_else(|| T::selection_with_variables(&self.variables))
+    }
+
+    pub fn to_sql(&self) -> Result<String, sqlx::Error> {
+        let selection = self.selection();
+        let (sql, _) = build_query_sql(S::schema(), &selection, &self.variables)?;
+        Ok(sql)
+    }
+}
+
+impl<S, T, V> QuerySpec for Query<S, T, V>
+where
+    S: SchemaAccess,
+    T: QueryModel<Schema = S, Variables = V> + Sync,
+    V: QueryVariableSet + Sync,
 {
     type Output = T;
 
@@ -104,9 +352,11 @@ where
         pool: &'a PgPool,
     ) -> BoxFuture<'a, Result<Vec<Self::Output>, sqlx::Error>> {
         Box::pin(async move {
-            let selection = T::selection();
-            let sql = self.to_sql()?;
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let selection = self.selection();
+            let (sql, bindings) = build_query_sql(S::schema(), &selection, &self.variables)?;
+            let rows = bind_query(sqlx::query(&sql), &bindings)
+                .fetch_all(pool)
+                .await?;
             let mut values = Vec::with_capacity(rows.len());
             let root_prefix = selection.model;
 
@@ -123,9 +373,12 @@ where
         pool: &'a PgPool,
     ) -> BoxFuture<'a, Result<Option<Self::Output>, sqlx::Error>> {
         Box::pin(async move {
-            let selection = T::selection();
-            let sql = format!("{} LIMIT 1", self.to_sql()?);
-            let row = sqlx::query(&sql).fetch_optional(pool).await?;
+            let selection = self.selection();
+            let (sql, bindings) = build_query_sql(S::schema(), &selection, &self.variables)?;
+            let sql = format!("{sql} LIMIT 1");
+            let row = bind_query(sqlx::query(&sql), &bindings)
+                .fetch_optional(pool)
+                .await?;
             let root_prefix = selection.model;
 
             row.map(|row| T::from_row(&row, root_prefix)).transpose()
@@ -230,20 +483,31 @@ pub fn row_as_datetime_utc(
     Ok(value.and_utc())
 }
 
-fn build_query_sql(schema: &Schema, selection: &QuerySelection) -> Result<String, sqlx::Error> {
+fn build_query_sql(
+    schema: &Schema,
+    selection: &QuerySelection,
+    variables: &QueryVariables,
+) -> Result<(String, Vec<QueryVariableValue>), sqlx::Error> {
     let root_model = schema_model(schema, selection.model)
         .ok_or_else(|| schema_error(format!("unknown model `{}`", selection.model)))?;
 
     let mut builder = SqlBuilder {
         schema,
+        variables,
+        bindings: Vec::new(),
         joins: Vec::new(),
         next_alias: 1,
     };
 
     let selects = builder.root_selects(root_model, selection, selection.model, "t0")?;
+    let where_clause = selection
+        .filter
+        .as_ref()
+        .map(|filter| builder.filter_sql(root_model, filter, "t0"))
+        .transpose()?;
 
-    Ok(format!(
-        "SELECT {} FROM {} AS \"t0\"{}",
+    let sql = format!(
+        "SELECT {} FROM {} AS \"t0\"{}{}",
         selects.join(", "),
         quoted_ident(root_model.name()),
         if builder.joins.is_empty() {
@@ -251,7 +515,12 @@ fn build_query_sql(schema: &Schema, selection: &QuerySelection) -> Result<String
         } else {
             format!(" {}", builder.joins.join(" "))
         },
-    ))
+        where_clause
+            .map(|where_clause| format!(" WHERE {where_clause}"))
+            .unwrap_or_default(),
+    );
+
+    Ok((sql, builder.bindings))
 }
 
 fn schema_model<'a>(schema: &'a Schema, requested: &str) -> Option<&'a Model> {
@@ -304,6 +573,8 @@ fn infer_relation_fields<'a>(
 
 struct SqlBuilder<'a> {
     schema: &'a Schema,
+    variables: &'a QueryVariables,
+    bindings: Vec<QueryVariableValue>,
     joins: Vec<String>,
     next_alias: usize,
 }
@@ -430,13 +701,13 @@ impl<'a> SqlBuilder<'a> {
     }
 
     fn relation_subquery_sql(&mut self, relation: RelationSql<'a>) -> Result<String, sqlx::Error> {
-        let where_clause = format!(
+        let mut where_clauses = vec![format!(
             "\"{}\".{} = \"{}\".{}",
             relation.nested_alias,
             quoted_ident(&relation.nested_field),
             relation.parent_table_alias,
             quoted_ident(&relation.parent_field),
-        );
+        )];
         let mut joins = Vec::new();
         let row_expr = self.json_row_expr(
             relation.target_model,
@@ -449,6 +720,16 @@ impl<'a> SqlBuilder<'a> {
         } else {
             format!(" {}", joins.join(" "))
         };
+
+        if let Some(filter) = relation.selection.filter.as_ref() {
+            where_clauses.push(self.filter_sql(
+                relation.target_model,
+                filter,
+                &relation.nested_alias,
+            )?);
+        }
+
+        let where_clause = where_clauses.join(" AND ");
 
         if relation.many {
             Ok(format!(
@@ -466,6 +747,92 @@ impl<'a> SqlBuilder<'a> {
                 joins_sql,
             ))
         }
+    }
+
+    fn filter_sql(
+        &mut self,
+        model: &'a Model,
+        filter: &QueryFilter,
+        table_alias: &str,
+    ) -> Result<String, sqlx::Error> {
+        match filter {
+            QueryFilter::And(filters) => {
+                let parts = filters
+                    .iter()
+                    .map(|filter| self.filter_sql(model, filter, table_alias))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(format!("({})", parts.join(" AND ")))
+            }
+            QueryFilter::Or(filters) => {
+                let parts = filters
+                    .iter()
+                    .map(|filter| self.filter_sql(model, filter, table_alias))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(format!("({})", parts.join(" OR ")))
+            }
+            QueryFilter::Not(filter) => Ok(format!(
+                "NOT ({})",
+                self.filter_sql(model, filter, table_alias)?
+            )),
+            QueryFilter::Eq { field, value } => {
+                let field = model.field_named(field).ok_or_else(|| {
+                    schema_error(format!(
+                        "unknown field `{}.{}` in query filter",
+                        model.name(),
+                        field
+                    ))
+                })?;
+
+                let scalar = match field.ty() {
+                    FieldType::Scalar(scalar) => scalar.scalar(),
+                    FieldType::Relation { .. } => {
+                        return Err(schema_error(format!(
+                            "field `{}.{}` is not scalar and cannot appear in `where`",
+                            model.name(),
+                            field.name()
+                        )));
+                    }
+                };
+
+                let binding = self.resolve_filter_value(value)?;
+                if matches!(binding, QueryVariableValue::Null) {
+                    Ok(format!(
+                        "\"{table_alias}\".{} IS NULL",
+                        quoted_ident(field.name())
+                    ))
+                } else {
+                    let placeholder = self.push_binding(binding, scalar)?;
+                    Ok(format!(
+                        "{} = {}",
+                        column_expr(table_alias, field.name(), scalar),
+                        placeholder
+                    ))
+                }
+            }
+        }
+    }
+
+    fn resolve_filter_value(
+        &self,
+        value: &QueryFilterValue,
+    ) -> Result<QueryVariableValue, sqlx::Error> {
+        match value {
+            QueryFilterValue::Value(value) => Ok(value.clone()),
+            QueryFilterValue::Variable(name) => self
+                .variables
+                .get(name)
+                .cloned()
+                .ok_or_else(|| schema_error(format!("missing query variable `{name}`"))),
+        }
+    }
+
+    fn push_binding(
+        &mut self,
+        value: QueryVariableValue,
+        _scalar: ScalarType,
+    ) -> Result<String, sqlx::Error> {
+        self.bindings.push(value);
+        Ok(format!("${}", self.bindings.len()))
     }
 
     fn json_row_expr(
@@ -628,6 +995,24 @@ fn column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> Strin
 fn select_expr(table_alias: &str, field_name: &str, scalar: ScalarType, alias: &str) -> String {
     let expr = column_expr(table_alias, field_name, scalar);
     format!("{expr} AS \"{alias}\"")
+}
+
+fn bind_query<'q>(
+    mut query: sqlx::query::Query<'q, Postgres, PgArguments>,
+    bindings: &'q [QueryVariableValue],
+) -> sqlx::query::Query<'q, Postgres, PgArguments> {
+    for binding in bindings {
+        query = match binding {
+            QueryVariableValue::Null => query.bind(Option::<i64>::None),
+            QueryVariableValue::Int(value) => query.bind(*value),
+            QueryVariableValue::String(value) => query.bind(value),
+            QueryVariableValue::Bool(value) => query.bind(*value),
+            QueryVariableValue::Float(value) => query.bind(*value),
+            QueryVariableValue::DateTime(value) => query.bind(*value),
+        };
+    }
+
+    query
 }
 
 pub fn schema_error(message: String) -> sqlx::Error {

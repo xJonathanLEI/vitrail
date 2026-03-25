@@ -10,7 +10,8 @@ pub use migration::{
     PostgresMigration, PostgresPrimaryKey, PostgresSchema, PostgresTable,
 };
 pub use query::{
-    BoxFuture, Query, QueryModel, QueryRelationSelection, QuerySelection, QuerySpec, QueryValue,
+    BoxFuture, Query, QueryFilter, QueryFilterValue, QueryModel, QueryRelationSelection,
+    QuerySelection, QuerySpec, QueryValue, QueryVariableSet, QueryVariableValue, QueryVariables,
     SchemaAccess, alias_name, json_array_field, json_as_bool, json_as_datetime_utc, json_as_f64,
     json_as_i64, json_as_string, query_model_is_null, row_as_datetime_utc, schema_error,
 };

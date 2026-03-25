@@ -1,4 +1,4 @@
-use vitrail_pg::{QueryResult, VitrailClient, schema};
+use vitrail_pg::{QueryResult, QueryVariables, VitrailClient, schema};
 
 schema! {
     name my_schema
@@ -30,9 +30,19 @@ struct PostSummary {
     title: String,
 }
 
+#[derive(QueryVariables)]
+struct UserByIdVariables {
+    user_id: i64,
+}
+
 #[allow(dead_code)]
 #[derive(QueryResult)]
-#[vitrail(schema = crate::my_schema::Schema, model = user)]
+#[vitrail(
+    schema = crate::my_schema::Schema,
+    model = user,
+    variables = UserByIdVariables,
+    where(id = eq(user_id))
+)]
 struct UserWithPosts {
     id: i64,
     email: String,
@@ -47,8 +57,12 @@ async fn main() {
         .await
         .unwrap();
 
+    let user_id = 1_i64;
+
     let users = client
-        .find_many(my_schema::query::<UserWithPosts>())
+        .find_many(my_schema::query_with_variables::<UserWithPosts>(
+            UserByIdVariables { user_id },
+        ))
         .await
         .unwrap();
 

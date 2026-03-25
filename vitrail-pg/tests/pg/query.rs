@@ -1,6 +1,6 @@
 use crate::support::{TestDatabase, apply_schema};
 use sqlx::postgres::PgPoolOptions;
-use vitrail_pg::{PostgresSchema, QueryResult, VitrailClient, query, schema};
+use vitrail_pg::{PostgresSchema, QueryResult, QueryVariables, VitrailClient, query, schema};
 
 schema! {
     name query_schema
@@ -93,6 +93,56 @@ struct UserWithPostsAndComments {
     email: String,
     #[vitrail(include)]
     posts: Vec<PostWithComments>,
+}
+
+#[derive(QueryVariables)]
+struct UserByIdVariables {
+    user_id: i64,
+}
+
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = user,
+    variables = UserByIdVariables,
+    where(id = eq(user_id))
+)]
+struct UserById {
+    id: i64,
+    email: String,
+    name: String,
+}
+
+#[derive(QueryVariables)]
+struct UserWithFilteredPostsVariables {
+    user_id: i64,
+    post_id: i64,
+}
+
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = post,
+    variables = UserWithFilteredPostsVariables,
+    where(id = eq(post_id))
+)]
+struct FilteredPostSummary {
+    id: i64,
+    title: String,
+}
+
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = user,
+    variables = UserWithFilteredPostsVariables,
+    where(id = eq(user_id))
+)]
+struct UserWithFilteredPosts {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<FilteredPostSummary>,
 }
 
 async fn setup_database(database_url: &str) -> i64 {
@@ -213,6 +263,43 @@ async fn simple_query_on_postgres() {
 }
 
 #[tokio::test]
+async fn ad_hoc_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(query! {
+            crate::query_schema,
+            user {
+                select: {
+                    id: true,
+                    email: true,
+                    name: true,
+                },
+                where: {
+                    id: {
+                        eq: author_id
+                    }
+                },
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].id, author_id);
+    assert_eq!(users[0].email, "alice@example.com");
+    assert_eq!(users[0].name, "Alice");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn model_first_named_query_on_postgres() {
     let database = TestDatabase::new().await;
     let database_url = database.url().to_owned();
@@ -239,6 +326,59 @@ async fn model_first_named_query_on_postgres() {
     assert_eq!(user.posts[0].title, "Hello from Vitrail");
     assert_eq!(user.posts[1].id, 2);
     assert_eq!(user.posts[1].title, "Second post");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let user = client
+        .find_first(crate::query_schema::query_with_variables::<UserById>(
+            UserByIdVariables { user_id: author_id },
+        ))
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.email, "alice@example.com");
+    assert_eq!(user.name, "Alice");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn nested_model_first_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let user = client
+        .find_first(crate::query_schema::query_with_variables::<
+            UserWithFilteredPosts,
+        >(UserWithFilteredPostsVariables {
+            user_id: author_id,
+            post_id: 2,
+        }))
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.email, "alice@example.com");
+    assert_eq!(user.posts.len(), 1);
+    assert_eq!(user.posts[0].id, 2);
+    assert_eq!(user.posts[0].title, "Second post");
 
     database.cleanup().await;
 }
