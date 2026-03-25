@@ -2,13 +2,13 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::QuerySpec;
 
-/// SQLx-backed client entry point for generated schema modules.
+/// Postgres client entry point.
 #[derive(Clone, Debug)]
-pub struct SqlxVitrailClient {
+pub struct VitrailClient {
     pool: PgPool,
 }
 
-impl SqlxVitrailClient {
+impl VitrailClient {
     pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
         Self::with_options(PgPoolOptions::new(), database_url).await
     }

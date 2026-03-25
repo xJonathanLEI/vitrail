@@ -4,7 +4,7 @@ mod query;
 mod schema;
 mod validation;
 
-pub use client::SqlxVitrailClient;
+pub use client::VitrailClient;
 pub use migration::{
     ColumnDefault, ColumnType, ForeignKeyAction, PostgresColumn, PostgresForeignKey, PostgresIndex,
     PostgresMigration, PostgresPrimaryKey, PostgresSchema, PostgresTable,

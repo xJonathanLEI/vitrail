@@ -1,6 +1,6 @@
 use crate::support::{TestDatabase, apply_schema};
 use sqlx::postgres::PgPoolOptions;
-use vitrail_pg::{PostgresSchema, QueryResult, query, schema};
+use vitrail_pg::{PostgresSchema, QueryResult, VitrailClient, query, schema};
 
 schema! {
     name query_schema
@@ -171,7 +171,7 @@ async fn simple_query_on_postgres() {
     let database_url = database.url().to_owned();
     let author_id = setup_database(&database_url).await;
 
-    let client = crate::query_schema::VitrailClient::new(&database_url)
+    let client = VitrailClient::new(&database_url)
         .await
         .expect("should create vitrail client");
 
@@ -218,7 +218,7 @@ async fn model_first_named_query_on_postgres() {
     let database_url = database.url().to_owned();
     let author_id = setup_database(&database_url).await;
 
-    let client = crate::query_schema::VitrailClient::new(&database_url)
+    let client = VitrailClient::new(&database_url)
         .await
         .expect("should create vitrail client");
 
@@ -249,7 +249,7 @@ async fn model_first_to_one_include_query_on_postgres() {
     let database_url = database.url().to_owned();
     let author_id = setup_database(&database_url).await;
 
-    let client = crate::query_schema::VitrailClient::new(&database_url)
+    let client = VitrailClient::new(&database_url)
         .await
         .expect("should create vitrail client");
 
@@ -277,7 +277,7 @@ async fn model_first_recursive_nested_include_query_on_postgres() {
     let database_url = database.url().to_owned();
     let author_id = setup_database(&database_url).await;
 
-    let client = crate::query_schema::VitrailClient::new(&database_url)
+    let client = VitrailClient::new(&database_url)
         .await
         .expect("should create vitrail client");
 

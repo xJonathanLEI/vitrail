@@ -228,53 +228,6 @@ impl ParsedSchema {
                     }
                 }
 
-                #[derive(Clone, Debug)]
-                pub struct VitrailClient(::vitrail_pg::SqlxVitrailClient);
-
-                impl VitrailClient {
-                    pub async fn new(database_url: &str) -> Result<Self, ::sqlx::Error> {
-                        Ok(Self(::vitrail_pg::SqlxVitrailClient::new(database_url).await?))
-                    }
-
-                    pub fn from_inner(inner: ::vitrail_pg::SqlxVitrailClient) -> Self {
-                        Self(inner)
-                    }
-
-                    pub fn inner(&self) -> &::vitrail_pg::SqlxVitrailClient {
-                        &self.0
-                    }
-
-                    pub async fn find_many<Q>(
-                        &self,
-                        query: Q,
-                    ) -> Result<Vec<Q::Output>, ::sqlx::Error>
-                    where
-                        Q: ::vitrail_pg::QuerySpec,
-                    {
-                        self.0.find_many(query).await
-                    }
-
-                    pub async fn find_optional<Q>(
-                        &self,
-                        query: Q,
-                    ) -> Result<Option<Q::Output>, ::sqlx::Error>
-                    where
-                        Q: ::vitrail_pg::QuerySpec,
-                    {
-                        self.0.find_optional(query).await
-                    }
-
-                    pub async fn find_unique<Q>(
-                        &self,
-                        query: Q,
-                    ) -> Result<Q::Output, ::sqlx::Error>
-                    where
-                        Q: ::vitrail_pg::QuerySpec,
-                    {
-                        self.0.find_unique(query).await
-                    }
-                }
-
                 pub fn query<T>() -> ::vitrail_pg::Query<Schema, T>
                 where
                     T: ::vitrail_pg::QueryModel<Schema = Schema> + Sync,

@@ -1,4 +1,4 @@
-use vitrail_pg::{QueryResult, schema};
+use vitrail_pg::{QueryResult, VitrailClient, schema};
 
 schema! {
     name my_schema
@@ -43,10 +43,9 @@ struct UserWithPosts {
 
 #[tokio::main]
 async fn main() {
-    let client =
-        my_schema::VitrailClient::new("postgres://postgres:postgres@127.0.0.1:5432/vitrail")
-            .await
-            .unwrap();
+    let client = VitrailClient::new("postgres://postgres:postgres@127.0.0.1:5432/vitrail")
+        .await
+        .unwrap();
 
     let users = client
         .find_many(my_schema::query::<UserWithPosts>())
