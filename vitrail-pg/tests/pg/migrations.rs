@@ -1,90 +1,9 @@
 use crate::support::{TestDatabase, apply_sql_script};
 use vitrail_pg::{PostgresSchema, schema};
 
-const EMPTY_TO_BASE_SQL: &str = r#"-- CreateTable
-CREATE TABLE "user" (
-    "id" SERIAL NOT NULL,
-    "email" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "user_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "post" (
-    "id" SERIAL NOT NULL,
-    "title" TEXT NOT NULL,
-    "body" TEXT,
-    "published" BOOLEAN NOT NULL,
-    "author_id" INTEGER NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "post_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "user_email_key" ON "user"("email");
-
--- AddForeignKey
-ALTER TABLE "post" ADD CONSTRAINT "post_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-"#;
-const BASE_TO_EXPANDED_SQL: &str = r#"-- AlterTable
-ALTER TABLE "post" ADD COLUMN     "updated_at" TIMESTAMP(3);
-
--- CreateTable
-CREATE TABLE "comment" (
-    "id" SERIAL NOT NULL,
-    "body" TEXT NOT NULL,
-    "post_id" INTEGER NOT NULL,
-
-    CONSTRAINT "comment_pkey" PRIMARY KEY ("id")
-);
-
--- AddForeignKey
-ALTER TABLE "comment" ADD CONSTRAINT "comment_post_id_fkey" FOREIGN KEY ("post_id") REFERENCES "post"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-"#;
-const EMPTY_TO_EXPANDED_SQL: &str = r#"-- CreateTable
-CREATE TABLE "user" (
-    "id" SERIAL NOT NULL,
-    "email" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "user_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "post" (
-    "id" SERIAL NOT NULL,
-    "title" TEXT NOT NULL,
-    "body" TEXT,
-    "published" BOOLEAN NOT NULL,
-    "author_id" INTEGER NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3),
-
-    CONSTRAINT "post_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "comment" (
-    "id" SERIAL NOT NULL,
-    "body" TEXT NOT NULL,
-    "post_id" INTEGER NOT NULL,
-
-    CONSTRAINT "comment_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "user_email_key" ON "user"("email");
-
--- AddForeignKey
-ALTER TABLE "post" ADD CONSTRAINT "post_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "comment" ADD CONSTRAINT "comment_post_id_fkey" FOREIGN KEY ("post_id") REFERENCES "post"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-"#;
+const EMPTY_TO_BASE_SQL: &str = include_str!("../fixtures/pg_migrations/empty_to_base.sql");
+const BASE_TO_EXPANDED_SQL: &str = include_str!("../fixtures/pg_migrations/base_to_expanded.sql");
+const EMPTY_TO_EXPANDED_SQL: &str = include_str!("../fixtures/pg_migrations/empty_to_expanded.sql");
 
 schema! {
     name base_schema

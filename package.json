@@ -1,0 +1,14 @@
+{
+  "name": "vitrail",
+  "private": true,
+  "scripts": {
+    "prisma": "prisma",
+    "format": "biome format --write .",
+    "format:check": "biome check --formatter-enabled=true .",
+    "generate:prisma-fixtures": "node scripts/prisma-fixtures.mjs generate"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.8",
+    "prisma": "7.5.0"
+  }
+}
