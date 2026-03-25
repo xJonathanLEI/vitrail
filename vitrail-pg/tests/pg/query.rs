@@ -318,3 +318,99 @@ async fn model_first_recursive_nested_include_query_on_postgres() {
 
     database.cleanup().await;
 }
+
+#[tokio::test]
+async fn find_optional_returns_some_when_a_row_exists() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let user = client
+        .find_optional(crate::query_schema::query::<UserSummary>())
+        .await
+        .expect("query should succeed")
+        .expect("query should return a row");
+
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.email, "alice@example.com");
+    assert_eq!(user.name, "Alice");
+    assert!(user.created_at <= chrono::Utc::now());
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn find_optional_returns_none_when_no_rows_exist() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    apply_schema(
+        &database_url,
+        &PostgresSchema::from_schema_access::<crate::query_schema::Schema>(),
+    )
+    .await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let user = client
+        .find_optional(crate::query_schema::query::<UserSummary>())
+        .await
+        .expect("query should succeed");
+
+    assert!(user.is_none());
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn find_first_returns_the_first_row_when_one_exists() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let user = client
+        .find_first(crate::query_schema::query::<UserSummary>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.email, "alice@example.com");
+    assert_eq!(user.name, "Alice");
+    assert!(user.created_at <= chrono::Utc::now());
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn find_first_returns_row_not_found_when_no_rows_exist() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    apply_schema(
+        &database_url,
+        &PostgresSchema::from_schema_access::<crate::query_schema::Schema>(),
+    )
+    .await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let result = client
+        .find_first(crate::query_schema::query::<UserSummary>())
+        .await;
+
+    assert!(matches!(result, Err(sqlx::Error::RowNotFound)));
+
+    database.cleanup().await;
+}

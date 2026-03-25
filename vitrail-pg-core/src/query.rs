@@ -17,6 +17,24 @@ pub trait QuerySpec: Send + Sync {
         &'a self,
         pool: &'a PgPool,
     ) -> BoxFuture<'a, Result<Vec<Self::Output>, sqlx::Error>>;
+
+    fn fetch_optional<'a>(
+        &'a self,
+        pool: &'a PgPool,
+    ) -> BoxFuture<'a, Result<Option<Self::Output>, sqlx::Error>> {
+        Box::pin(async move { Ok(self.fetch_many(pool).await?.into_iter().next()) })
+    }
+
+    fn fetch_first<'a>(
+        &'a self,
+        pool: &'a PgPool,
+    ) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>> {
+        Box::pin(async move {
+            self.fetch_optional(pool)
+                .await?
+                .ok_or(sqlx::Error::RowNotFound)
+        })
+    }
 }
 
 pub trait SchemaAccess: Send + Sync + 'static {
@@ -97,6 +115,20 @@ where
             }
 
             Ok(values)
+        })
+    }
+
+    fn fetch_optional<'a>(
+        &'a self,
+        pool: &'a PgPool,
+    ) -> BoxFuture<'a, Result<Option<Self::Output>, sqlx::Error>> {
+        Box::pin(async move {
+            let selection = T::selection();
+            let sql = format!("{} LIMIT 1", self.to_sql()?);
+            let row = sqlx::query(&sql).fetch_optional(pool).await?;
+            let root_prefix = selection.model;
+
+            row.map(|row| T::from_row(&row, root_prefix)).transpose()
         })
     }
 }
