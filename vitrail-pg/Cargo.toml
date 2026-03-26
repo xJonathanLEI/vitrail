@@ -8,8 +8,10 @@ description = "PostgreSQL support for vitrail"
 
 [dependencies]
 chrono.workspace = true
+clap.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+url.workspace = true
 vitrail-pg-core.workspace = true
 vitrail-pg-macros.workspace = true
 

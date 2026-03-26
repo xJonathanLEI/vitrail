@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlx::Connection as _;
 use sqlx::postgres::{PgConnection, PgPoolOptions};
+use url::Url;
 use vitrail_pg::PostgresSchema;
 
 const DEFAULT_POSTGRES_URL: &str = "postgres://postgres:postgres@127.0.0.1:5432/vitrail";
@@ -93,23 +94,26 @@ WHERE datname = '{database_name}'
 }
 
 fn replace_database_name(database_url: &str, database_name: &str) -> String {
-    let (base, query) = match database_url.split_once('?') {
-        Some((base, query)) => (base, Some(query)),
-        None => (database_url, None),
-    };
+    let mut url = Url::parse(database_url).expect("postgres url should be valid");
+    let has_database_name = url
+        .path_segments()
+        .expect("postgres url should support path segments")
+        .any(|segment| !segment.is_empty());
 
-    let slash_index = base
-        .rfind('/')
-        .expect("postgres url should include a database name");
+    assert!(
+        has_database_name,
+        "postgres url should include a database name"
+    );
 
-    let mut updated = format!("{}/{}", &base[..slash_index], database_name);
+    let mut segments = url
+        .path_segments_mut()
+        .expect("postgres url should support path segments");
 
-    if let Some(query) = query {
-        updated.push('?');
-        updated.push_str(query);
-    }
+    segments.pop_if_empty();
+    segments.pop().push(database_name);
+    drop(segments);
 
-    updated
+    url.into()
 }
 
 fn unique_suffix() -> String {

@@ -1,5 +1,6 @@
 mod client;
 mod migration;
+mod migrator;
 mod query;
 mod schema;
 mod validation;
@@ -8,6 +9,10 @@ pub use client::VitrailClient;
 pub use migration::{
     ColumnDefault, ColumnType, ForeignKeyAction, PostgresColumn, PostgresForeignKey, PostgresIndex,
     PostgresMigration, PostgresPrimaryKey, PostgresSchema, PostgresTable,
+};
+pub use migrator::{
+    AppliedMigration, ApplyMigrationsReport, DiskMigration, GeneratedMigration, MigrationDirectory,
+    MigratorError, PostgresMigrator,
 };
 pub use query::{
     BoxFuture, Query, QueryFilter, QueryFilterValue, QueryModel, QueryRelationSelection,

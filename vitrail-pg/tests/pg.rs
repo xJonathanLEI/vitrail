@@ -4,6 +4,9 @@ mod support;
 #[path = "pg/migrations.rs"]
 mod migrations;
 
+#[path = "pg/migrator.rs"]
+mod migrator;
+
 #[path = "pg/query.rs"]
 mod query;
 pub(crate) use query::pg_query_schema as query_schema;

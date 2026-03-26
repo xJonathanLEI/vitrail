@@ -102,7 +102,9 @@ impl PostgresSchema {
             r#"
             SELECT table_name
             FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            WHERE table_schema = 'public'
+              AND table_type = 'BASE TABLE'
+              AND table_name <> '_vitrail_migrations'
             ORDER BY table_name
             "#,
         )
@@ -139,6 +141,7 @@ impl PostgresSchema {
                 ordinal_position
             FROM information_schema.columns
             WHERE table_schema = 'public'
+              AND table_name <> '_vitrail_migrations'
             ORDER BY table_name, ordinal_position
             "#,
         )
@@ -174,6 +177,7 @@ impl PostgresSchema {
              AND tc.table_schema = kcu.table_schema
             WHERE tc.table_schema = 'public'
               AND tc.constraint_type = 'PRIMARY KEY'
+              AND tc.table_name <> '_vitrail_migrations'
             ORDER BY tc.table_name, kcu.ordinal_position
             "#,
         )
@@ -213,6 +217,7 @@ impl PostgresSchema {
              AND att.attnum = key.attnum
             WHERE ns.nspname = 'public'
               AND NOT ind.indisprimary
+              AND tbl.relname <> '_vitrail_migrations'
             GROUP BY tbl.relname, idx.relname, ind.indisunique
             ORDER BY tbl.relname, idx.relname
             "#,
@@ -257,6 +262,8 @@ impl PostgresSchema {
              AND dst_att.attnum = ord.dst_attnum
             WHERE src_ns.nspname = 'public'
               AND con.contype = 'f'
+              AND src.relname <> '_vitrail_migrations'
+              AND dst.relname <> '_vitrail_migrations'
             GROUP BY src.relname, con.conname, dst.relname, con.confdeltype, con.confupdtype
             ORDER BY src.relname, con.conname
             "#,

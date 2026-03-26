@@ -12,3 +12,4 @@ futures-util.workspace = true
 heck.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+url.workspace = true
