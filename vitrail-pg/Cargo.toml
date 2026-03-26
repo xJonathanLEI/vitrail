@@ -22,3 +22,7 @@ path = "../examples/pg_query_ad_hoc.rs"
 [[example]]
 name = "pg_query_model_first"
 path = "../examples/pg_query_model_first.rs"
+
+[[example]]
+name = "pg_migration_cli"
+path = "../examples/pg_migration_cli.rs"
