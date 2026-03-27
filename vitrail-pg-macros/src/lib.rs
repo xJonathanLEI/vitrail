@@ -37,6 +37,12 @@ pub fn query(input: TokenStream) -> TokenStream {
     query.expand().into()
 }
 
+#[proc_macro]
+pub fn insert(input: TokenStream) -> TokenStream {
+    let insert = syn::parse_macro_input!(input as InsertMacroInput);
+    insert.expand().into()
+}
+
 #[proc_macro_derive(QueryResult, attributes(vitrail))]
 pub fn derive_query_result(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -52,6 +58,26 @@ pub fn derive_query_variables(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
     match QueryVariablesDerive::parse(input).and_then(|derive| derive.expand()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(InsertInput, attributes(vitrail))]
+pub fn derive_insert_input(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match InsertInputDerive::parse(input).and_then(|derive| derive.expand()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(InsertResult, attributes(vitrail))]
+pub fn derive_insert_result(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match InsertResultDerive::parse(input).and_then(|derive| derive.expand()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -219,11 +245,22 @@ impl ParsedSchema {
     fn generate_named_schema(&self) -> Result<TokenStream2> {
         let module_name = &self.module_name;
         let schema = self.generate_schema()?;
-        let helper_macros = self.generate_query_helper_macros(module_name)?;
+        let query_helper_macros = self.generate_query_helper_macros(module_name)?;
+        let insert_helper_items = self.generate_insert_helper_items(module_name)?;
         let local_query_macro_ident = format_ident!("__vitrail_query_local_{}", module_name);
+        let local_insert_macro_ident = format_ident!("__vitrail_insert_local_{}", module_name);
+        let insert_trait_reexports = self.models.iter().map(|model| {
+            let trait_module_ident =
+                format_ident!("__vitrail_insert_traits_{}_{}", module_name, model.name);
+            quote! {
+                #[doc(hidden)]
+                pub use super::#trait_module_ident;
+            }
+        });
 
         Ok(quote! {
-            #helper_macros
+            #query_helper_macros
+            #insert_helper_items
 
             pub mod #module_name {
                 static __SCHEMA: ::std::sync::OnceLock<::vitrail_pg::Schema> =
@@ -254,9 +291,565 @@ impl ParsedSchema {
                     ::vitrail_pg::Query::<Schema, T, ()>::new_with_variables(variables)
                 }
 
+                pub fn insert<T>(values: T::Values) -> ::vitrail_pg::Insert<Schema, T>
+                where
+                    T: ::vitrail_pg::InsertModel<Schema = Schema>,
+                {
+                    ::vitrail_pg::Insert::new(values)
+                }
+
+                #(#insert_trait_reexports)*
+
                 pub(crate) use #local_query_macro_ident as __query;
+                pub(crate) use #local_insert_macro_ident as __insert;
             }
         })
+    }
+
+    fn generate_insert_helper_items(&self, module_name: &Ident) -> Result<TokenStream2> {
+        let main_macro_ident = format_ident!("__vitrail_insert_{}", module_name);
+        let local_main_macro_ident = format_ident!("__vitrail_insert_local_{}", module_name);
+        let mut helpers = TokenStream2::new();
+        let mut main_arms = Vec::new();
+        let dollar_crate = dollar_crate();
+
+        for model in &self.models {
+            let model_name = LitStr::new(&model.name.to_string(), model.name.span());
+            let input_assert_ident = format_ident!(
+                "__vitrail_assert_insert_input_field_{}_{}",
+                module_name,
+                model.name
+            );
+            let input_type_assert_ident = format_ident!(
+                "__vitrail_assert_insert_input_type_{}_{}",
+                module_name,
+                model.name
+            );
+            let input_complete_assert_ident = format_ident!(
+                "__vitrail_assert_insert_input_complete_{}_{}",
+                module_name,
+                model.name
+            );
+            let result_assert_ident = format_ident!(
+                "__vitrail_assert_insert_result_field_{}_{}",
+                module_name,
+                model.name
+            );
+            let result_type_assert_ident = format_ident!(
+                "__vitrail_assert_insert_result_type_{}_{}",
+                module_name,
+                model.name
+            );
+            let trait_module_ident =
+                format_ident!("__vitrail_insert_traits_{}_{}", module_name, model.name);
+            let input_struct_macro_ident = format_ident!(
+                "__vitrail_insert_input_struct_{}_{}",
+                module_name,
+                model.name
+            );
+            let result_struct_macro_ident = format_ident!(
+                "__vitrail_insert_result_struct_{}_{}",
+                module_name,
+                model.name
+            );
+            let root_input_ident = format_ident!(
+                "__VitrailInsert{}Input",
+                to_pascal_case(&model.name.to_string())
+            );
+            let root_result_ident = format_ident!(
+                "__VitrailInsert{}Result",
+                to_pascal_case(&model.name.to_string())
+            );
+            let model_ident = &model.name;
+
+            let scalar_fields = model.scalar_fields();
+            let relation_fields = model.relation_fields();
+            let required_scalar_fields = scalar_fields
+                .iter()
+                .filter(|field| !field.can_be_omitted_in_insert())
+                .copied()
+                .collect::<Vec<_>>();
+            let all_scalar_field_idents = scalar_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! { #ident }
+            });
+
+            let input_assert_arms = scalar_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! { (#ident) => {}; }
+            });
+            let result_assert_arms = scalar_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! { (#ident) => {}; }
+            });
+            let relation_input_arms = relation_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! {
+                    (#ident) => {
+                        compile_error!(concat!(
+                            "relation field `",
+                            stringify!(#ident),
+                            "` cannot be used in insert input for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+            });
+            let relation_input_type_assert_arms = relation_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! {
+                    ($ty:ty, #ident) => {
+                        compile_error!(concat!(
+                            "relation field `",
+                            stringify!(#ident),
+                            "` cannot be used in insert input for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+            });
+            let relation_result_arms = relation_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! {
+                    (#ident) => {
+                        compile_error!(concat!(
+                            "relation field `",
+                            stringify!(#ident),
+                            "` cannot be returned from scalar insert for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+            });
+            let relation_result_type_assert_arms = relation_fields.iter().map(|field| {
+                let ident = &field.name;
+                quote! {
+                    ($ty:ty, #ident) => {
+                        compile_error!(concat!(
+                            "relation field `",
+                            stringify!(#ident),
+                            "` cannot be returned from scalar insert for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+            });
+
+            let input_traits = scalar_fields
+                .iter()
+                .map(|field| {
+                    let trait_ident = format_ident!(
+                        "__VitrailInsertInputType_{}_{}_{}",
+                        module_name,
+                        model.name,
+                        field.name
+                    );
+                    let rust_ty = rust_type_tokens(&field.ty)?;
+
+                    Ok(quote! {
+                        #[allow(non_camel_case_types)]
+                        #[doc(hidden)]
+                        pub trait #trait_ident {}
+
+                        impl #trait_ident for #rust_ty {}
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let result_traits = scalar_fields
+                .iter()
+                .map(|field| {
+                    let trait_ident = format_ident!(
+                        "__VitrailInsertResultType_{}_{}_{}",
+                        module_name,
+                        model.name,
+                        field.name
+                    );
+                    let rust_ty = rust_type_tokens(&field.ty)?;
+
+                    Ok(quote! {
+                        #[allow(non_camel_case_types)]
+                        #[doc(hidden)]
+                        pub trait #trait_ident {}
+
+                        impl #trait_ident for #rust_ty {}
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let required_input_scanner_idents = required_scalar_fields
+                .iter()
+                .map(|field| {
+                    format_ident!(
+                        "__vitrail_scan_insert_input_field_{}_{}_{}",
+                        module_name,
+                        model.name,
+                        field.name
+                    )
+                })
+                .collect::<Vec<_>>();
+            let required_input_scanner_defs = required_scalar_fields
+                .iter()
+                .zip(required_input_scanner_idents.iter())
+                .map(|(field, scanner_ident)| {
+                    let ident = &field.name;
+
+                    quote! {
+                        #[doc(hidden)]
+                        #[macro_export]
+                        macro_rules! #scanner_ident {
+                            (#ident $(, $rest:ident)*) => {};
+                            ($other:ident $(, $rest:ident)*) => {
+                                #scanner_ident!($($rest),*);
+                            };
+                            () => {
+                                compile_error!(concat!(
+                                    "missing required field `",
+                                    stringify!(#ident),
+                                    "` in insert input for model `",
+                                    #model_name,
+                                    "`"
+                                ));
+                            };
+                        }
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let input_type_assert_arms = scalar_fields
+                .iter()
+                .map(|field| {
+                    let ident = &field.name;
+                    let trait_ident = format_ident!(
+                        "__VitrailInsertInputType_{}_{}_{}",
+                        module_name,
+                        model.name,
+                        field.name
+                    );
+
+                    Ok(quote! {
+                        ($ty:ty, #ident) => {
+                            {
+                                fn __vitrail_assert_insert_input_field_type<
+                                    T: #dollar_crate::#module_name::#trait_module_ident::#trait_ident
+                                >() {}
+                                __vitrail_assert_insert_input_field_type::<$ty>();
+                            }
+                        };
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let result_type_assert_arms = scalar_fields
+                .iter()
+                .map(|field| {
+                    let ident = &field.name;
+                    let trait_ident = format_ident!(
+                        "__VitrailInsertResultType_{}_{}_{}",
+                        module_name,
+                        model.name,
+                        field.name
+                    );
+
+                    Ok(quote! {
+                        ($ty:ty, #ident) => {
+                            {
+                                fn __vitrail_assert_insert_result_field_type<
+                                    T: #dollar_crate::#module_name::#trait_module_ident::#trait_ident
+                                >() {}
+                                __vitrail_assert_insert_result_field_type::<$ty>();
+                            }
+                        };
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let input_struct_arms = scalar_fields
+                .iter()
+                .map(|field| {
+                    let ident = &field.name;
+                    let ty = rust_type_tokens(&field.ty)?;
+
+                    Ok(quote! {
+                        (
+                            @struct
+                            $input_ident:ident
+                            [ $($fields:tt)* ]
+                            [ #ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
+                        ) => {
+                            #input_struct_macro_ident! {
+                                @struct
+                                $input_ident
+                                [ $($fields)* pub #ident: #ty, ]
+                                [ $($rest_field : $rest_value,)* ]
+                            }
+                        };
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let result_struct_arms = scalar_fields
+                .iter()
+                .map(|field| {
+                    let ident = &field.name;
+                    let ty = rust_type_tokens(&field.ty)?;
+
+                    Ok(quote! {
+                        (
+                            @struct
+                            $result_ident:ident
+                            [ $($fields:tt)* ]
+                            [ #ident, $($rest_field:ident,)* ]
+                            [ $input_ident:ident ]
+                        ) => {
+                            #result_struct_macro_ident! {
+                                @struct
+                                $result_ident
+                                [ $($fields)* pub #ident: #ty, ]
+                                [ $($rest_field,)* ]
+                                [ $input_ident ]
+                            }
+                        };
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            helpers.extend(quote! {
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #input_assert_ident {
+                    #(#input_assert_arms)*
+                    #(#relation_input_arms)*
+                    ($other:ident) => {
+                        compile_error!(concat!(
+                            "unknown field `",
+                            stringify!($other),
+                            "` in insert input for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #result_assert_ident {
+                    #(#result_assert_arms)*
+                    #(#relation_result_arms)*
+                    ($other:ident) => {
+                        compile_error!(concat!(
+                            "unknown field `",
+                            stringify!($other),
+                            "` in insert result for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #input_type_assert_ident {
+                    #(#input_type_assert_arms)*
+                    #(#relation_input_type_assert_arms)*
+                    ($ty:ty, $other:ident) => {
+                        compile_error!(concat!(
+                            "unknown field `",
+                            stringify!($other),
+                            "` in insert input for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #result_type_assert_ident {
+                    #(#result_type_assert_arms)*
+                    #(#relation_result_type_assert_arms)*
+                    ($ty:ty, $other:ident) => {
+                        compile_error!(concat!(
+                            "unknown field `",
+                            stringify!($other),
+                            "` in insert result for model `",
+                            #model_name,
+                            "`"
+                        ));
+                    };
+                }
+
+                #(#required_input_scanner_defs)*
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #input_complete_assert_ident {
+                    ( $($provided:ident),* $(,)? ) => {
+                        #( #required_input_scanner_idents!($($provided),*); )*
+                    };
+                }
+
+                #[doc(hidden)]
+                pub mod #trait_module_ident {
+                    #[allow(non_camel_case_types)]
+                    #[doc(hidden)]
+                    pub trait __VitrailInsertInputModel {}
+
+                    #(#input_traits)*
+                    #(#result_traits)*
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #input_struct_macro_ident {
+                    #(#input_struct_arms)*
+                    (
+                        $input_ident:ident;
+                        { $($data_field:ident : $data_value:expr),* $(,)? }
+                    ) => {
+                        $( #input_assert_ident!($data_field); )*
+                        #input_complete_assert_ident!($($data_field),*);
+
+                        #input_struct_macro_ident! {
+                            @struct
+                            $input_ident
+                            [ ]
+                            [ $($data_field : $data_value,)* ]
+                        }
+                    };
+                    (
+                        @struct
+                        $input_ident:ident
+                        [ $($fields:tt)* ]
+                        [ ]
+                    ) => {
+                        #[allow(dead_code)]
+                        #[derive(::vitrail_pg::InsertInput)]
+                        #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #model_name)]
+                        struct $input_ident {
+                            $($fields)*
+                        }
+                    };
+                }
+
+                #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #result_struct_macro_ident {
+                    #(#result_struct_arms)*
+                    (
+                        $result_ident:ident;
+                        $input_ident:ident;
+                        { $($select_field:ident : true),* $(,)? }
+                    ) => {
+                        $( #result_assert_ident!($select_field); )*
+
+                        #result_struct_macro_ident! {
+                            @struct
+                            $result_ident
+                            [ ]
+                            [ $($select_field,)* ]
+                            [ $input_ident ]
+                        }
+                    };
+                    (
+                        @struct
+                        $result_ident:ident
+                        [ $($fields:tt)* ]
+                        [ ]
+                        [ $input_ident:ident ]
+                    ) => {
+                        #[allow(dead_code)]
+                        #[derive(::vitrail_pg::InsertResult)]
+                        #[vitrail(
+                            schema = #dollar_crate::#module_name::Schema,
+                            model = #model_name,
+                            input = $input_ident
+                        )]
+                        struct $result_ident {
+                            $($fields)*
+                        }
+                    };
+                }
+            });
+
+            main_arms.push(quote! {
+                (
+                    #model_ident {
+                        data: {
+                            $($data_field:ident : $data_value:expr),* $(,)?
+                        },
+                        select: {
+                            $($select_field:ident : true),* $(,)?
+                        }
+                        $(,)?
+                    }
+                ) => {{
+                    #input_struct_macro_ident! {
+                        #root_input_ident;
+                        { $($data_field : $data_value),* }
+                    }
+
+                    #result_struct_macro_ident! {
+                        #root_result_ident;
+                        #root_input_ident;
+                        { $($select_field : true),* }
+                    }
+
+                    #dollar_crate::#module_name::insert::<#root_result_ident>(#root_input_ident {
+                        $($data_field : $data_value),*
+                    })
+                }};
+
+                (
+                    #model_ident {
+                        data: {
+                            $($data_field:ident : $data_value:expr),* $(,)?
+                        }
+                        $(,)?
+                    }
+                ) => {{
+                    #input_struct_macro_ident! {
+                        #root_input_ident;
+                        { $($data_field : $data_value),* }
+                    }
+
+                    #result_struct_macro_ident! {
+                        #root_result_ident;
+                        #root_input_ident;
+                        { #( #all_scalar_field_idents : true ),* }
+                    }
+
+                    #dollar_crate::#module_name::insert::<#root_result_ident>(#root_input_ident {
+                        $($data_field : $data_value),*
+                    })
+                }};
+            });
+        }
+
+        helpers.extend(quote! {
+            #[doc(hidden)]
+            macro_rules! #local_main_macro_ident {
+                #(#main_arms)*
+                ($($tokens:tt)*) => {
+                    compile_error!("unsupported insert shape");
+                };
+            }
+
+            #[doc(hidden)]
+            #[macro_export(local_inner_macros)]
+            macro_rules! #main_macro_ident {
+                #(#main_arms)*
+                ($($tokens:tt)*) => {
+                    compile_error!("unsupported insert shape");
+                };
+            }
+        });
+
+        Ok(helpers)
     }
 
     fn generate_schema(&self) -> Result<TokenStream2> {
@@ -945,6 +1538,20 @@ impl ParsedField {
             })
     }
 
+    fn can_be_omitted_in_insert(&self) -> bool {
+        self.ty.optional
+            || self.attributes.iter().any(|attribute| {
+                matches!(
+                    &attribute.kind,
+                    ParsedAttributeKind::Default(default)
+                        if matches!(
+                            default.function.to_string().as_str(),
+                            "autoincrement" | "now"
+                        )
+                )
+            })
+    }
+
     fn attribute_span(&self, attribute: &str, prefer_first: bool) -> Option<Span> {
         let mut matches = self
             .attributes
@@ -1359,7 +1966,7 @@ fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
         other => {
             return Err(Error::new(
                 ty.name.span(),
-                format!("unsupported query field type `{other}`"),
+                format!("unsupported scalar field type `{other}`"),
             ));
         }
     };
@@ -1479,6 +2086,60 @@ impl QueryMacroInput {
         {
             quote! {
                 #schema_path::__query! {
+                    #body
+                }
+            }
+        } else {
+            let root_path = Path {
+                leading_colon: schema_path.leading_colon,
+                segments: segments[..segments.len() - 1]
+                    .iter()
+                    .map(|segment| (*segment).clone())
+                    .collect(),
+            };
+            quote! {
+                #root_path::#macro_ident! {
+                    #body
+                }
+            }
+        }
+    }
+}
+
+struct InsertMacroInput {
+    schema_path: Path,
+    body: TokenStream2,
+}
+
+impl Parse for InsertMacroInput {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let schema_path = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let body: TokenStream2 = input.parse()?;
+        Ok(Self { schema_path, body })
+    }
+}
+
+impl InsertMacroInput {
+    fn expand(self) -> TokenStream2 {
+        let schema_path = self.schema_path;
+        let body = normalize_query_macro_body(self.body);
+        let segments = schema_path.segments.iter().collect::<Vec<_>>();
+        let module_segment = segments
+            .last()
+            .expect("schema path should contain at least one segment");
+        let macro_ident = format_ident!("__vitrail_insert_{}", module_segment.ident);
+
+        if segments.len() == 1
+            || segments
+                .first()
+                .is_some_and(|segment| segment.ident == "crate")
+            || segments
+                .first()
+                .is_some_and(|segment| segment.ident == "self")
+        {
+            quote! {
+                #schema_path::__insert! {
                     #body
                 }
             }
@@ -2160,6 +2821,516 @@ fn parse_query_result_root_filter(input: ParseStream<'_>) -> Result<QueryResultR
         field: LitStr::new(&field.to_string(), field.span()),
         filter: QueryResultFieldFilter::Eq { variable },
     })
+}
+
+struct InsertInputDerive {
+    ident: Ident,
+    generics: syn::Generics,
+    fields: Vec<InsertField>,
+    schema_path: Path,
+    model_name: LitStr,
+}
+
+impl InsertInputDerive {
+    fn parse(input: syn::DeriveInput) -> Result<Self> {
+        let ident = input.ident;
+        let generics = input.generics;
+        let (schema_path, model_name) = parse_insert_input_container_attrs(&input.attrs)?;
+
+        let Data::Struct(DataStruct {
+            fields: Fields::Named(fields),
+            ..
+        }) = input.data
+        else {
+            return Err(Error::new(
+                ident.span(),
+                "`InsertInput` can only be derived for structs with named fields",
+            ));
+        };
+
+        let fields = fields
+            .named
+            .into_iter()
+            .map(|field| InsertField::parse(field, "insert input"))
+            .collect::<Result<Vec<_>>>()?;
+
+        validate_unique_insert_fields(&fields, &ident, "insert input")?;
+
+        Ok(Self {
+            ident,
+            generics,
+            fields,
+            schema_path,
+            model_name,
+        })
+    }
+
+    fn expand(self) -> Result<TokenStream2> {
+        let ident = self.ident;
+        let mut generics = self.generics;
+        let fields = self.fields;
+        let schema_path = self.schema_path;
+        let model_name = self.model_name;
+        let schema_module_ident = schema_module_ident(&schema_path, "InsertInput")?;
+        let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
+            Error::new(
+                model_name.span(),
+                "`#[vitrail(model = ...)]` must be a valid identifier for `InsertInput`",
+            )
+        })?;
+        let field_type_assert_ident = format_ident!(
+            "__vitrail_assert_insert_input_type_{}_{}",
+            schema_module_ident,
+            model_ident
+        );
+        let input_complete_assert_ident = format_ident!(
+            "__vitrail_assert_insert_input_complete_{}_{}",
+            schema_module_ident,
+            model_ident
+        );
+        let schema_module_path = schema_module_path(&schema_path, "InsertInput")?;
+        let model_trait_module_ident = format_ident!(
+            "__vitrail_insert_traits_{}_{}",
+            schema_module_ident,
+            model_ident
+        );
+
+        for field in &fields {
+            let field_ty = &field.ty;
+            generics
+                .make_where_clause()
+                .predicates
+                .push(syn::parse_quote!(#field_ty: Into<::vitrail_pg::InsertValue>));
+        }
+
+        let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+        let field_idents = fields
+            .iter()
+            .map(|field| field.schema_field_ident())
+            .collect::<Result<Vec<_>>>()?;
+
+        let validation_tokens = fields
+            .iter()
+            .map(|field| {
+                let field_ident = field.schema_field_ident()?;
+                let field_ty = &field.ty;
+
+                Ok(quote! {
+                    #field_type_assert_ident!(#field_ty, #field_ident);
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let insert_values = fields.iter().map(|field| {
+            let ident = &field.ident;
+            let field_name = &field.field_name;
+            quote! {
+                __vitrail_values
+                    .push(#field_name, self.#ident.into())
+                    .expect("insert input field names should be unique after derive validation");
+            }
+        });
+
+        Ok(quote! {
+            impl #impl_generics #ident #ty_generics
+            #where_clause
+            {
+                #[doc(hidden)]
+                fn __vitrail_validate_insert_input() {
+                    let _ = stringify!(#model_name);
+                    #(#validation_tokens)*
+                    #input_complete_assert_ident!(#(#field_idents),*);
+                }
+            }
+
+            impl #impl_generics #schema_module_path::#model_trait_module_ident::__VitrailInsertInputModel
+                for #ident #ty_generics
+            #where_clause
+            {
+            }
+
+            impl #impl_generics ::vitrail_pg::InsertValueSet for #ident #ty_generics
+            #where_clause
+            {
+                fn into_insert_values(self) -> ::vitrail_pg::InsertValues {
+                    Self::__vitrail_validate_insert_input();
+
+                    let mut __vitrail_values = ::vitrail_pg::InsertValues::new();
+                    #(#insert_values)*
+                    __vitrail_values
+                }
+            }
+        })
+    }
+}
+
+struct InsertResultDerive {
+    ident: Ident,
+    generics: syn::Generics,
+    fields: Vec<InsertField>,
+    schema_path: Path,
+    model_name: LitStr,
+    input_ty: Type,
+}
+
+impl InsertResultDerive {
+    fn parse(input: syn::DeriveInput) -> Result<Self> {
+        let ident = input.ident;
+        let generics = input.generics;
+        let (schema_path, model_name, input_ty) =
+            parse_insert_result_container_attrs(&input.attrs)?;
+
+        let Data::Struct(DataStruct {
+            fields: Fields::Named(fields),
+            ..
+        }) = input.data
+        else {
+            return Err(Error::new(
+                ident.span(),
+                "`InsertResult` can only be derived for structs with named fields",
+            ));
+        };
+
+        let fields = fields
+            .named
+            .into_iter()
+            .map(|field| InsertField::parse(field, "insert result"))
+            .collect::<Result<Vec<_>>>()?;
+
+        validate_unique_insert_fields(&fields, &ident, "insert result")?;
+
+        Ok(Self {
+            ident,
+            generics,
+            fields,
+            schema_path,
+            model_name,
+            input_ty,
+        })
+    }
+
+    fn expand(self) -> Result<TokenStream2> {
+        let ident = self.ident;
+        let generics = self.generics;
+        let fields = self.fields;
+        let schema_path = self.schema_path;
+        let model_name = self.model_name;
+        let input_ty = self.input_ty;
+        let schema_module_ident = schema_module_ident(&schema_path, "InsertResult")?;
+        let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
+            Error::new(
+                model_name.span(),
+                "`#[vitrail(model = ...)]` must be a valid identifier for `InsertResult`",
+            )
+        })?;
+        let field_type_assert_ident = format_ident!(
+            "__vitrail_assert_insert_result_type_{}_{}",
+            schema_module_ident,
+            model_ident
+        );
+        let schema_module_path = schema_module_path(&schema_path, "InsertResult")?;
+        let model_trait_module_ident = format_ident!(
+            "__vitrail_insert_traits_{}_{}",
+            schema_module_ident,
+            model_ident
+        );
+        let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+        let validation_tokens = fields
+            .iter()
+            .map(|field| {
+                let field_ident = field.schema_field_ident()?;
+                let field_ty = &field.ty;
+
+                Ok(quote! {
+                    #field_type_assert_ident!(#field_ty, #field_ident);
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let returning_fields = fields.iter().map(|field| {
+            let field_name = &field.field_name;
+            quote! { #field_name }
+        });
+
+        let decode_fields = fields.iter().map(|field| {
+            let ident = &field.ident;
+            let field_name = &field.field_name;
+            let type_name = field.ty.to_token_stream().to_string().replace(' ', "");
+
+            if type_name == "chrono::DateTime<chrono::Utc>"
+                || type_name == "::chrono::DateTime<::chrono::Utc>"
+            {
+                quote! {
+                    #ident: {
+                        let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                        ::vitrail_pg::row_as_datetime_utc(row, __vitrail_alias.as_str())?
+                    }
+                }
+            } else {
+                quote! {
+                    #ident: {
+                        let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                        row.try_get(__vitrail_alias.as_str())?
+                    }
+                }
+            }
+        });
+
+        Ok(quote! {
+            impl #impl_generics #ident #ty_generics
+            #where_clause
+            {
+                #[doc(hidden)]
+                fn __vitrail_validate_insert_result() {
+                    #(#validation_tokens)*
+                    fn __vitrail_assert_insert_values<
+                        T: ::vitrail_pg::InsertValueSet
+                            + #schema_module_path::#model_trait_module_ident::__VitrailInsertInputModel,
+                    >() {
+                    }
+                    __vitrail_assert_insert_values::<#input_ty>();
+                }
+            }
+
+            impl #impl_generics ::vitrail_pg::InsertModel for #ident #ty_generics
+            #where_clause
+            {
+                type Schema = #schema_path;
+                type Values = #input_ty;
+
+                fn model_name() -> &'static str {
+                    #model_name
+                }
+
+                fn returning_fields() -> &'static [&'static str] {
+                    Self::__vitrail_validate_insert_result();
+                    &[#(#returning_fields),*]
+                }
+
+                fn from_row(
+                    row: &::sqlx::postgres::PgRow,
+                    prefix: &str,
+                ) -> Result<Self, ::sqlx::Error> {
+                    use ::sqlx::Row as _;
+
+                    Self::__vitrail_validate_insert_result();
+
+                    Ok(Self {
+                        #(#decode_fields),*
+                    })
+                }
+            }
+        })
+    }
+}
+
+struct InsertField {
+    ident: Ident,
+    ty: Type,
+    field_name: LitStr,
+}
+
+impl InsertField {
+    fn parse(field: syn::Field, derive_target: &str) -> Result<Self> {
+        let span = field.span();
+        let ident = field
+            .ident
+            .ok_or_else(|| Error::new(span, "expected a named field"))?;
+        let mut rename = None;
+
+        for attribute in &field.attrs {
+            if !attribute.path().is_ident("vitrail") {
+                continue;
+            }
+
+            attribute.parse_nested_meta(|meta| {
+                if meta.path.is_ident("field") {
+                    rename = Some(meta.value()?.parse::<LitStr>()?);
+                    return Ok(());
+                }
+
+                Err(meta.error(format!(
+                    "unsupported `#[vitrail(...)]` field attribute for {derive_target}"
+                )))
+            })?;
+        }
+
+        let field_name = rename.unwrap_or_else(|| LitStr::new(&ident.to_string(), ident.span()));
+
+        Ok(Self {
+            ident,
+            ty: field.ty,
+            field_name,
+        })
+    }
+
+    fn schema_field_ident(&self) -> Result<Ident> {
+        syn::parse_str::<Ident>(&self.field_name.value()).map_err(|_| {
+            Error::new(
+                self.field_name.span(),
+                "insert field names must be valid identifiers",
+            )
+        })
+    }
+}
+
+fn validate_unique_insert_fields(
+    fields: &[InsertField],
+    ident: &Ident,
+    derive_target: &str,
+) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+
+    for field in fields {
+        let field_name = field.field_name.value();
+        if !seen.insert(field_name.clone()) {
+            return Err(Error::new(
+                ident.span(),
+                format!("duplicate field `{field_name}` in {derive_target} derive"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_insert_input_container_attrs(attrs: &[Attribute]) -> Result<(Path, LitStr)> {
+    let mut schema_path = None;
+    let mut model_name = None;
+
+    for attribute in attrs {
+        if !attribute.path().is_ident("vitrail") {
+            continue;
+        }
+
+        attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("schema") {
+                schema_path = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("model") {
+                let value = meta.value()?;
+                if value.peek(LitStr) {
+                    model_name = Some(value.parse::<LitStr>()?);
+                } else {
+                    let ident = value.parse::<Ident>()?;
+                    model_name = Some(LitStr::new(&ident.to_string(), ident.span()));
+                }
+                return Ok(());
+            }
+            Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
+        })?;
+    }
+
+    let schema_path = schema_path.ok_or_else(|| {
+        Error::new(
+            Span::call_site(),
+            "`#[derive(InsertInput)]` requires `#[vitrail(schema = ...)]`",
+        )
+    })?;
+    let model_name = model_name.ok_or_else(|| {
+        Error::new(
+            Span::call_site(),
+            "`#[derive(InsertInput)]` requires `#[vitrail(model = ...)]`",
+        )
+    })?;
+
+    Ok((schema_path, model_name))
+}
+
+fn parse_insert_result_container_attrs(attrs: &[Attribute]) -> Result<(Path, LitStr, Type)> {
+    let mut schema_path = None;
+    let mut model_name = None;
+    let mut input_ty = None;
+
+    for attribute in attrs {
+        if !attribute.path().is_ident("vitrail") {
+            continue;
+        }
+
+        attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("schema") {
+                schema_path = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("model") {
+                let value = meta.value()?;
+                if value.peek(LitStr) {
+                    model_name = Some(value.parse::<LitStr>()?);
+                } else {
+                    let ident = value.parse::<Ident>()?;
+                    model_name = Some(LitStr::new(&ident.to_string(), ident.span()));
+                }
+                return Ok(());
+            }
+            if meta.path.is_ident("input") {
+                input_ty = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
+        })?;
+    }
+
+    let schema_path = schema_path.ok_or_else(|| {
+        Error::new(
+            Span::call_site(),
+            "`#[derive(InsertResult)]` requires `#[vitrail(schema = ...)]`",
+        )
+    })?;
+    let model_name = model_name.ok_or_else(|| {
+        Error::new(
+            Span::call_site(),
+            "`#[derive(InsertResult)]` requires `#[vitrail(model = ...)]`",
+        )
+    })?;
+    let input_ty = input_ty.ok_or_else(|| {
+        Error::new(
+            Span::call_site(),
+            "`#[derive(InsertResult)]` requires `#[vitrail(input = ...)]`",
+        )
+    })?;
+
+    Ok((schema_path, model_name, input_ty))
+}
+
+fn schema_module_path(schema_path: &Path, derive_name: &str) -> Result<Path> {
+    if schema_path.segments.len() < 2 {
+        return Err(Error::new(
+            schema_path.span(),
+            format!(
+                "`#[vitrail(schema = ...)]` for `{derive_name}` must point to a schema type like `crate::my_schema::Schema`"
+            ),
+        ));
+    }
+
+    Ok(Path {
+        leading_colon: schema_path.leading_colon,
+        segments: schema_path
+            .segments
+            .iter()
+            .take(schema_path.segments.len() - 1)
+            .cloned()
+            .collect(),
+    })
+}
+
+fn schema_module_ident(schema_path: &Path, derive_name: &str) -> Result<Ident> {
+    schema_path
+        .segments
+        .iter()
+        .rev()
+        .nth(1)
+        .map(|segment| segment.ident.clone())
+        .ok_or_else(|| {
+            Error::new(
+                schema_path.span(),
+                format!(
+                    "`#[vitrail(schema = ...)]` for `{derive_name}` must point to a schema type like `crate::my_schema::Schema`"
+                ),
+            )
+        })
 }
 
 struct QueryVariablesDerive {

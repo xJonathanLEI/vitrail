@@ -1,4 +1,4 @@
-use vitrail_pg::{VitrailClient, query, schema};
+use vitrail_pg::{VitrailClient, insert, query, schema};
 
 schema! {
     name my_schema
@@ -28,7 +28,18 @@ async fn main() {
         .await
         .unwrap();
 
-    let user_id = 1_i64;
+    let user = client
+        .insert(insert! {
+            crate::my_schema,
+            user {
+                data: {
+                    email: "alice@example.com".to_owned(),
+                    name: "Alice".to_owned(),
+                },
+            }
+        })
+        .await
+        .unwrap();
 
     let users = client
         .find_many(query! {
@@ -49,7 +60,7 @@ async fn main() {
                 },
                 where: {
                     id: {
-                        eq: user_id
+                        eq: user.id
                     },
                 },
             }
@@ -57,5 +68,6 @@ async fn main() {
         .await
         .unwrap();
 
+    println!("inserted user {}", user.email);
     println!("fetched {} users", users.len());
 }

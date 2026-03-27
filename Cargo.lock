@@ -1797,6 +1797,7 @@ dependencies = [
 name = "vitrail-pg-macros"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "proc-macro2",
  "quote",
  "sqlx",

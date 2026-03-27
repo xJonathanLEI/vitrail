@@ -2,8 +2,8 @@ use crate::support::{TestDatabase, apply_schema};
 use sqlx::Row as _;
 use sqlx::postgres::PgPoolOptions;
 use vitrail_pg::{
-    Insert, InsertModel, InsertValue, InsertValueSet, InsertValues, PostgresSchema, VitrailClient,
-    alias_name, row_as_datetime_utc, schema,
+    Insert, InsertInput, InsertModel, InsertResult, InsertValue, InsertValueSet, InsertValues,
+    PostgresSchema, VitrailClient, alias_name, insert, row_as_datetime_utc, schema,
 };
 
 schema! {
@@ -155,6 +155,253 @@ impl InsertModel for InsertedPost {
             created_at: row_as_datetime_utc(row, created_at_alias.as_str())?,
         })
     }
+}
+
+#[allow(dead_code)]
+#[derive(InsertInput)]
+#[vitrail(schema = crate::insert::insert_schema::Schema, model = user)]
+struct DerivedNewUser {
+    email: String,
+    name: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, InsertResult)]
+#[vitrail(schema = crate::insert::insert_schema::Schema, model = user, input = DerivedNewUser)]
+struct DerivedInsertedUser {
+    id: i64,
+    email: String,
+    name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[allow(dead_code)]
+#[derive(InsertInput)]
+#[vitrail(schema = crate::insert::insert_schema::Schema, model = post)]
+struct DerivedNewPost {
+    title: String,
+    body: Option<String>,
+    published: bool,
+    author_id: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, InsertResult)]
+#[vitrail(schema = crate::insert::insert_schema::Schema, model = post, input = DerivedNewPost)]
+struct DerivedInsertedPost {
+    id: i64,
+    title: String,
+    body: Option<String>,
+    published: bool,
+    author_id: i64,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[tokio::test]
+async fn derived_scalar_insert_returns_generated_fields_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let user = client
+        .insert(crate::insert_schema::insert::<DerivedInsertedUser>(
+            DerivedNewUser {
+                email: "bob@example.com".to_owned(),
+                name: "Bob".to_owned(),
+            },
+        ))
+        .await
+        .expect("insert should succeed");
+
+    assert!(user.id > 0, "generated id should be returned");
+    assert_eq!(user.email, "bob@example.com");
+    assert_eq!(user.name, "Bob");
+    assert!(user.created_at <= chrono::Utc::now());
+
+    client.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn derived_scalar_insert_nullable_field_round_trips_as_null_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let author = client
+        .insert(crate::insert_schema::insert::<DerivedInsertedUser>(
+            DerivedNewUser {
+                email: "charlie@example.com".to_owned(),
+                name: "Charlie".to_owned(),
+            },
+        ))
+        .await
+        .expect("author insert should succeed");
+
+    let post = client
+        .insert(crate::insert_schema::insert::<DerivedInsertedPost>(
+            DerivedNewPost {
+                title: "Hello from derive".to_owned(),
+                body: None,
+                published: true,
+                author_id: author.id,
+            },
+        ))
+        .await
+        .expect("post insert should succeed");
+
+    assert_eq!(post.body, None);
+    assert_eq!(post.author_id, author.id);
+
+    client.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn helper_scalar_insert_defaults_to_all_scalar_fields_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let user = client
+        .insert(insert! {
+            crate::insert_schema,
+            user {
+                data: {
+                    email: "dana@example.com".to_owned(),
+                    name: "Dana".to_owned(),
+                },
+            }
+        })
+        .await
+        .expect("insert should succeed");
+
+    assert!(user.id > 0, "generated id should be returned");
+    assert_eq!(user.email, "dana@example.com");
+    assert_eq!(user.name, "Dana");
+    assert!(user.created_at <= chrono::Utc::now());
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let stored = sqlx::query_as::<_, (i64, String, String, chrono::NaiveDateTime)>(
+        r#"
+        SELECT "id"::bigint, "email", "name", "created_at"
+        FROM "user"
+        WHERE "id" = $1
+        "#,
+    )
+    .bind(user.id)
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch inserted user");
+
+    assert_eq!(stored.0, user.id);
+    assert_eq!(stored.1, user.email);
+    assert_eq!(stored.2, user.name);
+    assert_eq!(stored.3.and_utc(), user.created_at);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn helper_scalar_insert_nullable_field_round_trips_as_null_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let author = client
+        .insert(insert! {
+            crate::insert_schema,
+            user {
+                data: {
+                    email: "eve@example.com".to_owned(),
+                    name: "Eve".to_owned(),
+                },
+                select: {
+                    id: true,
+                },
+            }
+        })
+        .await
+        .expect("author insert should succeed");
+
+    let post = client
+        .insert(insert! {
+            crate::insert_schema,
+            post {
+                data: {
+                    title: "Hello from helper".to_owned(),
+                    body: None,
+                    published: true,
+                    author_id: author.id,
+                },
+                select: {
+                    id: true,
+                    title: true,
+                    body: true,
+                    author_id: true,
+                },
+            }
+        })
+        .await
+        .expect("post insert should succeed");
+
+    assert!(post.id > 0, "generated id should be returned");
+    assert_eq!(post.title, "Hello from helper");
+    assert_eq!(post.body, None);
+    assert_eq!(post.author_id, author.id);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let stored = sqlx::query_as::<_, (i64, Option<String>, i64)>(
+        r#"
+        SELECT "id"::bigint, "body", "author_id"::bigint
+        FROM "post"
+        WHERE "id" = $1
+        "#,
+    )
+    .bind(post.id)
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch inserted post");
+
+    assert_eq!(stored.0, post.id);
+    assert_eq!(stored.1, post.body);
+    assert_eq!(stored.2, post.author_id);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup().await;
 }
 
 #[test]

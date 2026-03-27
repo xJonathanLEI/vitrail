@@ -1,4 +1,4 @@
-use vitrail_pg::{QueryResult, QueryVariables, VitrailClient, schema};
+use vitrail_pg::{InsertInput, InsertResult, QueryResult, QueryVariables, VitrailClient, schema};
 
 schema! {
     name my_schema
@@ -30,6 +30,23 @@ struct PostSummary {
     title: String,
 }
 
+#[allow(dead_code)]
+#[derive(InsertInput)]
+#[vitrail(schema = crate::my_schema::Schema, model = user)]
+struct NewUser {
+    email: String,
+    name: String,
+}
+
+#[allow(dead_code)]
+#[derive(InsertResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = user, input = NewUser)]
+struct InsertedUser {
+    id: i64,
+    email: String,
+    name: String,
+}
+
 #[derive(QueryVariables)]
 struct UserByIdVariables {
     user_id: i64,
@@ -57,14 +74,21 @@ async fn main() {
         .await
         .unwrap();
 
-    let user_id = 1_i64;
+    let user = client
+        .insert(my_schema::insert::<InsertedUser>(NewUser {
+            email: "alice@example.com".to_owned(),
+            name: "Alice".to_owned(),
+        }))
+        .await
+        .unwrap();
 
     let users = client
         .find_many(my_schema::query_with_variables::<UserWithPosts>(
-            UserByIdVariables { user_id },
+            UserByIdVariables { user_id: user.id },
         ))
         .await
         .unwrap();
 
+    println!("inserted user {}", user.email);
     println!("fetched {} users", users.len());
 }

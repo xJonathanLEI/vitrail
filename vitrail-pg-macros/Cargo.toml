@@ -16,6 +16,7 @@ syn.workspace = true
 vitrail-pg-core.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 sqlx.workspace = true
 trybuild.workspace = true
 vitrail-pg.workspace = true
