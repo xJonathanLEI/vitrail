@@ -1,6 +1,10 @@
 #[path = "pg/support.rs"]
 mod support;
 
+#[path = "pg/insert.rs"]
+mod insert;
+pub(crate) use insert::pg_insert_schema as insert_schema;
+
 #[path = "pg/migrations.rs"]
 mod migrations;
 

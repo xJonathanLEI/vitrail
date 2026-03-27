@@ -1,4 +1,5 @@
 mod client;
+mod insert;
 mod migration;
 mod migrator;
 mod query;
@@ -6,6 +7,7 @@ mod schema;
 mod validation;
 
 pub use client::VitrailClient;
+pub use insert::{Insert, InsertModel, InsertSpec, InsertValue, InsertValueSet, InsertValues};
 pub use migration::{
     ColumnDefault, ColumnType, ForeignKeyAction, PostgresColumn, PostgresForeignKey, PostgresIndex,
     PostgresMigration, PostgresPrimaryKey, PostgresSchema, PostgresTable,

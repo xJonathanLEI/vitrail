@@ -979,11 +979,11 @@ fn aggregate_order_by(model: &Model, table_alias: &str) -> String {
     format!(" ORDER BY \"{table_alias}\".{}", quoted_ident(field_name))
 }
 
-fn quoted_ident(ident: &str) -> String {
+pub(crate) fn quoted_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
-fn column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> String {
+pub(crate) fn column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> String {
     let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
     match scalar {
         ScalarType::Int => format!("({column_sql})::bigint"),
@@ -992,7 +992,12 @@ fn column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> Strin
     }
 }
 
-fn select_expr(table_alias: &str, field_name: &str, scalar: ScalarType, alias: &str) -> String {
+pub(crate) fn select_expr(
+    table_alias: &str,
+    field_name: &str,
+    scalar: ScalarType,
+    alias: &str,
+) -> String {
     let expr = column_expr(table_alias, field_name, scalar);
     format!("{expr} AS \"{alias}\"")
 }
