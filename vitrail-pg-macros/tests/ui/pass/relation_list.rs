@@ -1,4 +1,6 @@
-use vitrail_pg_macros::schema;
+pub use vitrail_pg_core::*;
+pub use vitrail_pg_macros::{schema};
+extern crate self as vitrail_pg;
 
 schema! {
     name relation_list_schema

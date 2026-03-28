@@ -1,4 +1,6 @@
-use vitrail_pg::{UpdateData, UpdateMany, schema};
+pub use vitrail_pg_core::*;
+pub use vitrail_pg_macros::{UpdateData, UpdateMany, schema};
+extern crate self as vitrail_pg;
 
 schema! {
     name update_schema

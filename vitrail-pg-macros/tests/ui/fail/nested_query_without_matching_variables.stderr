@@ -1,17 +1,17 @@
 error[E0271]: type mismatch resolving `<FilteredPost as QueryModel>::Variables == ()`
-  --> tests/ui/fail/nested_query_without_matching_variables.rs:43:16
+  --> tests/ui/fail/nested_query_without_matching_variables.rs:45:16
    |
-43 |     posts: Vec<FilteredPost>,
+45 |     posts: Vec<FilteredPost>,
    |                ^^^^^^^^^^^^ type mismatch resolving `<FilteredPost as QueryModel>::Variables == ()`
    |
 note: expected this to be `()`
-  --> tests/ui/fail/nested_query_without_matching_variables.rs:29:17
+  --> tests/ui/fail/nested_query_without_matching_variables.rs:31:17
    |
-29 |     variables = PostByIdVariables,
+31 |     variables = PostByIdVariables,
    |                 ^^^^^^^^^^^^^^^^^
 note: required by a bound in `__vitrail_assert_query_variables_match`
-  --> tests/ui/fail/nested_query_without_matching_variables.rs:37:10
+  --> tests/ui/fail/nested_query_without_matching_variables.rs:39:10
    |
-37 | #[derive(QueryResult)]
+39 | #[derive(QueryResult)]
    |          ^^^^^^^^^^^ required by this bound in `__vitrail_assert_query_variables_match`
    = note: this error originates in the derive macro `QueryResult` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,11 +1,11 @@
 error: duplicate field `id` in model `user`
- --> tests/ui/fail/duplicate_field.rs:8:9
-  |
-8 |         id Int
-  |         ^^
+  --> tests/ui/fail/duplicate_field.rs:10:9
+   |
+10 |         id Int
+   |         ^^
 
 error: first declaration of this field
- --> tests/ui/fail/duplicate_field.rs:7:9
+ --> tests/ui/fail/duplicate_field.rs:9:9
   |
-7 |         id Int @id
+9 |         id Int @id
   |         ^^

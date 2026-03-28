@@ -1,5 +1,5 @@
 error: expected `name`
- --> tests/ui/fail/missing_name.rs:4:5
+ --> tests/ui/fail/missing_name.rs:6:5
   |
-4 |     model user {
+6 |     model user {
   |     ^^^^^

@@ -1,4 +1,5 @@
 use std::env;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlx::Connection as _;
@@ -117,12 +118,15 @@ fn replace_database_name(database_url: &str, database_name: &str) -> String {
 }
 
 fn unique_suffix() -> String {
+    static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let unix_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock should be after unix epoch")
         .as_nanos();
+    let counter = UNIQUE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    format!("{}_{}", std::process::id(), unix_nanos)
+    format!("{}_{}_{}", std::process::id(), unix_nanos, counter)
 }
 
 pub(super) async fn apply_sql_script(database_url: &str, sql: &str) {

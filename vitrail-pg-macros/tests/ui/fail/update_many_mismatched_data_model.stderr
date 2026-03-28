@@ -1,28 +1,28 @@
 error[E0277]: the trait bound `UpdateUserData: __vitrail_update_traits_update_schema_post::__VitrailUpdateDataModel` is not satisfied
-  --> tests/ui/fail/update_many_mismatched_data_model.rs:27:12
+  --> tests/ui/fail/update_many_mismatched_data_model.rs:29:12
    |
-27 |     data = UpdateUserData
+29 |     data = UpdateUserData
    |            ^^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `__vitrail_update_traits_update_schema_post::__VitrailUpdateDataModel` is not implemented for `UpdateUserData`
-  --> tests/ui/fail/update_many_mismatched_data_model.rs:19:1
+  --> tests/ui/fail/update_many_mismatched_data_model.rs:21:1
    |
-19 | struct UpdateUserData {
+21 | struct UpdateUserData {
    | ^^^^^^^^^^^^^^^^^^^^^
    = note: `UpdateUserData` implements similarly named trait `__vitrail_update_traits_update_schema_user::__VitrailUpdateDataModel`, but not `__vitrail_update_traits_update_schema_post::__VitrailUpdateDataModel`
 help: this trait has no implementations, consider adding one
-  --> tests/ui/fail/update_many_mismatched_data_model.rs:3:1
+  --> tests/ui/fail/update_many_mismatched_data_model.rs:5:1
    |
- 3 | / schema! {
- 4 | |     name update_schema
- 5 | |
- 6 | |     model user {
+ 5 | / schema! {
+ 6 | |     name update_schema
+ 7 | |
+ 8 | |     model user {
 ...  |
-15 | | }
+17 | | }
    | |_^
 note: required by a bound in `__vitrail_assert_update_values`
-  --> tests/ui/fail/update_many_mismatched_data_model.rs:23:10
+  --> tests/ui/fail/update_many_mismatched_data_model.rs:25:10
    |
-23 | #[derive(UpdateMany)]
+25 | #[derive(UpdateMany)]
    |          ^^^^^^^^^^ required by this bound in `__vitrail_assert_update_values`
    = note: this error originates in the macro `schema` which comes from the expansion of the derive macro `UpdateMany` (in Nightly builds, run with -Z macro-backtrace for more info)

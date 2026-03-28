@@ -20,4 +20,4 @@ vitrail-pg-core.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
 trybuild.workspace = true
-vitrail-pg.workspace = true
+vitrail-pg-core.workspace = true

@@ -1,21 +1,21 @@
 error: missing required field `email` in insert input for model `user`
-  --> tests/ui/fail/insert_macro_missing_required_field.rs:3:1
+  --> tests/ui/fail/insert_macro_missing_required_field.rs:5:1
    |
- 3 | / schema! {
- 4 | |     name insert_schema
- 5 | |
- 6 | |     model user {
+ 5 | / schema! {
+ 6 | |     name insert_schema
+ 7 | |
+ 8 | |     model user {
 ...  |
-11 | | }
+13 | | }
    | |_^
 ...
-14 |       let _ = insert! {
+16 |       let _ = insert! {
    |  _____________-
-15 | |         crate::insert_schema,
-16 | |         user {
-17 | |             data: {
+17 | |         crate::insert_schema,
+18 | |         user {
+19 | |             data: {
 ...  |
-21 | |     };
+23 | |     };
    | |_____- in this macro invocation
    |
    = note: this error originates in the macro `__vitrail_scan_insert_input_field_insert_schema_user_email` which comes from the expansion of the macro `insert` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,4 +1,6 @@
-use vitrail_pg::{QueryResult, QueryVariables, schema};
+pub use vitrail_pg_core::*;
+pub use vitrail_pg_macros::{QueryResult, QueryVariables, schema};
+extern crate self as vitrail_pg;
 
 schema! {
     name query_schema

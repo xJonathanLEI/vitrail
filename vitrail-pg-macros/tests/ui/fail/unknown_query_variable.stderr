@@ -1,11 +1,11 @@
 error[E0609]: no field `user_ids` on type `&UserByIdVariables`
-  --> tests/ui/fail/unknown_query_variable.rs:22:19
+  --> tests/ui/fail/unknown_query_variable.rs:24:19
    |
-22 |     where(id = eq(user_ids))
+24 |     where(id = eq(user_ids))
    |                   ^^^^^^^^ unknown field
    |
 help: a field with a similar name exists
    |
-22 -     where(id = eq(user_ids))
-22 +     where(id = eq(user_id))
+24 -     where(id = eq(user_ids))
+24 +     where(id = eq(user_id))
    |

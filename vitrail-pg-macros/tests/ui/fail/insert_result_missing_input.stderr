@@ -1,7 +1,7 @@
 error: `#[derive(InsertResult)]` requires `#[vitrail(input = ...)]`
-  --> tests/ui/fail/insert_result_missing_input.rs:12:10
+  --> tests/ui/fail/insert_result_missing_input.rs:14:10
    |
-12 | #[derive(InsertResult)]
+14 | #[derive(InsertResult)]
    |          ^^^^^^^^^^^^
    |
    = note: this error originates in the derive macro `InsertResult` (in Nightly builds, run with -Z macro-backtrace for more info)

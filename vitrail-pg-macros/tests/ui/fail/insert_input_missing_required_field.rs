@@ -1,4 +1,6 @@
-use vitrail_pg::{InsertInput, schema};
+pub use vitrail_pg_core::*;
+pub use vitrail_pg_macros::{InsertInput, schema};
+extern crate self as vitrail_pg;
 
 schema! {
     name insert_schema
