@@ -1,4 +1,4 @@
-use vitrail_pg::{VitrailClient, insert, query, schema};
+use vitrail_pg::{VitrailClient, insert, query, schema, update};
 
 schema! {
     name my_schema
@@ -41,6 +41,40 @@ async fn main() {
         .await
         .unwrap();
 
+    client
+        .insert(insert! {
+            crate::my_schema,
+            post {
+                data: {
+                    title: "Hello Vitrail".to_owned(),
+                    body: Some("Draft body".to_owned()),
+                    published: false,
+                    author_id: user.id,
+                },
+            }
+        })
+        .await
+        .unwrap();
+
+    let updated_posts = client
+        .update_many(update! {
+            crate::my_schema,
+            post {
+                data: {
+                    published: true,
+                },
+                where: {
+                    author: {
+                        email: {
+                            eq: "alice@example.com".to_owned()
+                        }
+                    },
+                },
+            }
+        })
+        .await
+        .unwrap();
+
     let users = client
         .find_many(query! {
             crate::my_schema,
@@ -69,5 +103,6 @@ async fn main() {
         .unwrap();
 
     println!("inserted user {}", user.email);
+    println!("updated {} posts", updated_posts);
     println!("fetched {} users", users.len());
 }

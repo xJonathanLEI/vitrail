@@ -7,7 +7,7 @@ mod schema;
 mod update;
 
 use insert::{InsertInputDerive, InsertResultDerive};
-use macro_inputs::{InsertMacroInput, QueryMacroInput};
+use macro_inputs::{InsertMacroInput, QueryMacroInput, UpdateMacroInput};
 use query::{QueryResultDerive, QueryVariablesDerive};
 use schema::ParsedSchema;
 use update::{UpdateDataDerive, UpdateManyDerive};
@@ -33,6 +33,12 @@ pub fn query(input: TokenStream) -> TokenStream {
 pub fn insert(input: TokenStream) -> TokenStream {
     let insert = syn::parse_macro_input!(input as InsertMacroInput);
     insert.expand().into()
+}
+
+#[proc_macro]
+pub fn update(input: TokenStream) -> TokenStream {
+    let update = syn::parse_macro_input!(input as UpdateMacroInput);
+    update.expand().into()
 }
 
 #[proc_macro_derive(QueryResult, attributes(vitrail))]

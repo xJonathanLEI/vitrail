@@ -2,7 +2,7 @@ use crate::support::{TestDatabase, apply_schema};
 use sqlx::postgres::PgPoolOptions;
 use vitrail_pg::{
     PostgresSchema, QueryFilter, QueryFilterValue, QueryVariableValue, QueryVariables, UpdateData,
-    UpdateMany, UpdateManyModel, UpdateValue, UpdateValues, VitrailClient, schema,
+    UpdateMany, UpdateManyModel, UpdateValue, UpdateValues, VitrailClient, schema, update,
 };
 
 schema! {
@@ -627,6 +627,189 @@ async fn derived_update_many_combines_multiple_where_clauses_with_and() {
 
     assert_eq!(alice_published, 2);
     assert_eq!(bob_published, 1);
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn helper_update_many_updates_rows_and_returns_count() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(update! {
+            crate::update_schema,
+            post {
+                data: {
+                    published: true,
+                },
+            }
+        })
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 3);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let published_count: i64 =
+        sqlx::query_scalar(r#"SELECT COUNT(*)::bigint FROM "post" WHERE "published" = true"#)
+            .fetch_one(&pool)
+            .await
+            .expect("should count published posts");
+
+    assert_eq!(published_count, 3);
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn helper_update_many_supports_nested_relation_filters() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(update! {
+            crate::update_schema,
+            post {
+                data: {
+                    published: true,
+                },
+                where: {
+                    author: {
+                        age: {
+                            eq: 35
+                        }
+                    },
+                },
+            }
+        })
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let alice_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'alice@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count alice posts");
+
+    let bob_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob posts");
+
+    assert_eq!(alice_published, 2);
+    assert_eq!(bob_published, 1);
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn helper_update_many_supports_deeply_nested_relation_filters() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(update! {
+            crate::update_schema,
+            comment {
+                data: {
+                    reviewed: true,
+                },
+                where: {
+                    post: {
+                        author: {
+                            age: {
+                                eq: 35
+                            }
+                        }
+                    },
+                },
+            }
+        })
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let reviewed_comments: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "comment"
+        WHERE "reviewed" = true
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count reviewed comments");
+
+    let bob_reviewed: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "comment"
+        WHERE "reviewed" = true
+          AND "post_id" IN (
+            SELECT "id"
+            FROM "post"
+            WHERE "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob reviewed comments");
+
+    assert_eq!(reviewed_comments, 2);
+    assert_eq!(bob_reviewed, 0);
 
     pool.close().await;
     database.cleanup().await;

@@ -1,0 +1,21 @@
+error: unknown field `unknown` in update data for model `post`
+  --> tests/ui/fail/update_helper_unknown_data_field.rs:3:1
+   |
+ 3 | / schema! {
+ 4 | |     name update_helper_schema
+ 5 | |
+ 6 | |     model user {
+...  |
+20 | | }
+   | |_^
+...
+23 |       let _ = update! {
+   |  _____________-
+24 | |         crate::update_helper_schema,
+25 | |         post {
+26 | |             data: {
+...  |
+30 | |     };
+   | |_____- in this macro invocation
+   |
+   = note: this error originates in the macro `__vitrail_assert_update_data_field_update_helper_schema_post` which comes from the expansion of the macro `update` (in Nightly builds, run with -Z macro-backtrace for more info)
