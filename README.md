@@ -2,9 +2,149 @@
   <h1 align="center">vitrail</h1>
 </p>
 
-**A next-generation ORM for Rust, inspired by [Prisma](https://github.com/prisma/prisma) and [Drizzle](https://github.com/drizzle-team/drizzle-orm)**
+<p align="center">
+  <strong>A next-generation ORM for Rust, inspired by <a href="https://github.com/prisma/prisma">Prisma</a> and <a href="https://github.com/drizzle-team/drizzle-orm">Drizzle</a>.</strong>
+</p>
 
-`vitrail` is a modern ORM focused on efficiency and type safety without sacrificing ease of use. It's heavily inspired by [Prisma](https://github.com/prisma/prisma) and [Drizzle](https://github.com/drizzle-team/drizzle-orm).
+`vitrail` is a schema-first ORM focused on generating efficient SQL while keeping the API explicit, ergonomic, and **type-safe end to end**.
+
+> [!NOTE]
+>
+> `vitrail` is under active development. Use at your own risks.
+>
+> The library currently only supports Postgres. _Just use Postgres™_.
+
+## Core features
+
+- Prisma-like syntax for running compile-time validated SQL queries and getting type-safe data
+- Migration script generation and management - [via the CLI](./examples/pg_migration_cli.rs) or programmatically
+
+## The API
+
+This section only serves as a brief demonstration of the core API. For full runnable examples, see the [`examples` directory](./examples).
+
+> [!TIP]
+>
+> The macros shown below (`query!`, `insert!`, `update!`) are only thin wrappers that define relevant types and applying derive macros.
+>
+> It's always possible to manually define the relevant model types first and use the derived methods. See the [model-first example](./examples/pg_query_model_first.rs).
+
+### Schema DSL
+
+Define your schema with a DSL that feels familiar if you have used Prisma. Schema validation happens at compile time:
+
+```rust
+schema! {
+  name app_schema
+
+  model user {
+    id         Int      @id @default(autoincrement())
+    email      String   @unique
+    name       String
+    created_at DateTime @default(now())
+    posts      post[]
+  }
+
+  model post {
+    id         Int      @id @default(autoincrement())
+    title      String
+    published  Boolean  @default(false)
+    author_id  Int
+    author     user     @relation(fields: [author_id], references: [id])
+    comments   comment[]
+  }
+
+  model comment {
+    id      Int    @id @default(autoincrement())
+    body    String
+    post_id Int
+    post    post   @relation(fields: [post_id], references: [id])
+  }
+}
+```
+
+### Nested queries
+
+Selections, includes, and filters follow the relation graph directly:
+
+```rust
+query! {
+  crate::app_schema,
+  user {
+    select: {
+      id: true,
+      email: true,
+      name: true,
+    },
+    include: {
+      posts: {
+        select: {
+          id: true,
+          title: true,
+          published: true,
+        },
+        include: {
+          comments: {
+            select: {
+              body: true,
+            },
+          },
+        },
+        where: {
+          published: {
+            eq: true,
+          },
+        },
+      },
+    },
+  }
+}
+```
+
+Again, query validation happens at compile time. The statement returns typed data:
+
+```rust
+let users = client.find_many(query! { ... }).await.unwrap();
+
+// Everything in the entity fetched is typed
+let post_title: &str = &users[0].posts[0].title;
+println!("First post: {post_title}");
+```
+
+### Writes
+
+Reads and writes share the same vocabulary, so inserts and updates feel consistent with queries:
+
+```rust
+insert! {
+  crate::app_schema,
+  post {
+    data: {
+      title: "Hello Vitrail".to_owned(),
+      published: false,
+      author_id: author.id,
+    },
+  }
+}
+```
+
+```rust
+update! {
+  crate::app_schema,
+  post {
+    data: {
+      published: true,
+    },
+    where: {
+      author: {
+        email: {
+          eq: "alice@example.com".to_owned(),
+        },
+      },
+    },
+  }
+}
+```
 
 ## License
 
