@@ -1,0 +1,142 @@
+use proc_macro2::{TokenStream as TokenStream2, TokenTree};
+use quote::{format_ident, quote};
+use syn::parse::{Parse, ParseStream};
+use syn::{Path, Result, Token};
+
+fn normalize_query_macro_body(tokens: TokenStream2) -> TokenStream2 {
+    let mut normalized = TokenStream2::new();
+    let mut iter = tokens.into_iter().peekable();
+
+    while let Some(token) = iter.next() {
+        match token {
+            TokenTree::Group(group) => {
+                let mut normalized_group = proc_macro2::Group::new(
+                    group.delimiter(),
+                    normalize_query_macro_body(group.stream()),
+                );
+                normalized_group.set_span(group.span());
+                normalized.extend([TokenTree::Group(normalized_group)]);
+            }
+            TokenTree::Punct(punct) if punct.as_char() == '$' => {
+                if let Some(TokenTree::Ident(ident)) = iter.peek() {
+                    let ident = ident.clone();
+                    iter.next();
+                    normalized.extend([TokenTree::Ident(ident)]);
+                } else {
+                    normalized.extend([TokenTree::Punct(punct)]);
+                }
+            }
+            other => normalized.extend([other]),
+        }
+    }
+
+    normalized
+}
+
+pub(crate) struct QueryMacroInput {
+    schema_path: Path,
+    body: TokenStream2,
+}
+
+impl Parse for QueryMacroInput {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let schema_path = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let body: TokenStream2 = input.parse()?;
+        Ok(Self { schema_path, body })
+    }
+}
+
+impl QueryMacroInput {
+    pub(crate) fn expand(self) -> TokenStream2 {
+        let schema_path = self.schema_path;
+        let body = normalize_query_macro_body(self.body);
+        let segments = schema_path.segments.iter().collect::<Vec<_>>();
+        let module_segment = segments
+            .last()
+            .expect("schema path should contain at least one segment");
+        let macro_ident = format_ident!("__vitrail_query_{}", module_segment.ident);
+
+        if segments.len() == 1
+            || segments
+                .first()
+                .is_some_and(|segment| segment.ident == "crate")
+            || segments
+                .first()
+                .is_some_and(|segment| segment.ident == "self")
+        {
+            quote! {
+                #schema_path::__query! {
+                    #body
+                }
+            }
+        } else {
+            let root_path = Path {
+                leading_colon: schema_path.leading_colon,
+                segments: segments[..segments.len() - 1]
+                    .iter()
+                    .map(|segment| (*segment).clone())
+                    .collect(),
+            };
+            quote! {
+                #root_path::#macro_ident! {
+                    #body
+                }
+            }
+        }
+    }
+}
+
+pub(crate) struct InsertMacroInput {
+    schema_path: Path,
+    body: TokenStream2,
+}
+
+impl Parse for InsertMacroInput {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let schema_path = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let body: TokenStream2 = input.parse()?;
+        Ok(Self { schema_path, body })
+    }
+}
+
+impl InsertMacroInput {
+    pub(crate) fn expand(self) -> TokenStream2 {
+        let schema_path = self.schema_path;
+        let body = normalize_query_macro_body(self.body);
+        let segments = schema_path.segments.iter().collect::<Vec<_>>();
+        let module_segment = segments
+            .last()
+            .expect("schema path should contain at least one segment");
+        let macro_ident = format_ident!("__vitrail_insert_{}", module_segment.ident);
+
+        if segments.len() == 1
+            || segments
+                .first()
+                .is_some_and(|segment| segment.ident == "crate")
+            || segments
+                .first()
+                .is_some_and(|segment| segment.ident == "self")
+        {
+            quote! {
+                #schema_path::__insert! {
+                    #body
+                }
+            }
+        } else {
+            let root_path = Path {
+                leading_colon: schema_path.leading_colon,
+                segments: segments[..segments.len() - 1]
+                    .iter()
+                    .map(|segment| (*segment).clone())
+                    .collect(),
+            };
+            quote! {
+                #root_path::#macro_ident! {
+                    #body
+                }
+            }
+        }
+    }
+}
