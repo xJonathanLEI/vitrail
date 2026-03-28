@@ -1,8 +1,8 @@
 use crate::support::{TestDatabase, apply_schema};
 use sqlx::postgres::PgPoolOptions;
 use vitrail_pg::{
-    PostgresSchema, QueryFilter, QueryFilterValue, QueryVariableValue, QueryVariables, UpdateMany,
-    UpdateManyModel, UpdateValue, UpdateValues, VitrailClient, schema,
+    PostgresSchema, QueryFilter, QueryFilterValue, QueryVariableValue, QueryVariables, UpdateData,
+    UpdateMany, UpdateManyModel, UpdateValue, UpdateValues, VitrailClient, schema,
 };
 
 schema! {
@@ -35,6 +35,68 @@ schema! {
 }
 
 pub(crate) use self::update_schema as pg_update_schema;
+
+#[derive(UpdateData)]
+#[vitrail(schema = crate::update_schema::Schema, model = post)]
+struct PublishPostsData {
+    published: bool,
+}
+
+#[derive(UpdateData)]
+#[vitrail(schema = crate::update_schema::Schema, model = comment)]
+struct ReviewCommentsData {
+    reviewed: bool,
+}
+
+#[derive(QueryVariables)]
+struct AuthorAgeVariables {
+    author_age: i64,
+}
+
+#[derive(QueryVariables)]
+struct AuthorAgeAndPublishedVariables {
+    author_age: i64,
+    was_published: bool,
+}
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData
+)]
+struct DerivedPublishAllPosts;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = AuthorAgeVariables,
+    where(author.age = eq(author_age))
+)]
+struct DerivedPublishPostsByAuthorAge;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = comment,
+    data = ReviewCommentsData,
+    variables = AuthorAgeVariables,
+    where(post.author.age = eq(author_age))
+)]
+struct DerivedReviewCommentsByPostAuthorAge;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = AuthorAgeAndPublishedVariables,
+    where(author.age = eq(author_age)),
+    where(published = eq(was_published))
+)]
+struct DerivedPublishUnpublishedPostsByAuthorAge;
 
 struct PublishUnpublishedPosts;
 
@@ -345,6 +407,226 @@ async fn update_many_supports_deeply_nested_relation_filters() {
 
     assert_eq!(reviewed_comments, 2);
     assert_eq!(bob_reviewed, 0);
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn derived_update_many_updates_rows_and_returns_count() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(crate::update_schema::update_many::<DerivedPublishAllPosts>(
+            PublishPostsData { published: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 3);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let published_count: i64 =
+        sqlx::query_scalar(r#"SELECT COUNT(*)::bigint FROM "post" WHERE "published" = true"#)
+            .fetch_one(&pool)
+            .await
+            .expect("should count published posts");
+
+    assert_eq!(published_count, 3);
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn derived_update_many_supports_nested_relation_filters() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(crate::update_schema::update_many_with_variables::<
+            DerivedPublishPostsByAuthorAge,
+        >(
+            AuthorAgeVariables { author_age: 35 },
+            PublishPostsData { published: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let alice_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'alice@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count alice posts");
+
+    let bob_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob posts");
+
+    assert_eq!(alice_published, 2);
+    assert_eq!(bob_published, 1);
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn derived_update_many_supports_deeply_nested_relation_filters() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(crate::update_schema::update_many_with_variables::<
+            DerivedReviewCommentsByPostAuthorAge,
+        >(
+            AuthorAgeVariables { author_age: 35 },
+            ReviewCommentsData { reviewed: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let reviewed_comments: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "comment"
+        WHERE "reviewed" = true
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count reviewed comments");
+
+    let bob_reviewed: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "comment"
+        WHERE "reviewed" = true
+          AND "post_id" IN (
+            SELECT "id"
+            FROM "post"
+            WHERE "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob reviewed comments");
+
+    assert_eq!(reviewed_comments, 2);
+    assert_eq!(bob_reviewed, 0);
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn derived_update_many_combines_multiple_where_clauses_with_and() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(crate::update_schema::update_many_with_variables::<
+            DerivedPublishUnpublishedPostsByAuthorAge,
+        >(
+            AuthorAgeAndPublishedVariables {
+                author_age: 35,
+                was_published: false,
+            },
+            PublishPostsData { published: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let alice_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'alice@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count alice posts");
+
+    let bob_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob posts");
+
+    assert_eq!(alice_published, 2);
+    assert_eq!(bob_published, 1);
 
     pool.close().await;
     database.cleanup().await;

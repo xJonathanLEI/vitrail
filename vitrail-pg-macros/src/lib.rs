@@ -4,11 +4,13 @@ mod insert;
 mod macro_inputs;
 mod query;
 mod schema;
+mod update;
 
 use insert::{InsertInputDerive, InsertResultDerive};
 use macro_inputs::{InsertMacroInput, QueryMacroInput};
 use query::{QueryResultDerive, QueryVariablesDerive};
 use schema::ParsedSchema;
+use update::{UpdateDataDerive, UpdateManyDerive};
 
 /// Validates a schema DSL declaration at compile time.
 #[proc_macro]
@@ -68,6 +70,26 @@ pub fn derive_insert_result(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
     match InsertResultDerive::parse(input).and_then(|derive| derive.expand()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(UpdateData, attributes(vitrail))]
+pub fn derive_update_data(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match UpdateDataDerive::parse(input).and_then(|derive| derive.expand()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(UpdateMany, attributes(vitrail))]
+pub fn derive_update_many(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match UpdateManyDerive::parse(input).and_then(|derive| derive.expand()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }

@@ -1,4 +1,7 @@
-use vitrail_pg::{InsertInput, InsertResult, QueryResult, QueryVariables, VitrailClient, schema};
+use vitrail_pg::{
+    InsertInput, InsertResult, QueryResult, QueryVariables, UpdateData, UpdateMany, VitrailClient,
+    schema,
+};
 
 schema! {
     name my_schema
@@ -47,10 +50,53 @@ struct InsertedUser {
     name: String,
 }
 
+#[allow(dead_code)]
+#[derive(InsertInput)]
+#[vitrail(schema = crate::my_schema::Schema, model = post)]
+struct NewPost {
+    title: String,
+    body: Option<String>,
+    published: bool,
+    author_id: i64,
+}
+
+#[allow(dead_code)]
+#[derive(InsertResult)]
+#[vitrail(schema = crate::my_schema::Schema, model = post, input = NewPost)]
+struct InsertedPost {
+    id: i64,
+    title: String,
+    published: bool,
+    author_id: i64,
+}
+
 #[derive(QueryVariables)]
 struct UserByIdVariables {
     user_id: i64,
 }
+
+#[derive(QueryVariables)]
+struct PostsByAuthorEmailVariables {
+    author_email: String,
+}
+
+#[allow(dead_code)]
+#[derive(UpdateData)]
+#[vitrail(schema = crate::my_schema::Schema, model = post)]
+struct PublishPostsData {
+    published: bool,
+}
+
+#[allow(dead_code)]
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::my_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = PostsByAuthorEmailVariables,
+    where(author.email = eq(author_email))
+)]
+struct PublishPostsByAuthorEmail;
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
@@ -82,6 +128,28 @@ async fn main() {
         .await
         .unwrap();
 
+    client
+        .insert(my_schema::insert::<InsertedPost>(NewPost {
+            title: "Hello Vitrail".to_owned(),
+            body: Some("Draft body".to_owned()),
+            published: false,
+            author_id: user.id,
+        }))
+        .await
+        .unwrap();
+
+    let updated_posts = client
+        .update_many(my_schema::update_many_with_variables::<
+            PublishPostsByAuthorEmail,
+        >(
+            PostsByAuthorEmailVariables {
+                author_email: "alice@example.com".to_owned(),
+            },
+            PublishPostsData { published: true },
+        ))
+        .await
+        .unwrap();
+
     let users = client
         .find_many(my_schema::query_with_variables::<UserWithPosts>(
             UserByIdVariables { user_id: user.id },
@@ -90,5 +158,6 @@ async fn main() {
         .unwrap();
 
     println!("inserted user {}", user.email);
+    println!("updated {} posts", updated_posts);
     println!("fetched {} users", users.len());
 }

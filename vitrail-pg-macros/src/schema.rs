@@ -18,6 +18,7 @@ mod kw {
 mod helpers;
 mod insert_helpers;
 mod query_helpers;
+mod update_helpers;
 
 /// Parsed top-level schema definition plus enough source metadata to translate
 /// clean core validation errors back into compiler diagnostics with spans.
