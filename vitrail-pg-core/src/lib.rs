@@ -4,6 +4,7 @@ mod migration;
 mod migrator;
 mod query;
 mod schema;
+mod update;
 mod validation;
 
 pub use client::VitrailClient;
@@ -26,6 +27,9 @@ pub use schema::{
     Attribute, DefaultAttribute, DefaultFunction, Field, FieldBuilder, FieldKind, FieldType, Model,
     ModelBuilder, RelationAttribute, RelationAttributeBuilder, Resolution, ScalarFieldType,
     ScalarType, Schema, SchemaBuilder,
+};
+pub use update::{
+    UpdateMany, UpdateManyModel, UpdateSpec, UpdateValue, UpdateValueSet, UpdateValues,
 };
 pub use validation::{ValidationError, ValidationErrors, ValidationLocation};
 

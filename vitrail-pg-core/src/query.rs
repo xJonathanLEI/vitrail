@@ -222,6 +222,10 @@ pub enum QueryFilter {
         field: &'static str,
         value: QueryFilterValue,
     },
+    Relation {
+        field: &'static str,
+        filter: Box<QueryFilter>,
+    },
 }
 
 impl QueryFilter {
@@ -229,6 +233,13 @@ impl QueryFilter {
         Self::Eq {
             field,
             value: value.into(),
+        }
+    }
+
+    pub fn relation(field: &'static str, filter: QueryFilter) -> Self {
+        Self::Relation {
+            field,
+            filter: Box::new(filter),
         }
     }
 }
@@ -808,6 +819,59 @@ impl<'a> SqlBuilder<'a> {
                         placeholder
                     ))
                 }
+            }
+            QueryFilter::Relation { field, filter } => {
+                let relation_field = model.field_named(field).ok_or_else(|| {
+                    schema_error(format!(
+                        "unknown relation `{}.{}` in query filter",
+                        model.name(),
+                        field
+                    ))
+                })?;
+
+                if relation_field.kind().is_scalar() {
+                    return Err(schema_error(format!(
+                        "field `{}.{}` is not a relation and cannot appear in `where`",
+                        model.name(),
+                        relation_field.name()
+                    )));
+                }
+
+                let target_model = schema_model(self.schema, relation_field.ty().name())
+                    .ok_or_else(|| {
+                        schema_error(format!(
+                            "relation `{}.{}` points at unknown model `{}`",
+                            model.name(),
+                            relation_field.name(),
+                            relation_field.ty().name()
+                        ))
+                    })?;
+
+                let (nested_fields, parent_fields) =
+                    self.relation_fields(model, relation_field, target_model)?;
+
+                if nested_fields.len() != 1 || parent_fields.len() != 1 {
+                    return Err(schema_error(format!(
+                        "relation `{}.{}` currently requires exactly one parent field and one nested field",
+                        model.name(),
+                        relation_field.name()
+                    )));
+                }
+
+                let nested_alias = format!("t{}", self.next_alias);
+                self.next_alias += 1;
+                let nested_filter = self.filter_sql(target_model, filter, &nested_alias)?;
+
+                Ok(format!(
+                    "EXISTS (SELECT 1 FROM {} AS \"{}\" WHERE \"{}\".{} = \"{}\".{} AND {})",
+                    quoted_ident(target_model.name()),
+                    nested_alias,
+                    nested_alias,
+                    quoted_ident(nested_fields[0]),
+                    table_alias,
+                    quoted_ident(parent_fields[0]),
+                    nested_filter,
+                ))
             }
         }
     }

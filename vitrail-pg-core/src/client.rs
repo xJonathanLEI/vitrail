@@ -1,6 +1,6 @@
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-use crate::{InsertSpec, QuerySpec};
+use crate::{InsertSpec, QuerySpec, UpdateSpec};
 
 /// Postgres client entry point.
 #[derive(Clone, Debug)]
@@ -47,6 +47,13 @@ impl VitrailClient {
         I: InsertSpec,
     {
         insert.execute(&self.pool).await
+    }
+
+    pub async fn update_many<U>(&self, update: U) -> Result<U::Output, sqlx::Error>
+    where
+        U: UpdateSpec,
+    {
+        update.execute(&self.pool).await
     }
 
     pub async fn close(&self) {
