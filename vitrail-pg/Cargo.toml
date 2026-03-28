@@ -4,6 +4,8 @@ version.workspace = true
 authors = ["Jonathan LEI <me@xjonathan.dev>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
+readme = "README.md"
+repository.workspace = true
 description = "PostgreSQL support for vitrail"
 
 [dependencies]

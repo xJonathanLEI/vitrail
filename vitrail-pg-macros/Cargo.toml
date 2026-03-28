@@ -4,6 +4,7 @@ version.workspace = true
 authors = ["Jonathan LEI <me@xjonathan.dev>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
+repository.workspace = true
 description = "Procedural macros for the vitrail-pg crate"
 
 [lib]
