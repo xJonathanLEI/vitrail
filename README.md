@@ -3,6 +3,10 @@
 </p>
 
 <p align="center">
+  <a href="https://crates.io/crates/vitrail-pg"><img alt="crates-badge" src="https://img.shields.io/crates/v/vitrail-pg.svg"></a>
+</p>
+
+<p align="center">
   <strong>A next-generation ORM for Rust, inspired by <a href="https://github.com/prisma/prisma">Prisma</a> and <a href="https://github.com/drizzle-team/drizzle-orm">Drizzle</a>.</strong>
 </p>
 
