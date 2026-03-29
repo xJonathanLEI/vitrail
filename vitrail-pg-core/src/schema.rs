@@ -564,12 +564,22 @@ impl Field {
             })
     }
 
+    pub fn rust_type(&self) -> Option<&RustTypeAttribute> {
+        self.attributes
+            .iter()
+            .find_map(|attribute| match attribute {
+                Attribute::RustType(rust_type) => Some(rust_type),
+                _ => None,
+            })
+    }
+
     fn validate_attributes(&self, model_name: &str, errors: &mut Vec<ValidationError>) {
         let mut seen_id = false;
         let mut seen_unique = false;
         let mut seen_default = false;
         let mut seen_relation = false;
         let mut seen_db_uuid = false;
+        let mut seen_rust_type = false;
 
         for attribute in &self.attributes {
             match attribute {
@@ -698,6 +708,46 @@ impl Field {
                                 attribute: "@db.Uuid".to_owned(),
                             },
                             "`@db.Uuid` is only supported on `String` fields",
+                        ));
+                    }
+                }
+                Attribute::RustType(_) => {
+                    if seen_rust_type {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::Attribute {
+                                model: model_name.to_owned(),
+                                field: self.name.clone(),
+                                attribute: "@rust_ty".to_owned(),
+                            },
+                            "duplicate `@rust_ty` attribute",
+                        ));
+                    } else {
+                        seen_rust_type = true;
+                    }
+
+                    if self.kind().is_relation() {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::Attribute {
+                                model: model_name.to_owned(),
+                                field: self.name.clone(),
+                                attribute: "@rust_ty".to_owned(),
+                            },
+                            "`@rust_ty` can only be used on scalar fields",
+                        ));
+                    } else if !matches!(
+                        &self.ty,
+                        FieldType::Scalar(ScalarFieldType {
+                            scalar: ScalarType::String,
+                            ..
+                        })
+                    ) {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::Attribute {
+                                model: model_name.to_owned(),
+                                field: self.name.clone(),
+                                attribute: "@rust_ty".to_owned(),
+                            },
+                            "`@rust_ty` is only supported on `String` fields",
                         ));
                     }
                 }
@@ -962,6 +1012,22 @@ pub enum Attribute {
     Default(DefaultAttribute),
     Relation(RelationAttribute),
     DbUuid,
+    RustType(RustTypeAttribute),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RustTypeAttribute {
+    path: String,
+}
+
+impl RustTypeAttribute {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

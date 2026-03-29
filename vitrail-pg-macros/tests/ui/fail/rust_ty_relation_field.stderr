@@ -1,0 +1,5 @@
+error: `@rust_ty` can only be used on scalar fields
+  --> tests/ui/fail/rust_ty_relation_field.rs:11:26
+   |
+11 |         address address @rust_ty(Address)
+   |                          ^^^^^^^

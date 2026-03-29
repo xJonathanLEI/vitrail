@@ -425,3 +425,41 @@ fn rejects_optional_fields_in_compound_primary_keys() {
 
     assert!(error.to_string().contains("must not be optional"));
 }
+
+#[test]
+fn allows_string_rust_type_override() {
+    let field = Field::builder("postal_code", FieldType::string())
+        .attributes(vec![Attribute::RustType(RustTypeAttribute::new(
+            "PostalCode",
+        ))])
+        .build();
+
+    assert!(field.is_ok());
+}
+
+#[test]
+fn rejects_rust_type_override_on_non_string_field() {
+    let error = Field::builder("user_id", FieldType::int())
+        .attributes(vec![Attribute::RustType(RustTypeAttribute::new("UserId"))])
+        .build()
+        .expect_err("field should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("only supported on `String` fields")
+    );
+}
+
+#[test]
+fn rejects_duplicate_rust_type_override() {
+    let error = Field::builder("postal_code", FieldType::string())
+        .attributes(vec![
+            Attribute::RustType(RustTypeAttribute::new("PostalCode")),
+            Attribute::RustType(RustTypeAttribute::new("PostalCode")),
+        ])
+        .build()
+        .expect_err("field should fail");
+
+    assert!(error.to_string().contains("duplicate `@rust_ty` attribute"));
+}

@@ -1,5 +1,5 @@
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
-use quote::{ToTokens, format_ident, quote};
+use quote::{format_ident, quote};
 use std::collections::HashSet;
 use syn::spanned::Spanned;
 use syn::{Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Type};
@@ -81,7 +81,7 @@ impl InsertInputDerive {
             generics
                 .make_where_clause()
                 .predicates
-                .push(syn::parse_quote!(#field_ty: Into<::vitrail_pg::InsertValue>));
+                .push(syn::parse_quote!(#field_ty: ::vitrail_pg::InsertScalar));
         }
 
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -108,7 +108,7 @@ impl InsertInputDerive {
             let field_name = &field.field_name;
             quote! {
                 __vitrail_values
-                    .push(#field_name, self.#ident.into())
+                    .push(#field_name, ::vitrail_pg::InsertScalar::into_insert_value(self.#ident))
                     .expect("insert input field names should be unique after derive validation");
             }
         });
@@ -238,23 +238,12 @@ impl InsertResultDerive {
         let decode_fields = fields.iter().map(|field| {
             let ident = &field.ident;
             let field_name = &field.field_name;
-            let type_name = field.ty.to_token_stream().to_string().replace(' ', "");
+            let field_ty = &field.ty;
 
-            if type_name == "chrono::DateTime<chrono::Utc>"
-                || type_name == "::chrono::DateTime<::chrono::Utc>"
-            {
-                quote! {
-                    #ident: {
-                        let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                        ::vitrail_pg::row_as_datetime_utc(row, __vitrail_alias.as_str())?
-                    }
-                }
-            } else {
-                quote! {
-                    #ident: {
-                        let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                        row.try_get(__vitrail_alias.as_str())?
-                    }
+            quote! {
+                #ident: {
+                    let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                    ::vitrail_pg::row_value::<#field_ty>(row, __vitrail_alias.as_str())?
                 }
             }
         });

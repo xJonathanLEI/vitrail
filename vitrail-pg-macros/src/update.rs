@@ -84,7 +84,7 @@ impl UpdateDataDerive {
             generics
                 .make_where_clause()
                 .predicates
-                .push(syn::parse_quote!(#field_ty: Into<::vitrail_pg::UpdateValue>));
+                .push(syn::parse_quote!(#field_ty: ::vitrail_pg::UpdateScalar));
         }
 
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -107,7 +107,7 @@ impl UpdateDataDerive {
 
             quote! {
                 __vitrail_values
-                    .push(#field_name, self.#ident.into())
+                    .push(#field_name, ::vitrail_pg::UpdateScalar::into_update_value(self.#ident))
                     .expect("update data field names should be unique after derive validation");
             }
         });

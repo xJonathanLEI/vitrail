@@ -1,5 +1,5 @@
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
-use quote::{ToTokens, format_ident, quote};
+use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::parse::ParseStream;
 use syn::spanned::Spanned;
@@ -200,6 +200,44 @@ impl QueryResultDerive {
             }
         };
 
+        let query_type_validation_tokens = {
+            let schema_module_ident = schema_module_ident(&schema_path, "QueryResult")?;
+            let schema_module_path = schema_module_path(&schema_path, "QueryResult")?;
+            let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
+                Error::new(
+                    model_name.span(),
+                    "`#[vitrail(model = ...)]` must be a valid identifier",
+                )
+            })?;
+
+            scalar_fields
+                .iter()
+                .map(|field| {
+                    let field_ident = syn::parse_str::<Ident>(&field.query_name.value())?;
+                    let field_ty = &field.ty;
+                    let trait_ident = format_ident!(
+                        "__VitrailQueryResultType_{}_{}_{}",
+                        schema_module_ident,
+                        model_ident,
+                        field_ident,
+                    );
+                    let trait_module_ident = format_ident!(
+                        "__vitrail_query_traits_{}_{}",
+                        schema_module_ident,
+                        model_ident,
+                    );
+                    Ok(quote! {
+                        {
+                            fn __vitrail_assert_query_result_field_type<
+                                T: #schema_module_path::#trait_module_ident::#trait_ident,
+                            >() {}
+                            __vitrail_assert_query_result_field_type::<#field_ty>();
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
+
         let variable_validation_tokens = if let Some(variables_ty) = &variables_ty {
             let mut validations = root_filters
                 .iter()
@@ -220,6 +258,7 @@ impl QueryResultDerive {
                     #[doc(hidden)]
                     fn __vitrail_validate_query(__vitrail_variables: Option<&#variables_ty>) {
                         #root_filter_validation_tokens
+                        #(#query_type_validation_tokens)*
                         if let Some(__vitrail_variables) = __vitrail_variables {
                             #(let _ = &__vitrail_variables.#validations;)*
                         }
@@ -234,6 +273,7 @@ impl QueryResultDerive {
                     #[doc(hidden)]
                     fn __vitrail_validate_query() {
                         #root_filter_validation_tokens
+                        #(#query_type_validation_tokens)*
                     }
                 }
             }
@@ -250,6 +290,7 @@ impl QueryResultDerive {
             .map(|field| {
                 let ident = &field.ident;
                 let field_name = &field.query_name;
+                let field_ty = &field.ty;
 
                 if field.include {
                     let nested_ty = field.nested_type().expect("include field");
@@ -260,23 +301,10 @@ impl QueryResultDerive {
                         }
                     }
                 } else {
-                    let type_name = field.ty.to_token_stream().to_string().replace(' ', "");
-
-                    if type_name == "chrono::DateTime<chrono::Utc>"
-                        || type_name == "::chrono::DateTime<::chrono::Utc>"
-                    {
-                        quote! {
-                            #ident: {
-                                let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                                ::vitrail_pg::row_as_datetime_utc(row, __vitrail_alias.as_str())?
-                            }
-                        }
-                    } else {
-                        quote! {
-                            #ident: {
-                                let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                                row.try_get(__vitrail_alias.as_str())?
-                            }
+                    quote! {
+                        #ident: {
+                            let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
+                            ::vitrail_pg::row_value::<#field_ty>(row, __vitrail_alias.as_str())?
                         }
                     }
                 }
@@ -720,14 +748,14 @@ impl QueryVariablesDerive {
             generics
                 .make_where_clause()
                 .predicates
-                .push(syn::parse_quote!(#field_ty: Into<::vitrail_pg::QueryVariableValue>));
+                .push(syn::parse_quote!(#field_ty: ::vitrail_pg::QueryScalar));
         }
 
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
         let named_values = fields.iter().map(|(field, _)| {
             let name = field.to_string();
-            quote! { (#name, self.#field.into()) }
+            quote! { (#name, ::vitrail_pg::QueryScalar::into_query_variable_value(self.#field)) }
         });
 
         Ok(quote! {
@@ -740,6 +768,44 @@ impl QueryVariablesDerive {
             }
         })
     }
+}
+
+fn schema_module_path(schema_path: &Path, derive_name: &str) -> Result<Path> {
+    if schema_path.segments.len() < 2 {
+        return Err(Error::new(
+            schema_path.span(),
+            format!(
+                "`#[vitrail(schema = ...)]` for `{derive_name}` must point to a schema type like `crate::my_schema::Schema`"
+            ),
+        ));
+    }
+
+    Ok(Path {
+        leading_colon: schema_path.leading_colon,
+        segments: schema_path
+            .segments
+            .iter()
+            .take(schema_path.segments.len() - 1)
+            .cloned()
+            .collect(),
+    })
+}
+
+fn schema_module_ident(schema_path: &Path, derive_name: &str) -> Result<Ident> {
+    schema_path
+        .segments
+        .iter()
+        .rev()
+        .nth(1)
+        .map(|segment| segment.ident.clone())
+        .ok_or_else(|| {
+            Error::new(
+                schema_path.span(),
+                format!(
+                    "`#[vitrail(schema = ...)]` for `{derive_name}` must point to a schema type like `crate::my_schema::Schema`"
+                ),
+            )
+        })
 }
 
 fn option_inner_type(ty: &Type) -> Option<Type> {
@@ -783,28 +849,5 @@ fn json_decode_tokens_for_type(value_ty: &Type, value_expr: TokenStream2) -> Res
         });
     }
 
-    let type_name = value_ty.to_token_stream().to_string().replace(' ', "");
-
-    if type_name == "i64" {
-        return Ok(quote! { ::vitrail_pg::json_as_i64(#value_expr)? });
-    }
-    if type_name == "String" {
-        return Ok(quote! { ::vitrail_pg::json_as_string(#value_expr)? });
-    }
-    if type_name == "bool" {
-        return Ok(quote! { ::vitrail_pg::json_as_bool(#value_expr)? });
-    }
-    if type_name == "f64" {
-        return Ok(quote! { ::vitrail_pg::json_as_f64(#value_expr)? });
-    }
-    if type_name == "chrono::DateTime<chrono::Utc>"
-        || type_name == "::chrono::DateTime<::chrono::Utc>"
-    {
-        return Ok(quote! { ::vitrail_pg::json_as_datetime_utc(#value_expr)? });
-    }
-
-    Err(Error::new(
-        value_ty.span(),
-        format!("unsupported query field type `{}`", type_name),
-    ))
+    Ok(quote! { ::vitrail_pg::json_value::<#value_ty>(#value_expr)? })
 }

@@ -2,7 +2,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedSchema, dollar_crate, rust_type_tokens, to_pascal_case};
+use super::{ParsedSchema, dollar_crate, rust_field_type_tokens, to_pascal_case};
 
 impl ParsedSchema {
     pub(super) fn generate_insert_helper_items(&self, module_name: &Ident) -> Result<TokenStream2> {
@@ -147,7 +147,7 @@ impl ParsedSchema {
                         model.name,
                         field.name
                     );
-                    let rust_ty = rust_type_tokens(&field.ty)?;
+                    let rust_ty = rust_field_type_tokens(field)?;
 
                     Ok(quote! {
                         #[allow(non_camel_case_types)]
@@ -168,7 +168,7 @@ impl ParsedSchema {
                         model.name,
                         field.name
                     );
-                    let rust_ty = rust_type_tokens(&field.ty)?;
+                    let rust_ty = rust_field_type_tokens(field)?;
 
                     Ok(quote! {
                         #[allow(non_camel_case_types)]
@@ -271,7 +271,7 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = rust_type_tokens(&field.ty)?;
+                    let ty = rust_field_type_tokens(field)?;
 
                     Ok(quote! {
                         (
@@ -295,7 +295,7 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = rust_type_tokens(&field.ty)?;
+                    let ty = rust_field_type_tokens(field)?;
 
                     Ok(quote! {
                         (

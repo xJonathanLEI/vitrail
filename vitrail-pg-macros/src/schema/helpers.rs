@@ -14,6 +14,14 @@ impl ParsedSchema {
         let local_query_macro_ident = format_ident!("__vitrail_query_local_{}", module_name);
         let local_insert_macro_ident = format_ident!("__vitrail_insert_local_{}", module_name);
         let local_update_macro_ident = format_ident!("__vitrail_update_local_{}", module_name);
+        let query_trait_reexports = self.models.iter().map(|model| {
+            let trait_module_ident =
+                format_ident!("__vitrail_query_traits_{}_{}", module_name, model.name);
+            quote! {
+                #[doc(hidden)]
+                pub use super::#trait_module_ident;
+            }
+        });
         let insert_trait_reexports = self.models.iter().map(|model| {
             let trait_module_ident =
                 format_ident!("__vitrail_insert_traits_{}_{}", module_name, model.name);
@@ -89,6 +97,7 @@ impl ParsedSchema {
                     ::vitrail_pg::UpdateMany::<Schema, T, ()>::new_with_variables(variables, values)
                 }
 
+                #(#query_trait_reexports)*
                 #(#insert_trait_reexports)*
                 #(#update_trait_reexports)*
 

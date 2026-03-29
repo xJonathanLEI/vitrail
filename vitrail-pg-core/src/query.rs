@@ -130,6 +130,32 @@ impl QueryVariableSet for () {
     }
 }
 
+pub trait StringValueType: Sized + Send + 'static {
+    fn from_db_string(value: String) -> Result<Self, sqlx::Error>;
+
+    fn into_db_string(self) -> String;
+}
+
+impl StringValueType for String {
+    fn from_db_string(value: String) -> Result<Self, sqlx::Error> {
+        Ok(value)
+    }
+
+    fn into_db_string(self) -> String {
+        self
+    }
+}
+
+pub trait QueryScalar: Send {
+    fn into_query_variable_value(self) -> QueryVariableValue;
+}
+
+pub trait QueryResultValue: Sized + Send + 'static {
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error>;
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error>;
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueryVariableValue {
     Null,
@@ -188,6 +214,57 @@ where
     }
 }
 
+impl QueryScalar for i64 {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl QueryScalar for &str {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl QueryScalar for bool {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl QueryScalar for f64 {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl QueryScalar for chrono::DateTime<chrono::Utc> {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl<T> QueryScalar for T
+where
+    T: StringValueType,
+{
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        QueryVariableValue::String(self.into_db_string())
+    }
+}
+
+impl<T> QueryScalar for Option<T>
+where
+    T: QueryScalar,
+{
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        match self {
+            Some(value) => value.into_query_variable_value(),
+            None => QueryVariableValue::Null,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueryFilterValue {
     Variable(String),
@@ -199,17 +276,20 @@ impl QueryFilterValue {
         Self::Variable(name.into())
     }
 
-    pub fn value(value: impl Into<QueryVariableValue>) -> Self {
-        Self::Value(value.into())
+    pub fn value<T>(value: T) -> Self
+    where
+        T: QueryScalar,
+    {
+        Self::Value(value.into_query_variable_value())
     }
 }
 
 impl<T> From<T> for QueryFilterValue
 where
-    T: Into<QueryVariableValue>,
+    T: QueryScalar,
 {
     fn from(value: T) -> Self {
-        Self::Value(value.into())
+        Self::Value(value.into_query_variable_value())
     }
 }
 
@@ -454,6 +534,20 @@ pub fn json_as_bool(value: &JsonValue) -> Result<bool, sqlx::Error> {
         .ok_or_else(|| schema_error("expected JSON boolean in query result".to_owned()))
 }
 
+pub fn json_value<T>(value: &JsonValue) -> Result<T, sqlx::Error>
+where
+    T: QueryResultValue,
+{
+    T::from_json(value)
+}
+
+pub fn json_string_value<T>(value: &JsonValue) -> Result<T, sqlx::Error>
+where
+    T: StringValueType,
+{
+    T::from_db_string(json_as_string(value)?)
+}
+
 pub fn json_as_f64(value: &JsonValue) -> Result<f64, sqlx::Error> {
     value
         .as_f64()
@@ -492,6 +586,94 @@ pub fn row_as_datetime_utc(
 
     let value: chrono::NaiveDateTime = row.try_get(alias)?;
     Ok(value.and_utc())
+}
+
+pub fn row_value<T>(row: &PgRow, alias: &str) -> Result<T, sqlx::Error>
+where
+    T: QueryResultValue,
+{
+    T::from_row(row, alias)
+}
+
+pub fn row_string_value<T>(row: &PgRow, alias: &str) -> Result<T, sqlx::Error>
+where
+    T: StringValueType,
+{
+    T::from_db_string(row.try_get::<String, _>(alias)?)
+}
+
+impl QueryResultValue for i64 {
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        row.try_get(alias)
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        json_as_i64(value)
+    }
+}
+
+impl QueryResultValue for bool {
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        row.try_get(alias)
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        json_as_bool(value)
+    }
+}
+
+impl QueryResultValue for f64 {
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        row.try_get(alias)
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        json_as_f64(value)
+    }
+}
+
+impl QueryResultValue for chrono::DateTime<chrono::Utc> {
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        row_as_datetime_utc(row, alias)
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        json_as_datetime_utc(value)
+    }
+}
+
+impl<T> QueryResultValue for T
+where
+    T: StringValueType,
+{
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        row_string_value(row, alias)
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        json_string_value(value)
+    }
+}
+
+impl<T> QueryResultValue for Option<T>
+where
+    T: QueryResultValue,
+{
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        if row.try_get_raw(alias)?.is_null() {
+            Ok(None)
+        } else {
+            T::from_row(row, alias).map(Some)
+        }
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        if value.is_null() {
+            Ok(None)
+        } else {
+            T::from_json(value).map(Some)
+        }
+    }
 }
 
 fn build_query_sql(

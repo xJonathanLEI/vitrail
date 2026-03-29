@@ -1,9 +1,10 @@
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream as TokenStream2, TokenTree};
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Error, Result, Token, bracketed, parenthesized};
+use syn::spanned::Spanned;
+use syn::{Error, Result, Token, Type, bracketed, parenthesized};
 use vitrail_pg_core as core;
 
 mod kw {
@@ -536,6 +537,15 @@ impl ParsedField {
             })
     }
 
+    fn rust_type(&self) -> Option<&Type> {
+        self.attributes
+            .iter()
+            .find_map(|attribute| match &attribute.kind {
+                ParsedAttributeKind::RustTy(rust_type) => Some(&rust_type.ty),
+                _ => None,
+            })
+    }
+
     fn can_be_omitted_in_insert(&self) -> bool {
         self.ty.optional
             || self.attributes.iter().any(|attribute| {
@@ -677,6 +687,7 @@ impl Parse for ParsedAttribute {
                 "unique" => ParsedAttributeKind::Unique,
                 "default" => ParsedAttributeKind::Default(input.parse()?),
                 "relation" => ParsedAttributeKind::Relation(input.parse()?),
+                "rust_ty" => ParsedAttributeKind::RustTy(input.parse()?),
                 _ => {
                     return Err(Error::new(
                         first.span(),
@@ -706,6 +717,9 @@ impl ParsedAttribute {
                 relation.to_core(model_name, field_name)?,
             )),
             ParsedAttributeKind::DbUuid => Ok(core::Attribute::DbUuid),
+            ParsedAttributeKind::RustTy(rust_type) => Ok(core::Attribute::RustType(
+                core::RustTypeAttribute::new(rust_type.ty.to_token_stream().to_string()),
+            )),
         }
     }
 
@@ -722,6 +736,15 @@ impl ParsedAttribute {
                 quote! { ::vitrail_pg::Attribute::Relation(#relation) }
             }
             ParsedAttributeKind::DbUuid => quote! { ::vitrail_pg::Attribute::DbUuid },
+            ParsedAttributeKind::RustTy(rust_type) => {
+                let path = syn::LitStr::new(
+                    &rust_type.ty.to_token_stream().to_string(),
+                    rust_type.ty.span(),
+                );
+                quote! {
+                    ::vitrail_pg::Attribute::RustType(::vitrail_pg::RustTypeAttribute::new(#path))
+                }
+            }
         })
     }
 
@@ -732,6 +755,7 @@ impl ParsedAttribute {
             ParsedAttributeKind::Default(_) => "@default",
             ParsedAttributeKind::Relation(_) => "@relation",
             ParsedAttributeKind::DbUuid => "@db.Uuid",
+            ParsedAttributeKind::RustTy(_) => "@rust_ty",
         }
     }
 }
@@ -744,6 +768,29 @@ enum ParsedAttributeKind {
     Default(ParsedDefaultAttribute),
     Relation(ParsedRelationAttribute),
     DbUuid,
+    RustTy(ParsedRustTypeAttribute),
+}
+
+#[derive(Debug)]
+struct ParsedRustTypeAttribute {
+    ty: Type,
+}
+
+impl Parse for ParsedRustTypeAttribute {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let content;
+        parenthesized!(content in input);
+        let ty = content.parse::<Type>()?;
+
+        if !content.is_empty() {
+            return Err(Error::new(
+                content.span(),
+                "unexpected tokens in `@rust_ty(...)`",
+            ));
+        }
+
+        Ok(Self { ty })
+    }
 }
 
 /// Parsed `@default(...)` attribute payload.
@@ -976,6 +1023,20 @@ fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
     })
 }
 
+fn rust_field_type_tokens(field: &ParsedField) -> Result<TokenStream2> {
+    let base = if let Some(rust_ty) = field.rust_type() {
+        quote! { #rust_ty }
+    } else {
+        rust_type_tokens(&field.ty)?
+    };
+
+    Ok(if field.ty.optional && field.rust_type().is_some() {
+        quote! { Option<#base> }
+    } else {
+        base
+    })
+}
+
 fn to_pascal_case(name: &str) -> String {
     let mut result = String::new();
 
@@ -1089,6 +1150,39 @@ mod tests {
         assert!(generated.contains("pub mod my_schema"));
         assert!(generated.contains("pub fn query < T > ()"));
         assert!(generated.contains("macro_rules ! __vitrail_query_my_schema"));
+    }
+
+    #[test]
+    fn accepts_string_rust_type_override() {
+        let schema = parse_schema(quote! {
+            name custom_types
+
+            model address {
+                id          Int    @id @default(autoincrement())
+                postal_code String @rust_ty(PostalCode)
+            }
+        });
+
+        schema.validate().expect("schema should validate");
+    }
+
+    #[test]
+    fn rejects_rust_type_override_on_non_string_field() {
+        let schema = parse_schema(quote! {
+            name custom_types
+
+            model address {
+                id      Int @id @default(autoincrement())
+                user_id Int @rust_ty(UserId)
+            }
+        });
+
+        let error = schema.validate().expect_err("schema should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("`@rust_ty` is only supported on `String` fields")
+        );
     }
 
     #[test]

@@ -4,7 +4,9 @@ use std::marker::PhantomData;
 use sqlx::postgres::{PgArguments, PgPool, PgRow};
 use sqlx::{Postgres, query::Query as SqlxQuery};
 
-use crate::query::{BoxFuture, SchemaAccess, alias_name, quoted_ident, schema_error, select_expr};
+use crate::query::{
+    BoxFuture, SchemaAccess, StringValueType, alias_name, quoted_ident, schema_error, select_expr,
+};
 use crate::schema::{
     Attribute, DefaultFunction, Field, FieldType, Model, Resolution, ScalarType, Schema,
 };
@@ -46,6 +48,10 @@ impl InsertValueSet for () {
     fn into_insert_values(self) -> InsertValues {
         InsertValues::new()
     }
+}
+
+pub trait InsertScalar: Send {
+    fn into_insert_value(self) -> InsertValue;
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -174,6 +180,57 @@ where
         match value {
             Some(value) => value.into(),
             None => Self::Null,
+        }
+    }
+}
+
+impl InsertScalar for i64 {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl InsertScalar for &str {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl InsertScalar for bool {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl InsertScalar for f64 {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl InsertScalar for chrono::DateTime<chrono::Utc> {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl<T> InsertScalar for T
+where
+    T: StringValueType,
+{
+    fn into_insert_value(self) -> InsertValue {
+        InsertValue::String(self.into_db_string())
+    }
+}
+
+impl<T> InsertScalar for Option<T>
+where
+    T: InsertScalar,
+{
+    fn into_insert_value(self) -> InsertValue {
+        match self {
+            Some(value) => value.into_insert_value(),
+            None => InsertValue::Null,
         }
     }
 }

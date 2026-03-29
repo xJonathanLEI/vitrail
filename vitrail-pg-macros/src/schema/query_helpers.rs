@@ -2,7 +2,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedSchema, dollar_crate, rust_type_tokens, to_pascal_case};
+use super::{ParsedSchema, dollar_crate, rust_field_type_tokens, to_pascal_case};
 
 impl ParsedSchema {
     pub(super) fn generate_query_helper_macros(&self, module_name: &Ident) -> Result<TokenStream2> {
@@ -31,6 +31,8 @@ impl ParsedSchema {
                 format_ident!("__vitrail_include_struct_{}_{}", module_name, model.name);
             let include_selection_ident =
                 format_ident!("__vitrail_include_selection_{}_{}", module_name, model.name);
+            let trait_module_ident =
+                format_ident!("__vitrail_query_traits_{}_{}", module_name, model.name);
 
             let scalar_fields = model.scalar_fields();
             let relation_fields = model.relation_fields();
@@ -49,6 +51,27 @@ impl ParsedSchema {
                 let ident = &field.name;
                 quote! { (#ident) => {}; }
             });
+
+            let query_result_traits = scalar_fields
+                .iter()
+                .map(|field| {
+                    let trait_ident = format_ident!(
+                        "__VitrailQueryResultType_{}_{}_{}",
+                        module_name,
+                        model.name,
+                        field.name
+                    );
+                    let rust_ty = rust_field_type_tokens(field)?;
+
+                    Ok(quote! {
+                        #[allow(non_camel_case_types)]
+                        #[doc(hidden)]
+                        pub trait #trait_ident {}
+
+                        impl #trait_ident for #rust_ty {}
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
 
             let include_struct_arms = relation_fields
                 .iter()
@@ -69,7 +92,7 @@ impl ParsedSchema {
                         .iter()
                         .map(|target_field| {
                             let field_ident = &target_field.name;
-                            let field_ty = rust_type_tokens(&target_field.ty)?;
+                            let field_ty = rust_field_type_tokens(target_field)?;
                             Ok(quote! { pub #field_ident: #field_ty, })
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -135,7 +158,7 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = rust_type_tokens(&field.ty)?;
+                    let ty = rust_field_type_tokens(field)?;
                     Ok(quote! {
                         (
                             @struct
@@ -230,6 +253,11 @@ impl ParsedSchema {
                             "`"
                         ));
                     };
+                }
+
+                #[doc(hidden)]
+                pub mod #trait_module_ident {
+                    #(#query_result_traits)*
                 }
 
                 #[doc(hidden)]

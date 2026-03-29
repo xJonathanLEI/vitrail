@@ -6,7 +6,7 @@ use sqlx::{Postgres, query::Query as SqlxQuery};
 
 use crate::query::{
     BoxFuture, QueryFilter, QueryFilterValue, QueryVariableSet, QueryVariableValue, QueryVariables,
-    SchemaAccess, column_expr, quoted_ident, schema_error,
+    SchemaAccess, StringValueType, column_expr, quoted_ident, schema_error,
 };
 use crate::schema::{Field, FieldType, Model, Resolution, ScalarType, Schema};
 
@@ -49,6 +49,10 @@ impl UpdateValueSet for () {
     fn into_update_values(self) -> UpdateValues {
         UpdateValues::new()
     }
+}
+
+pub trait UpdateScalar: Send {
+    fn into_update_value(self) -> UpdateValue;
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -177,6 +181,57 @@ where
         match value {
             Some(value) => value.into(),
             None => Self::Null,
+        }
+    }
+}
+
+impl UpdateScalar for i64 {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl UpdateScalar for &str {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl UpdateScalar for bool {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl UpdateScalar for f64 {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl UpdateScalar for chrono::DateTime<chrono::Utc> {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl<T> UpdateScalar for T
+where
+    T: StringValueType,
+{
+    fn into_update_value(self) -> UpdateValue {
+        UpdateValue::String(self.into_db_string())
+    }
+}
+
+impl<T> UpdateScalar for Option<T>
+where
+    T: UpdateScalar,
+{
+    fn into_update_value(self) -> UpdateValue {
+        match self {
+            Some(value) => value.into_update_value(),
+            None => UpdateValue::Null,
         }
     }
 }

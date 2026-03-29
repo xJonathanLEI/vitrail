@@ -5,6 +5,10 @@ mod support;
 mod insert;
 pub(crate) use insert::pg_insert_schema as insert_schema;
 
+#[path = "pg/custom_types.rs"]
+mod custom_types;
+pub(crate) use custom_types::pg_custom_types_schema as custom_types_schema;
+
 #[path = "pg/migrations.rs"]
 mod migrations;
 
