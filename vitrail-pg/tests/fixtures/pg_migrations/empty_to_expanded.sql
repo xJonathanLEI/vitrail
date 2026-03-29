@@ -52,6 +52,9 @@ CREATE TABLE "translation_note" (
 -- CreateIndex
 CREATE UNIQUE INDEX "user_email_key" ON "user"("email");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "post_locale_post_id_title_key" ON "post_locale"("post_id", "title");
+
 -- AddForeignKey
 ALTER TABLE "post" ADD CONSTRAINT "post_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 

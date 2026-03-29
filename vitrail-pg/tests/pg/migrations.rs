@@ -66,6 +66,7 @@ schema! {
         notes   translation_note[]
 
         @@id([post_id, locale])
+        @@unique([post_id, title])
     }
 
     model translation_note {

@@ -15,6 +15,10 @@ pub enum ValidationLocation {
         model: String,
         field: String,
     },
+    ModelUniqueField {
+        model: String,
+        field: String,
+    },
     Field {
         model: String,
         field: String,
@@ -56,6 +60,9 @@ impl fmt::Display for ValidationLocation {
             }
             ValidationLocation::ModelPrimaryKeyField { model, field } => {
                 write!(f, "primary key field `{}` on model `{}`", field, model)
+            }
+            ValidationLocation::ModelUniqueField { model, field } => {
+                write!(f, "unique field `{}` on model `{}`", field, model)
             }
             ValidationLocation::Field { model, field } => {
                 write!(f, "field `{}.{}`", model, field)

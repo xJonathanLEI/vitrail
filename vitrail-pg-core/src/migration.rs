@@ -69,6 +69,14 @@ impl PostgresSchema {
                 });
             }
 
+            for unique_columns in model.unique_column_sets() {
+                indexes.push(PostgresIndex {
+                    name: format!("{}_{}_key", model.name(), unique_columns.join("_")),
+                    columns: unique_columns.into_iter().map(str::to_owned).collect(),
+                    unique: true,
+                });
+            }
+
             tables.push(PostgresTable {
                 name: model.name().to_owned(),
                 columns,
@@ -887,7 +895,7 @@ impl MigrationStep {
                 lines.push(format!(
                     "    CONSTRAINT \"{}\" PRIMARY KEY ({})",
                     table.primary_key.name,
-                    render_identifier_list(&table.primary_key.columns)
+                    render_primary_key_identifier_list(&table.primary_key.columns)
                 ));
 
                 format!(
@@ -904,7 +912,7 @@ impl MigrationStep {
                 if index.unique { "UNIQUE " } else { "" },
                 index.name,
                 table,
-                render_identifier_list(&index.columns)
+                render_index_identifier_list(&index.columns)
             ),
             Self::AddForeignKey { table, foreign_key } => format!(
                 "-- AddForeignKey\nALTER TABLE \"{table}\" ADD CONSTRAINT \"{}\" FOREIGN KEY ({}) REFERENCES \"{}\"({}) ON DELETE {} ON UPDATE {};",
@@ -968,12 +976,20 @@ impl AlterTableAction {
     }
 }
 
-fn render_identifier_list(columns: &[String]) -> String {
+fn render_primary_key_identifier_list(columns: &[String]) -> String {
     columns
         .iter()
         .map(|column| format!(r#""{column}""#))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn render_index_identifier_list(columns: &[String]) -> String {
+    columns
+        .iter()
+        .map(|column| format!(r#""{column}""#))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn render_foreign_key_identifier_list(columns: &[String]) -> String {

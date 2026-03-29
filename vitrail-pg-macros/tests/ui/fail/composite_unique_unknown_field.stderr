@@ -1,0 +1,5 @@
+error: unknown unique field `missing_field`
+  --> tests/ui/fail/composite_unique_unknown_field.rs:13:28
+   |
+13 |         @@unique([post_id, missing_field])
+   |                            ^^^^^^^^^^^^^

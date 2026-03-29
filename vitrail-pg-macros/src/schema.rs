@@ -101,6 +101,10 @@ impl ParsedSchema {
                 .model(model, false)
                 .and_then(|model| model.primary_key_field_span(field, false))
                 .unwrap_or_else(|| self.model_span(model, false)),
+            core::ValidationLocation::ModelUniqueField { model, field } => self
+                .model(model, false)
+                .and_then(|model| model.unique_field_span(field, false))
+                .unwrap_or_else(|| self.model_span(model, false)),
             core::ValidationLocation::Field { model, field } => {
                 let prefer_first = message == "first declaration of this field";
                 self.field_span(model, field, prefer_first)
@@ -303,6 +307,19 @@ impl ParsedModel {
         }
     }
 
+    fn unique_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        if prefer_first {
+            self.attributes
+                .iter()
+                .find_map(|attribute| attribute.unique_field_span(name, true))
+        } else {
+            self.attributes
+                .iter()
+                .rev()
+                .find_map(|attribute| attribute.unique_field_span(name, false))
+        }
+    }
+
     fn scalar_fields(&self) -> Vec<&ParsedField> {
         self.fields
             .iter()
@@ -334,6 +351,7 @@ impl Parse for ParsedModelAttribute {
 
         let kind = match name.to_string().as_str() {
             "id" => ParsedModelAttributeKind::Id(input.parse()?),
+            "unique" => ParsedModelAttributeKind::Unique(input.parse()?),
             _ => {
                 return Err(Error::new(
                     name.span(),
@@ -355,6 +373,9 @@ impl ParsedModelAttribute {
             ParsedModelAttributeKind::Id(primary_key) => {
                 Ok(core::ModelAttribute::Id(primary_key.to_core(model_name)?))
             }
+            ParsedModelAttributeKind::Unique(unique) => {
+                Ok(core::ModelAttribute::Unique(unique.to_core(model_name)?))
+            }
         }
     }
 
@@ -364,18 +385,31 @@ impl ParsedModelAttribute {
                 let primary_key = primary_key.generate_schema_attribute();
                 quote! { ::vitrail_pg::ModelAttribute::Id(#primary_key) }
             }
+            ParsedModelAttributeKind::Unique(unique) => {
+                let unique = unique.generate_schema_attribute();
+                quote! { ::vitrail_pg::ModelAttribute::Unique(#unique) }
+            }
         })
     }
 
     fn name(&self) -> &'static str {
         match &self.kind {
             ParsedModelAttributeKind::Id(_) => "@@id",
+            ParsedModelAttributeKind::Unique(_) => "@@unique",
         }
     }
 
     fn primary_key_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
         match &self.kind {
             ParsedModelAttributeKind::Id(primary_key) => primary_key.field_span(name, prefer_first),
+            ParsedModelAttributeKind::Unique(_) => None,
+        }
+    }
+
+    fn unique_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        match &self.kind {
+            ParsedModelAttributeKind::Id(_) => None,
+            ParsedModelAttributeKind::Unique(unique) => unique.field_span(name, prefer_first),
         }
     }
 }
@@ -383,6 +417,7 @@ impl ParsedModelAttribute {
 #[derive(Debug)]
 enum ParsedModelAttributeKind {
     Id(ParsedModelIdAttribute),
+    Unique(ParsedModelUniqueAttribute),
 }
 
 #[derive(Debug)]
@@ -429,6 +464,69 @@ impl ParsedModelIdAttribute {
                 .fields(vec![#(#fields.to_owned()),*])
                 .build()
                 .expect("model primary key attribute was validated during macro expansion")
+        }
+    }
+
+    fn field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        if prefer_first {
+            self.fields
+                .iter()
+                .find(|ident| *ident == name)
+                .map(Ident::span)
+        } else {
+            self.fields
+                .iter()
+                .rev()
+                .find(|ident| *ident == name)
+                .map(Ident::span)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ParsedModelUniqueAttribute {
+    fields: Vec<Ident>,
+}
+
+impl Parse for ParsedModelUniqueAttribute {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let content;
+        parenthesized!(content in input);
+        let fields = parse_ident_list(&content)?;
+
+        if !content.is_empty() {
+            return Err(Error::new(
+                content.span(),
+                "unexpected tokens in `@@unique(...)`",
+            ));
+        }
+
+        Ok(Self { fields })
+    }
+}
+
+impl ParsedModelUniqueAttribute {
+    fn to_core(
+        &self,
+        _model_name: &str,
+    ) -> std::result::Result<core::ModelUniqueAttribute, core::ValidationErrors> {
+        core::ModelUniqueAttribute::builder()
+            .fields(self.fields.iter().map(ToString::to_string).collect())
+            .build()
+    }
+
+    fn generate_schema_attribute(&self) -> TokenStream2 {
+        let fields = self
+            .fields
+            .iter()
+            .map(|field| syn::LitStr::new(&field.to_string(), field.span()))
+            .collect::<Vec<_>>();
+
+        quote! {
+            ::vitrail_pg::ModelUniqueAttribute::builder()
+                .fields(vec![#(#fields.to_owned()),*])
+                .build()
+                .expect("model unique attribute was validated during macro expansion")
         }
     }
 

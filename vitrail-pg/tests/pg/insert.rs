@@ -18,13 +18,24 @@ schema! {
     }
 
     model post {
-        id         Int      @id @default(autoincrement())
+        id         Int           @id @default(autoincrement())
         title      String
         body       String?
         published  Boolean
         author_id  Int
-        created_at DateTime @default(now())
-        author     user     @relation(fields: [author_id], references: [id])
+        created_at DateTime      @default(now())
+        author     user          @relation(fields: [author_id], references: [id])
+        locales    post_locale[]
+    }
+
+    model post_locale {
+        id      Int    @id @default(autoincrement())
+        post_id Int
+        locale  String
+        title   String
+        post    post   @relation(fields: [post_id], references: [id])
+
+        @@unique([post_id, locale])
     }
 }
 
@@ -398,6 +409,100 @@ async fn helper_scalar_insert_nullable_field_round_trips_as_null_on_postgres() {
     assert_eq!(stored.0, post.id);
     assert_eq!(stored.1, post.body);
     assert_eq!(stored.2, post.author_id);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn duplicate_insert_violates_composite_unique_constraint_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let user = client
+        .insert(insert! {
+            crate::insert_schema,
+            user {
+                data: {
+                    email: "frank@example.com".to_owned(),
+                    name: "Frank".to_owned(),
+                },
+                select: {
+                    id: true,
+                },
+            }
+        })
+        .await
+        .expect("user insert should succeed");
+
+    let post = client
+        .insert(insert! {
+            crate::insert_schema,
+            post {
+                data: {
+                    title: "Composite unique".to_owned(),
+                    body: None,
+                    published: true,
+                    author_id: user.id,
+                },
+                select: {
+                    id: true,
+                },
+            }
+        })
+        .await
+        .expect("post insert should succeed");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    sqlx::query(
+        r#"
+        INSERT INTO "post_locale" ("post_id", "locale", "title")
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind(post.id)
+    .bind("en")
+    .bind("Hello")
+    .execute(&pool)
+    .await
+    .expect("first insert should succeed");
+
+    let error = sqlx::query(
+        r#"
+        INSERT INTO "post_locale" ("post_id", "locale", "title")
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind(post.id)
+    .bind("en")
+    .bind("Hello again")
+    .execute(&pool)
+    .await
+    .expect_err("duplicate insert should fail");
+
+    let database_error = error
+        .as_database_error()
+        .expect("duplicate insert should return a database error");
+
+    assert_eq!(database_error.code().as_deref(), Some("23505"));
+    assert!(
+        database_error
+            .message()
+            .contains("post_locale_post_id_locale_key"),
+        "unexpected database error: {database_error}",
+    );
 
     pool.close().await;
     client.close().await;

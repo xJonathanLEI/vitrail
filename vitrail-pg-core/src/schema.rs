@@ -154,13 +154,25 @@ impl Model {
             .collect()
     }
 
+    pub fn unique_column_sets(&self) -> Vec<Vec<&str>> {
+        self.attributes
+            .iter()
+            .filter_map(|attribute| match attribute {
+                ModelAttribute::Unique(unique) => {
+                    Some(unique.fields.iter().map(String::as_str).collect::<Vec<_>>())
+                }
+                ModelAttribute::Id(_) => None,
+            })
+            .collect()
+    }
+
     fn primary_key_attribute(&self) -> Option<&ModelPrimaryKeyAttribute> {
         self.attributes
             .iter()
-            .map(|attribute| match attribute {
-                ModelAttribute::Id(primary_key) => primary_key,
+            .find_map(|attribute| match attribute {
+                ModelAttribute::Id(primary_key) => Some(primary_key),
+                ModelAttribute::Unique(_) => None,
             })
-            .next()
     }
 
     fn validate_shallow(&self, errors: &mut Vec<ValidationError>) {
@@ -195,6 +207,7 @@ impl Model {
 
                     primary_key.validate(self, errors);
                 }
+                ModelAttribute::Unique(unique) => unique.validate(self, errors),
             }
         }
 
@@ -1033,6 +1046,7 @@ impl RustTypeAttribute {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelAttribute {
     Id(ModelPrimaryKeyAttribute),
+    Unique(ModelUniqueAttribute),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1139,6 +1153,108 @@ impl ModelPrimaryKeyAttributeBuilder {
                     attribute: "@@id".to_owned(),
                 },
                 "`@@id([...])` cannot be empty",
+            )]))
+        } else {
+            Ok(attribute)
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelUniqueAttribute {
+    fields: Vec<String>,
+}
+
+impl ModelUniqueAttribute {
+    pub fn builder() -> ModelUniqueAttributeBuilder {
+        ModelUniqueAttributeBuilder::new()
+    }
+
+    pub fn fields(&self) -> &[String] {
+        &self.fields
+    }
+
+    fn validate(&self, model: &Model, errors: &mut Vec<ValidationError>) {
+        if self.fields.is_empty() {
+            errors.push(ValidationError::new(
+                ValidationLocation::ModelAttribute {
+                    model: model.name.clone(),
+                    attribute: "@@unique".to_owned(),
+                },
+                "`@@unique([...])` cannot be empty",
+            ));
+            return;
+        }
+
+        let mut seen = HashSet::new();
+        for field_name in &self.fields {
+            if !seen.insert(field_name.as_str()) {
+                errors.push(ValidationError::new(
+                    ValidationLocation::ModelUniqueField {
+                        model: model.name.clone(),
+                        field: field_name.clone(),
+                    },
+                    format!("duplicate unique field `{}`", field_name),
+                ));
+                continue;
+            }
+
+            match model.field_named(field_name) {
+                Some(field) => {
+                    if matches!(field.ty(), FieldType::Relation { .. }) {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::ModelUniqueField {
+                                model: model.name.clone(),
+                                field: field_name.clone(),
+                            },
+                            format!("unique field `{}` must be scalar", field_name),
+                        ));
+                    }
+                }
+                None => errors.push(ValidationError::new(
+                    ValidationLocation::ModelUniqueField {
+                        model: model.name.clone(),
+                        field: field_name.clone(),
+                    },
+                    format!("unknown unique field `{}`", field_name),
+                )),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelUniqueAttributeBuilder {
+    fields: Vec<String>,
+}
+
+impl ModelUniqueAttributeBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn field(mut self, field: impl Into<String>) -> Self {
+        self.fields.push(field.into());
+        self
+    }
+
+    pub fn fields(mut self, fields: Vec<String>) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    pub fn build(self) -> Result<ModelUniqueAttribute, ValidationErrors> {
+        let attribute = ModelUniqueAttribute {
+            fields: self.fields,
+        };
+
+        if attribute.fields.is_empty() {
+            Err(ValidationErrors::from(vec![ValidationError::new(
+                ValidationLocation::ModelAttribute {
+                    model: "<model>".to_owned(),
+                    attribute: "@@unique".to_owned(),
+                },
+                "`@@unique([...])` cannot be empty",
             )]))
         } else {
             Ok(attribute)

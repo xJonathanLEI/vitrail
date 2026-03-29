@@ -31,8 +31,8 @@ pub use query::{
 pub use schema::{
     Attribute, DefaultAttribute, DefaultFunction, Field, FieldBuilder, FieldKind, FieldType, Model,
     ModelAttribute, ModelBuilder, ModelPrimaryKeyAttribute, ModelPrimaryKeyAttributeBuilder,
-    RelationAttribute, RelationAttributeBuilder, Resolution, RustTypeAttribute, ScalarFieldType,
-    ScalarType, Schema, SchemaBuilder,
+    ModelUniqueAttribute, ModelUniqueAttributeBuilder, RelationAttribute, RelationAttributeBuilder,
+    Resolution, RustTypeAttribute, ScalarFieldType, ScalarType, Schema, SchemaBuilder,
 };
 pub use update::{
     UpdateMany, UpdateManyModel, UpdateScalar, UpdateSpec, UpdateValue, UpdateValueSet,

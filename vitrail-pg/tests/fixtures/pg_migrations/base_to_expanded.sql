@@ -29,6 +29,9 @@ CREATE TABLE "translation_note" (
     CONSTRAINT "translation_note_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateIndex
+CREATE UNIQUE INDEX "post_locale_post_id_title_key" ON "post_locale"("post_id", "title");
+
 -- AddForeignKey
 ALTER TABLE "comment" ADD CONSTRAINT "comment_post_id_fkey" FOREIGN KEY ("post_id") REFERENCES "post"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
