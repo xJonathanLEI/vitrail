@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
 use rust_decimal::Decimal;
-use sqlx::postgres::{PgArguments, PgPool, PgRow};
+use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::{Postgres, query::Query as SqlxQuery};
 
+use crate::PgExecutor;
 use crate::query::{
     BoxFuture, SchemaAccess, StringValueType, alias_name, quoted_ident, schema_error, select_expr,
 };
@@ -16,7 +17,11 @@ use crate::schema::{
 pub trait InsertSpec: Send + Sync {
     type Output: Send + 'static;
 
-    fn execute<'a>(&'a self, pool: &'a PgPool) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>>;
+    #[doc(hidden)]
+    fn execute<'a>(
+        &'a self,
+        executor: &'a dyn PgExecutor,
+    ) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>>;
 }
 
 /// Runtime contract implemented by insert result models.
@@ -302,7 +307,10 @@ where
 {
     type Output = T;
 
-    fn execute<'a>(&'a self, pool: &'a PgPool) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>> {
+    fn execute<'a>(
+        &'a self,
+        executor: &'a dyn PgExecutor,
+    ) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>> {
         Box::pin(async move {
             let (sql, bindings) = build_insert_sql(
                 S::schema(),
@@ -310,8 +318,8 @@ where
                 &self.values,
                 T::returning_fields(),
             )?;
-            let row = bind_insert(sqlx::query(&sql), &bindings)
-                .fetch_one(pool)
+            let row = executor
+                .fetch_one(bind_insert(sqlx::query(&sql), &bindings))
                 .await?;
 
             T::from_row(&row, T::model_name())

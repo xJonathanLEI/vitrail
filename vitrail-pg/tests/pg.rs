@@ -35,3 +35,7 @@ pub(crate) use update::pg_update_schema as update_schema;
 #[path = "pg/delete.rs"]
 mod delete;
 pub(crate) use delete::pg_delete_schema as delete_schema;
+
+#[path = "pg/transaction.rs"]
+mod transaction;
+pub(crate) use transaction::pg_transaction_schema as transaction_schema;

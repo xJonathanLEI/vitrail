@@ -32,3 +32,7 @@ path = "../examples/pg_migration_cli.rs"
 [[example]]
 name = "pg_custom_string_types"
 path = "../examples/pg_custom_string_types.rs"
+
+[[example]]
+name = "pg_transaction"
+path = "../examples/pg_transaction.rs"

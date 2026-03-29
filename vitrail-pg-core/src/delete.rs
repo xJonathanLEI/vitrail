@@ -1,8 +1,9 @@
 use std::marker::PhantomData;
 
-use sqlx::postgres::{PgArguments, PgPool};
+use sqlx::postgres::PgArguments;
 use sqlx::{Postgres, query::Query as SqlxQuery};
 
+use crate::PgExecutor;
 use crate::query::{
     BoxFuture, QueryFilter, QueryFilterValue, QueryVariableSet, QueryVariableValue, QueryVariables,
     SchemaAccess, column_expr, quoted_ident, schema_error,
@@ -13,7 +14,11 @@ use crate::schema::{Field, FieldType, Model, Resolution, ScalarType, Schema};
 pub trait DeleteSpec: Send + Sync {
     type Output: Send + 'static;
 
-    fn execute<'a>(&'a self, pool: &'a PgPool) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>>;
+    #[doc(hidden)]
+    fn execute<'a>(
+        &'a self,
+        executor: &'a dyn PgExecutor,
+    ) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>>;
 }
 
 /// Runtime contract implemented by bulk delete models.
@@ -109,7 +114,10 @@ where
 {
     type Output = u64;
 
-    fn execute<'a>(&'a self, pool: &'a PgPool) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>> {
+    fn execute<'a>(
+        &'a self,
+        executor: &'a dyn PgExecutor,
+    ) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>> {
         Box::pin(async move {
             let filter = self.filter();
             let (sql, bindings) = build_delete_many_sql(
@@ -118,8 +126,8 @@ where
                 filter.as_ref(),
                 &self.variables,
             )?;
-            let result = bind_delete(sqlx::query(&sql), &bindings)
-                .execute(pool)
+            let result = executor
+                .execute(bind_delete(sqlx::query(&sql), &bindings))
                 .await?;
             Ok(result.rows_affected())
         })

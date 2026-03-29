@@ -3,36 +3,40 @@ use std::marker::PhantomData;
 
 use heck::ToUpperCamelCase;
 use serde_json::Value as JsonValue;
-use sqlx::postgres::{PgArguments, PgPool, PgRow};
+use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::{Postgres, Row as _, ValueRef as _};
 
 pub use futures_util::future::BoxFuture;
 use rust_decimal::Decimal;
 
+use crate::PgExecutor;
 use crate::schema::{FieldType, Model, ScalarType, Schema};
 
 /// Runtime contract implemented by executable query values.
 pub trait QuerySpec: Send + Sync {
     type Output: Send + 'static;
 
+    #[doc(hidden)]
     fn fetch_many<'a>(
         &'a self,
-        pool: &'a PgPool,
+        executor: &'a dyn PgExecutor,
     ) -> BoxFuture<'a, Result<Vec<Self::Output>, sqlx::Error>>;
 
+    #[doc(hidden)]
     fn fetch_optional<'a>(
         &'a self,
-        pool: &'a PgPool,
+        executor: &'a dyn PgExecutor,
     ) -> BoxFuture<'a, Result<Option<Self::Output>, sqlx::Error>> {
-        Box::pin(async move { Ok(self.fetch_many(pool).await?.into_iter().next()) })
+        Box::pin(async move { Ok(self.fetch_many(executor).await?.into_iter().next()) })
     }
 
+    #[doc(hidden)]
     fn fetch_first<'a>(
         &'a self,
-        pool: &'a PgPool,
+        executor: &'a dyn PgExecutor,
     ) -> BoxFuture<'a, Result<Self::Output, sqlx::Error>> {
         Box::pin(async move {
-            self.fetch_optional(pool)
+            self.fetch_optional(executor)
                 .await?
                 .ok_or(sqlx::Error::RowNotFound)
         })
@@ -454,13 +458,13 @@ where
 
     fn fetch_many<'a>(
         &'a self,
-        pool: &'a PgPool,
+        executor: &'a dyn PgExecutor,
     ) -> BoxFuture<'a, Result<Vec<Self::Output>, sqlx::Error>> {
         Box::pin(async move {
             let selection = self.selection();
             let (sql, bindings) = build_query_sql(S::schema(), &selection, &self.variables)?;
-            let rows = bind_query(sqlx::query(&sql), &bindings)
-                .fetch_all(pool)
+            let rows = executor
+                .fetch_all(bind_query(sqlx::query(&sql), &bindings))
                 .await?;
             let mut values = Vec::with_capacity(rows.len());
             let root_prefix = selection.model;
@@ -475,14 +479,14 @@ where
 
     fn fetch_optional<'a>(
         &'a self,
-        pool: &'a PgPool,
+        executor: &'a dyn PgExecutor,
     ) -> BoxFuture<'a, Result<Option<Self::Output>, sqlx::Error>> {
         Box::pin(async move {
             let selection = self.selection();
             let (sql, bindings) = build_query_sql(S::schema(), &selection, &self.variables)?;
             let sql = format!("{sql} LIMIT 1");
-            let row = bind_query(sqlx::query(&sql), &bindings)
-                .fetch_optional(pool)
+            let row = executor
+                .fetch_optional(bind_query(sqlx::query(&sql), &bindings))
                 .await?;
             let root_prefix = selection.model;
 
