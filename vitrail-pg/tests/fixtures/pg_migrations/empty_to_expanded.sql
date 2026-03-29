@@ -16,6 +16,7 @@ CREATE TABLE "post" (
     "published" BOOLEAN NOT NULL,
     "author_id" INTEGER NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "score" DECIMAL(65,30) NOT NULL,
     "updated_at" TIMESTAMP(3),
 
     CONSTRAINT "post_pkey" PRIMARY KEY ("id")

@@ -9,6 +9,7 @@ description = "Core types for the vitrail-pg crate"
 
 [dependencies]
 chrono.workspace = true
+rust_decimal.workspace = true
 futures-util.workspace = true
 heck.workspace = true
 serde_json.workspace = true

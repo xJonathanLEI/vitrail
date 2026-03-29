@@ -45,6 +45,7 @@ schema! {
         published  Boolean
         author_id  Int           @index
         created_at DateTime      @default(now())
+        score      Decimal
         updated_at DateTime?
         author     user          @relation(fields: [author_id], references: [id])
         comments   comment[]

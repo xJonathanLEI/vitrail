@@ -705,7 +705,7 @@ impl ColumnType {
             (Self::Boolean, _) => "BOOLEAN",
             (Self::Timestamp3, _) => "TIMESTAMP(3)",
             (Self::DoublePrecision, _) => "DOUBLE PRECISION",
-            (Self::Numeric, _) => "DECIMAL",
+            (Self::Numeric, _) => "DECIMAL(65,30)",
             (Self::Bytea, _) => "BYTEA",
             (Self::JsonB, _) => "JSONB",
             (Self::Uuid, _) => "UUID",

@@ -7,6 +7,7 @@ use sqlx::postgres::{PgArguments, PgPool, PgRow};
 use sqlx::{Postgres, Row as _, ValueRef as _};
 
 pub use futures_util::future::BoxFuture;
+use rust_decimal::Decimal;
 
 use crate::schema::{FieldType, Model, ScalarType, Schema};
 
@@ -163,6 +164,7 @@ pub enum QueryVariableValue {
     String(String),
     Bool(bool),
     Float(f64),
+    Decimal(Decimal),
     DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -193,6 +195,12 @@ impl From<bool> for QueryVariableValue {
 impl From<f64> for QueryVariableValue {
     fn from(value: f64) -> Self {
         Self::Float(value)
+    }
+}
+
+impl From<Decimal> for QueryVariableValue {
+    fn from(value: Decimal) -> Self {
+        Self::Decimal(value)
     }
 }
 
@@ -233,6 +241,12 @@ impl QueryScalar for bool {
 }
 
 impl QueryScalar for f64 {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl QueryScalar for Decimal {
     fn into_query_variable_value(self) -> QueryVariableValue {
         self.into()
     }
@@ -554,6 +568,47 @@ pub fn json_as_f64(value: &JsonValue) -> Result<f64, sqlx::Error> {
         .ok_or_else(|| schema_error("expected JSON float in query result".to_owned()))
 }
 
+pub fn json_as_decimal(value: &JsonValue) -> Result<Decimal, sqlx::Error> {
+    match value {
+        JsonValue::String(value) => parse_decimal(value),
+        JsonValue::Number(value) => parse_decimal(&value.to_string()),
+        _ => Err(schema_error(
+            "expected JSON decimal string or number in query result".to_owned(),
+        )),
+    }
+}
+
+pub fn parse_decimal(value: &str) -> Result<Decimal, sqlx::Error> {
+    Decimal::from_str_exact(value)
+        .or_else(|_| Decimal::from_scientific(value))
+        .or_else(|_| {
+            let normalized = normalize_decimal_string(value);
+            Decimal::from_str_exact(&normalized).or_else(|_| Decimal::from_scientific(&normalized))
+        })
+        .map_err(|error| {
+            schema_error(format!(
+                "invalid decimal in query result `{value}`: {error}"
+            ))
+        })
+}
+
+fn normalize_decimal_string(value: &str) -> String {
+    if let Some((integer, fractional)) = value.split_once('.') {
+        let fractional = fractional.trim_end_matches('0');
+        if fractional.is_empty() {
+            integer.to_owned()
+        } else {
+            format!("{integer}.{fractional}")
+        }
+    } else {
+        value.to_owned()
+    }
+}
+
+pub fn row_as_decimal(row: &PgRow, alias: &str) -> Result<Decimal, sqlx::Error> {
+    row.try_get(alias)
+}
+
 pub fn json_as_datetime_utc(
     value: &JsonValue,
 ) -> Result<chrono::DateTime<chrono::Utc>, sqlx::Error> {
@@ -629,6 +684,16 @@ impl QueryResultValue for f64 {
 
     fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
         json_as_f64(value)
+    }
+}
+
+impl QueryResultValue for Decimal {
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        row_as_decimal(row, alias)
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        json_as_decimal(value)
     }
 }
 
@@ -1092,7 +1157,7 @@ impl<'a> SqlBuilder<'a> {
                 }
             };
 
-            items.push(column_expr(table_alias, field.name(), scalar));
+            items.push(json_column_expr(table_alias, field.name(), scalar));
         }
 
         for relation in &selection.relations {
@@ -1244,6 +1309,16 @@ pub(crate) fn column_expr(table_alias: &str, field_name: &str, scalar: ScalarTyp
     }
 }
 
+pub(crate) fn json_column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> String {
+    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
+    match scalar {
+        ScalarType::Int => format!("({column_sql})::bigint"),
+        ScalarType::DateTime => format!("({column_sql} AT TIME ZONE 'UTC')"),
+        ScalarType::Decimal => format!("({column_sql})::text"),
+        _ => column_sql,
+    }
+}
+
 pub(crate) fn select_expr(
     table_alias: &str,
     field_name: &str,
@@ -1265,6 +1340,7 @@ fn bind_query<'q>(
             QueryVariableValue::String(value) => query.bind(value),
             QueryVariableValue::Bool(value) => query.bind(*value),
             QueryVariableValue::Float(value) => query.bind(*value),
+            QueryVariableValue::Decimal(value) => query.bind(*value),
             QueryVariableValue::DateTime(value) => query.bind(*value),
         };
     }

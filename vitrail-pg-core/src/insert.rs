@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
+use rust_decimal::Decimal;
 use sqlx::postgres::{PgArguments, PgPool, PgRow};
 use sqlx::{Postgres, query::Query as SqlxQuery};
 
@@ -133,6 +134,7 @@ pub enum InsertValue {
     String(String),
     Bool(bool),
     Float(f64),
+    Decimal(Decimal),
     DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -163,6 +165,12 @@ impl From<bool> for InsertValue {
 impl From<f64> for InsertValue {
     fn from(value: f64) -> Self {
         Self::Float(value)
+    }
+}
+
+impl From<Decimal> for InsertValue {
+    fn from(value: Decimal) -> Self {
+        Self::Decimal(value)
     }
 }
 
@@ -203,6 +211,12 @@ impl InsertScalar for bool {
 }
 
 impl InsertScalar for f64 {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl InsertScalar for Decimal {
     fn into_insert_value(self) -> InsertValue {
         self.into()
     }
@@ -518,6 +532,7 @@ fn insert_value_matches_field(value: &InsertValue, field: &Field) -> bool {
         InsertValue::String(_) => scalar.scalar() == ScalarType::String,
         InsertValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         InsertValue::Float(_) => scalar.scalar() == ScalarType::Float,
+        InsertValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
         InsertValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
     }
 }
@@ -553,6 +568,7 @@ fn bind_insert<'q>(
             InsertValue::String(value) => query.bind(value),
             InsertValue::Bool(value) => query.bind(*value),
             InsertValue::Float(value) => query.bind(*value),
+            InsertValue::Decimal(value) => query.bind(*value),
             InsertValue::DateTime(value) => query.bind(*value),
         };
     }

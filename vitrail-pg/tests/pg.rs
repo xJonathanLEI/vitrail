@@ -9,6 +9,10 @@ pub(crate) use insert::pg_insert_schema as insert_schema;
 mod custom_types;
 pub(crate) use custom_types::pg_custom_types_schema as custom_types_schema;
 
+#[path = "pg/decimal.rs"]
+mod decimal;
+pub(crate) use decimal::pg_decimal_schema as decimal_schema;
+
 #[path = "pg/migrations.rs"]
 mod migrations;
 

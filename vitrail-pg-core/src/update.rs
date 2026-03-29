@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+use rust_decimal::Decimal;
 use sqlx::postgres::{PgArguments, PgPool};
 use sqlx::{Postgres, query::Query as SqlxQuery};
 
@@ -134,6 +135,7 @@ pub enum UpdateValue {
     String(String),
     Bool(bool),
     Float(f64),
+    Decimal(Decimal),
     DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -164,6 +166,12 @@ impl From<bool> for UpdateValue {
 impl From<f64> for UpdateValue {
     fn from(value: f64) -> Self {
         Self::Float(value)
+    }
+}
+
+impl From<Decimal> for UpdateValue {
+    fn from(value: Decimal) -> Self {
+        Self::Decimal(value)
     }
 }
 
@@ -204,6 +212,12 @@ impl UpdateScalar for bool {
 }
 
 impl UpdateScalar for f64 {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl UpdateScalar for Decimal {
     fn into_update_value(self) -> UpdateValue {
         self.into()
     }
@@ -702,6 +716,7 @@ enum BoundValue {
     String(String),
     Bool(bool),
     Float(f64),
+    Decimal(Decimal),
     DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -713,6 +728,7 @@ impl From<UpdateValue> for BoundValue {
             UpdateValue::String(value) => Self::String(value),
             UpdateValue::Bool(value) => Self::Bool(value),
             UpdateValue::Float(value) => Self::Float(value),
+            UpdateValue::Decimal(value) => Self::Decimal(value),
             UpdateValue::DateTime(value) => Self::DateTime(value),
         }
     }
@@ -726,6 +742,7 @@ impl From<QueryVariableValue> for BoundValue {
             QueryVariableValue::String(value) => Self::String(value),
             QueryVariableValue::Bool(value) => Self::Bool(value),
             QueryVariableValue::Float(value) => Self::Float(value),
+            QueryVariableValue::Decimal(value) => Self::Decimal(value),
             QueryVariableValue::DateTime(value) => Self::DateTime(value),
         }
     }
@@ -742,6 +759,7 @@ fn update_value_matches_field(value: &UpdateValue, field: &Field) -> bool {
         UpdateValue::String(_) => scalar.scalar() == ScalarType::String,
         UpdateValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         UpdateValue::Float(_) => scalar.scalar() == ScalarType::Float,
+        UpdateValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
         UpdateValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
     }
 }
@@ -757,6 +775,7 @@ fn query_value_matches_field(value: &QueryVariableValue, field: &Field) -> bool 
         QueryVariableValue::String(_) => scalar.scalar() == ScalarType::String,
         QueryVariableValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         QueryVariableValue::Float(_) => scalar.scalar() == ScalarType::Float,
+        QueryVariableValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
         QueryVariableValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
     }
 }
@@ -772,6 +791,7 @@ fn bind_update<'q>(
             BoundValue::String(value) => query.bind(value),
             BoundValue::Bool(value) => query.bind(*value),
             BoundValue::Float(value) => query.bind(*value),
+            BoundValue::Decimal(value) => query.bind(*value),
             BoundValue::DateTime(value) => query.bind(*value),
         };
     }
