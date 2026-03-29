@@ -23,6 +23,7 @@ model post {
   created_at DateTime      @default(now()) @db.Timestamp(3)
   score      Decimal
   updated_at DateTime?     @db.Timestamp(3)
+  checksum   Bytes?
   author     user          @relation(fields: [author_id], references: [id])
   comments   comment[]
   locales    post_locale[]

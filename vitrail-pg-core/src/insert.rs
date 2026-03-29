@@ -140,6 +140,7 @@ pub enum InsertValue {
     Bool(bool),
     Float(f64),
     Decimal(Decimal),
+    Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -176,6 +177,18 @@ impl From<f64> for InsertValue {
 impl From<Decimal> for InsertValue {
     fn from(value: Decimal) -> Self {
         Self::Decimal(value)
+    }
+}
+
+impl From<Vec<u8>> for InsertValue {
+    fn from(value: Vec<u8>) -> Self {
+        Self::Bytes(value)
+    }
+}
+
+impl From<&[u8]> for InsertValue {
+    fn from(value: &[u8]) -> Self {
+        Self::Bytes(value.to_vec())
     }
 }
 
@@ -222,6 +235,18 @@ impl InsertScalar for f64 {
 }
 
 impl InsertScalar for Decimal {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl InsertScalar for Vec<u8> {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl InsertScalar for &[u8] {
     fn into_insert_value(self) -> InsertValue {
         self.into()
     }
@@ -332,7 +357,7 @@ fn build_insert_sql(
     model_name: &str,
     values: &InsertValues,
     returning_fields: &[&'static str],
-) -> Result<(String, Vec<InsertValue>), sqlx::Error> {
+) -> Result<(String, Vec<BoundInsertValue>), sqlx::Error> {
     let model = schema_model(schema, model_name)?;
 
     validate_insert_values(model, values)?;
@@ -352,8 +377,20 @@ fn build_insert_sql(
             .iter()
             .map(|(field, _)| quoted_ident(field.name()))
             .collect::<Vec<_>>();
-        let placeholders = (1..=ordered_values.len())
-            .map(|index| format!("${index}"))
+        let placeholders = ordered_values
+            .iter()
+            .enumerate()
+            .map(|(index, (field, value))| {
+                let placeholder = format!("${}", index + 1);
+                match (field.ty(), value) {
+                    (FieldType::Scalar(scalar), InsertValue::Null)
+                        if scalar.scalar() == ScalarType::Bytes =>
+                    {
+                        format!("{placeholder}::bytea")
+                    }
+                    _ => placeholder,
+                }
+            })
             .collect::<Vec<_>>();
 
         format!(
@@ -367,10 +404,45 @@ fn build_insert_sql(
 
     let bindings = ordered_values
         .into_iter()
-        .map(|(_, value)| value.clone())
+        .map(|(field, value)| match (field.ty(), value.clone()) {
+            (FieldType::Scalar(scalar), InsertValue::Null)
+                if scalar.scalar() == ScalarType::Bytes =>
+            {
+                BoundInsertValue::NullBytes
+            }
+            (_, value) => value.into(),
+        })
         .collect();
 
     Ok((sql, bindings))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum BoundInsertValue {
+    Null,
+    NullBytes,
+    Int(i64),
+    String(String),
+    Bool(bool),
+    Float(f64),
+    Decimal(Decimal),
+    Bytes(Vec<u8>),
+    DateTime(chrono::DateTime<chrono::Utc>),
+}
+
+impl From<InsertValue> for BoundInsertValue {
+    fn from(value: InsertValue) -> Self {
+        match value {
+            InsertValue::Null => Self::Null,
+            InsertValue::Int(value) => Self::Int(value),
+            InsertValue::String(value) => Self::String(value),
+            InsertValue::Bool(value) => Self::Bool(value),
+            InsertValue::Float(value) => Self::Float(value),
+            InsertValue::Decimal(value) => Self::Decimal(value),
+            InsertValue::Bytes(value) => Self::Bytes(value),
+            InsertValue::DateTime(value) => Self::DateTime(value),
+        }
+    }
 }
 
 fn validate_insert_values(model: &Model, values: &InsertValues) -> Result<(), sqlx::Error> {
@@ -541,6 +613,7 @@ fn insert_value_matches_field(value: &InsertValue, field: &Field) -> bool {
         InsertValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         InsertValue::Float(_) => scalar.scalar() == ScalarType::Float,
         InsertValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
+        InsertValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         InsertValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
     }
 }
@@ -567,17 +640,19 @@ fn schema_model<'a>(schema: &'a Schema, requested: &str) -> Result<&'a Model, sq
 
 fn bind_insert<'q>(
     mut query: SqlxQuery<'q, Postgres, PgArguments>,
-    bindings: &'q [InsertValue],
+    bindings: &'q [BoundInsertValue],
 ) -> SqlxQuery<'q, Postgres, PgArguments> {
     for binding in bindings {
         query = match binding {
-            InsertValue::Null => query.bind(Option::<i64>::None),
-            InsertValue::Int(value) => query.bind(*value),
-            InsertValue::String(value) => query.bind(value),
-            InsertValue::Bool(value) => query.bind(*value),
-            InsertValue::Float(value) => query.bind(*value),
-            InsertValue::Decimal(value) => query.bind(*value),
-            InsertValue::DateTime(value) => query.bind(*value),
+            BoundInsertValue::Null => query.bind(Option::<i64>::None),
+            BoundInsertValue::NullBytes => query.bind(Option::<Vec<u8>>::None),
+            BoundInsertValue::Int(value) => query.bind(*value),
+            BoundInsertValue::String(value) => query.bind(value),
+            BoundInsertValue::Bool(value) => query.bind(*value),
+            BoundInsertValue::Float(value) => query.bind(*value),
+            BoundInsertValue::Decimal(value) => query.bind(*value),
+            BoundInsertValue::Bytes(value) => query.bind(value),
+            BoundInsertValue::DateTime(value) => query.bind(*value),
         };
     }
 

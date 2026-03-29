@@ -47,6 +47,7 @@ schema! {
         created_at DateTime      @default(now())
         score      Decimal
         updated_at DateTime?
+        checksum   Bytes?
         author     user          @relation(fields: [author_id], references: [id])
         comments   comment[]
         locales    post_locale[]

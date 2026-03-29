@@ -401,11 +401,22 @@ impl PostgresSchema {
                 }
             }
 
+            let mut added_columns = target_table
+                .columns
+                .iter()
+                .filter(|target_column| !current_columns.contains_key(target_column.name.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            added_columns.sort_by(|left, right| left.name.cmp(&right.name));
+
+            for target_column in added_columns {
+                actions.push(AlterTableAction::AddColumn {
+                    column: target_column,
+                });
+            }
+
             for target_column in &target_table.columns {
                 let Some(current_column) = current_columns.get(target_column.name.as_str()) else {
-                    actions.push(AlterTableAction::AddColumn {
-                        column: target_column.clone(),
-                    });
                     continue;
                 };
 

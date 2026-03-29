@@ -18,6 +18,7 @@ CREATE TABLE "post" (
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "score" DECIMAL(65,30) NOT NULL,
     "updated_at" TIMESTAMP(3),
+    "checksum" BYTEA,
 
     CONSTRAINT "post_pkey" PRIMARY KEY ("id")
 );

@@ -169,6 +169,7 @@ pub enum QueryVariableValue {
     Bool(bool),
     Float(f64),
     Decimal(Decimal),
+    Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -205,6 +206,18 @@ impl From<f64> for QueryVariableValue {
 impl From<Decimal> for QueryVariableValue {
     fn from(value: Decimal) -> Self {
         Self::Decimal(value)
+    }
+}
+
+impl From<Vec<u8>> for QueryVariableValue {
+    fn from(value: Vec<u8>) -> Self {
+        Self::Bytes(value)
+    }
+}
+
+impl From<&[u8]> for QueryVariableValue {
+    fn from(value: &[u8]) -> Self {
+        Self::Bytes(value.to_vec())
     }
 }
 
@@ -251,6 +264,18 @@ impl QueryScalar for f64 {
 }
 
 impl QueryScalar for Decimal {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl QueryScalar for Vec<u8> {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl QueryScalar for &[u8] {
     fn into_query_variable_value(self) -> QueryVariableValue {
         self.into()
     }
@@ -572,6 +597,53 @@ pub fn json_as_f64(value: &JsonValue) -> Result<f64, sqlx::Error> {
         .ok_or_else(|| schema_error("expected JSON float in query result".to_owned()))
 }
 
+pub fn json_as_bytes(value: &JsonValue) -> Result<Vec<u8>, sqlx::Error> {
+    match value {
+        JsonValue::String(value) => decode_hex_bytes(value),
+        JsonValue::Array(values) => values
+            .iter()
+            .map(|value| {
+                let byte = value.as_u64().ok_or_else(|| {
+                    schema_error("expected JSON byte array in query result".to_owned())
+                })?;
+
+                u8::try_from(byte).map_err(|_| {
+                    schema_error(format!(
+                        "expected JSON byte array values in range 0..=255, got `{byte}`"
+                    ))
+                })
+            })
+            .collect(),
+        _ => Err(schema_error(
+            "expected JSON byte string or byte array in query result".to_owned(),
+        )),
+    }
+}
+
+fn decode_hex_bytes(value: &str) -> Result<Vec<u8>, sqlx::Error> {
+    let value = value.strip_prefix("\\x").unwrap_or(value);
+
+    if !value.len().is_multiple_of(2) {
+        return Err(schema_error(format!(
+            "invalid bytes in query result `{value}`: hex string must have an even length"
+        )));
+    }
+
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    let mut index = 0;
+
+    while index < value.len() {
+        let chunk = &value[index..index + 2];
+        let byte = u8::from_str_radix(chunk, 16).map_err(|error| {
+            schema_error(format!("invalid bytes in query result `{value}`: {error}"))
+        })?;
+        bytes.push(byte);
+        index += 2;
+    }
+
+    Ok(bytes)
+}
+
 pub fn json_as_decimal(value: &JsonValue) -> Result<Decimal, sqlx::Error> {
     match value {
         JsonValue::String(value) => parse_decimal(value),
@@ -647,6 +719,10 @@ pub fn row_as_datetime_utc(
     Ok(value.and_utc())
 }
 
+pub fn row_as_bytes(row: &PgRow, alias: &str) -> Result<Vec<u8>, sqlx::Error> {
+    row.try_get(alias)
+}
+
 pub fn row_value<T>(row: &PgRow, alias: &str) -> Result<T, sqlx::Error>
 where
     T: QueryResultValue,
@@ -708,6 +784,16 @@ impl QueryResultValue for chrono::DateTime<chrono::Utc> {
 
     fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
         json_as_datetime_utc(value)
+    }
+}
+
+impl QueryResultValue for Vec<u8> {
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        row_as_bytes(row, alias)
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        json_as_bytes(value)
     }
 }
 
@@ -1319,6 +1405,7 @@ pub(crate) fn json_column_expr(table_alias: &str, field_name: &str, scalar: Scal
         ScalarType::Int => format!("({column_sql})::bigint"),
         ScalarType::DateTime => format!("({column_sql} AT TIME ZONE 'UTC')"),
         ScalarType::Decimal => format!("({column_sql})::text"),
+        ScalarType::Bytes => format!("encode({column_sql}, 'hex')"),
         _ => column_sql,
     }
 }
@@ -1345,6 +1432,7 @@ fn bind_query<'q>(
             QueryVariableValue::Bool(value) => query.bind(*value),
             QueryVariableValue::Float(value) => query.bind(*value),
             QueryVariableValue::Decimal(value) => query.bind(*value),
+            QueryVariableValue::Bytes(value) => query.bind(value),
             QueryVariableValue::DateTime(value) => query.bind(*value),
         };
     }

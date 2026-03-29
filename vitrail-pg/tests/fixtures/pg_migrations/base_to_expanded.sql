@@ -1,5 +1,6 @@
 -- AlterTable
-ALTER TABLE "post" ADD COLUMN     "score" DECIMAL(65,30) NOT NULL,
+ALTER TABLE "post" ADD COLUMN     "checksum" BYTEA,
+ADD COLUMN     "score" DECIMAL(65,30) NOT NULL,
 ADD COLUMN     "updated_at" TIMESTAMP(3);
 
 -- CreateTable

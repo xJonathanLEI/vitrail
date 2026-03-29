@@ -141,6 +141,7 @@ pub enum UpdateValue {
     Bool(bool),
     Float(f64),
     Decimal(Decimal),
+    Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -177,6 +178,18 @@ impl From<f64> for UpdateValue {
 impl From<Decimal> for UpdateValue {
     fn from(value: Decimal) -> Self {
         Self::Decimal(value)
+    }
+}
+
+impl From<Vec<u8>> for UpdateValue {
+    fn from(value: Vec<u8>) -> Self {
+        Self::Bytes(value)
+    }
+}
+
+impl From<&[u8]> for UpdateValue {
+    fn from(value: &[u8]) -> Self {
+        Self::Bytes(value.to_vec())
     }
 }
 
@@ -223,6 +236,18 @@ impl UpdateScalar for f64 {
 }
 
 impl UpdateScalar for Decimal {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl UpdateScalar for Vec<u8> {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl UpdateScalar for &[u8] {
     fn into_update_value(self) -> UpdateValue {
         self.into()
     }
@@ -397,7 +422,17 @@ fn build_update_many_sql(
     let assignments = ordered_values
         .iter()
         .map(|(field, value)| {
-            let placeholder = builder.push_update_binding((*value).clone())?;
+            let scalar = match field.ty() {
+                FieldType::Scalar(scalar) => scalar.scalar(),
+                FieldType::Relation { .. } => {
+                    return Err(schema_error(format!(
+                        "field `{}.{}` is not scalar and cannot appear in `data`",
+                        model.name(),
+                        field.name()
+                    )));
+                }
+            };
+            let placeholder = builder.push_update_binding((*value).clone(), scalar)?;
             Ok(format!(
                 r#"{} = {}"#,
                 quoted_ident(field.name()),
@@ -679,8 +714,17 @@ impl<'a> UpdateSqlBuilder<'a> {
         }
     }
 
-    fn push_update_binding(&mut self, value: UpdateValue) -> Result<String, sqlx::Error> {
-        self.bindings.push(value.into());
+    fn push_update_binding(
+        &mut self,
+        value: UpdateValue,
+        scalar: ScalarType,
+    ) -> Result<String, sqlx::Error> {
+        let binding = match (value, scalar) {
+            (UpdateValue::Null, ScalarType::Bytes) => BoundValue::NullBytes,
+            (value, _) => value.into(),
+        };
+
+        self.bindings.push(binding);
         Ok(format!("${}", self.bindings.len()))
     }
 
@@ -720,11 +764,13 @@ impl<'a> UpdateSqlBuilder<'a> {
 #[derive(Clone, Debug, PartialEq)]
 enum BoundValue {
     Null,
+    NullBytes,
     Int(i64),
     String(String),
     Bool(bool),
     Float(f64),
     Decimal(Decimal),
+    Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
 }
 
@@ -737,6 +783,7 @@ impl From<UpdateValue> for BoundValue {
             UpdateValue::Bool(value) => Self::Bool(value),
             UpdateValue::Float(value) => Self::Float(value),
             UpdateValue::Decimal(value) => Self::Decimal(value),
+            UpdateValue::Bytes(value) => Self::Bytes(value),
             UpdateValue::DateTime(value) => Self::DateTime(value),
         }
     }
@@ -751,6 +798,7 @@ impl From<QueryVariableValue> for BoundValue {
             QueryVariableValue::Bool(value) => Self::Bool(value),
             QueryVariableValue::Float(value) => Self::Float(value),
             QueryVariableValue::Decimal(value) => Self::Decimal(value),
+            QueryVariableValue::Bytes(value) => Self::Bytes(value),
             QueryVariableValue::DateTime(value) => Self::DateTime(value),
         }
     }
@@ -768,6 +816,7 @@ fn update_value_matches_field(value: &UpdateValue, field: &Field) -> bool {
         UpdateValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         UpdateValue::Float(_) => scalar.scalar() == ScalarType::Float,
         UpdateValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
+        UpdateValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         UpdateValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
     }
 }
@@ -784,6 +833,7 @@ fn query_value_matches_field(value: &QueryVariableValue, field: &Field) -> bool 
         QueryVariableValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         QueryVariableValue::Float(_) => scalar.scalar() == ScalarType::Float,
         QueryVariableValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
+        QueryVariableValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         QueryVariableValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
     }
 }
@@ -795,11 +845,13 @@ fn bind_update<'q>(
     for binding in bindings {
         query = match binding {
             BoundValue::Null => query.bind(Option::<i64>::None),
+            BoundValue::NullBytes => query.bind(Option::<Vec<u8>>::None),
             BoundValue::Int(value) => query.bind(*value),
             BoundValue::String(value) => query.bind(value),
             BoundValue::Bool(value) => query.bind(*value),
             BoundValue::Float(value) => query.bind(*value),
             BoundValue::Decimal(value) => query.bind(*value),
+            BoundValue::Bytes(value) => query.bind(value),
             BoundValue::DateTime(value) => query.bind(*value),
         };
     }

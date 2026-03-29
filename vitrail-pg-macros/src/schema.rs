@@ -1210,6 +1210,7 @@ fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
         "DateTime" => quote! { ::chrono::DateTime<::chrono::Utc> },
         "Float" => quote! { f64 },
         "Decimal" => quote! { ::vitrail_pg::rust_decimal::Decimal },
+        "Bytes" => quote! { Vec<u8> },
         other => {
             return Err(Error::new(
                 ty.name.span(),

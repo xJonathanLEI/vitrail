@@ -408,6 +408,7 @@ fn query_value_matches_field(value: &QueryVariableValue, field: &Field) -> bool 
         QueryVariableValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         QueryVariableValue::Float(_) => scalar.scalar() == ScalarType::Float,
         QueryVariableValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
+        QueryVariableValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         QueryVariableValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
     }
 }
@@ -424,6 +425,7 @@ fn bind_delete<'q>(
             QueryVariableValue::Bool(value) => query.bind(*value),
             QueryVariableValue::Float(value) => query.bind(*value),
             QueryVariableValue::Decimal(value) => query.bind(*value),
+            QueryVariableValue::Bytes(value) => query.bind(value),
             QueryVariableValue::DateTime(value) => query.bind(*value),
         };
     }
