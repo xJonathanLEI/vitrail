@@ -598,7 +598,7 @@ fn parse_update_many_root_filter(input: ParseStream<'_>) -> Result<UpdateManyRoo
     content.parse()
 }
 
-fn schema_module_path(schema_path: &Path, derive_name: &str) -> Result<Path> {
+pub(crate) fn schema_module_path(schema_path: &Path, derive_name: &str) -> Result<Path> {
     if schema_path.segments.len() < 2 {
         return Err(Error::new(
             schema_path.span(),
@@ -619,7 +619,7 @@ fn schema_module_path(schema_path: &Path, derive_name: &str) -> Result<Path> {
     })
 }
 
-fn schema_module_ident(schema_path: &Path, derive_name: &str) -> Result<Ident> {
+pub(crate) fn schema_module_ident(schema_path: &Path, derive_name: &str) -> Result<Ident> {
     schema_path
         .segments
         .iter()

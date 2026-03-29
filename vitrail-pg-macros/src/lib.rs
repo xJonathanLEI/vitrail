@@ -1,13 +1,15 @@
 use proc_macro::TokenStream;
 
+mod delete;
 mod insert;
 mod macro_inputs;
 mod query;
 mod schema;
 mod update;
 
+use delete::DeleteManyDerive;
 use insert::{InsertInputDerive, InsertResultDerive};
-use macro_inputs::{InsertMacroInput, QueryMacroInput, UpdateMacroInput};
+use macro_inputs::{DeleteMacroInput, InsertMacroInput, QueryMacroInput, UpdateMacroInput};
 use query::{QueryResultDerive, QueryVariablesDerive};
 use schema::ParsedSchema;
 use update::{UpdateDataDerive, UpdateManyDerive};
@@ -33,6 +35,12 @@ pub fn query(input: TokenStream) -> TokenStream {
 pub fn insert(input: TokenStream) -> TokenStream {
     let insert = syn::parse_macro_input!(input as InsertMacroInput);
     insert.expand().into()
+}
+
+#[proc_macro]
+pub fn delete(input: TokenStream) -> TokenStream {
+    let delete = syn::parse_macro_input!(input as DeleteMacroInput);
+    delete.expand().into()
 }
 
 #[proc_macro]
@@ -96,6 +104,16 @@ pub fn derive_update_many(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
     match UpdateManyDerive::parse(input).and_then(|derive| derive.expand()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(DeleteMany, attributes(vitrail))]
+pub fn derive_delete_many(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match DeleteManyDerive::parse(input).and_then(|derive| derive.expand()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }

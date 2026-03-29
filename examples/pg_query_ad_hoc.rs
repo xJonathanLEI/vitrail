@@ -1,4 +1,4 @@
-use vitrail_pg::{VitrailClient, insert, query, schema, update};
+use vitrail_pg::{VitrailClient, delete, insert, query, schema, update};
 
 schema! {
     name my_schema
@@ -75,6 +75,22 @@ async fn main() {
         .await
         .unwrap();
 
+    let deleted_posts = client
+        .delete_many(delete! {
+            crate::my_schema,
+            post {
+                where: {
+                    author: {
+                        email: {
+                            eq: "alice@example.com".to_owned()
+                        }
+                    },
+                },
+            }
+        })
+        .await
+        .unwrap();
+
     let users = client
         .find_many(query! {
             crate::my_schema,
@@ -104,5 +120,6 @@ async fn main() {
 
     println!("inserted user {}", user.email);
     println!("updated {} posts", updated_posts);
+    println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
 }

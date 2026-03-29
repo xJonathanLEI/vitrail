@@ -10,9 +10,11 @@ impl ParsedSchema {
         let schema = self.generate_schema()?;
         let query_helper_macros = self.generate_query_helper_macros(module_name)?;
         let insert_helper_items = self.generate_insert_helper_items(module_name)?;
+        let delete_helper_items = self.generate_delete_helper_items(module_name)?;
         let update_helper_items = self.generate_update_helper_items(module_name)?;
         let local_query_macro_ident = format_ident!("__vitrail_query_local_{}", module_name);
         let local_insert_macro_ident = format_ident!("__vitrail_insert_local_{}", module_name);
+        let local_delete_macro_ident = format_ident!("__vitrail_delete_local_{}", module_name);
         let local_update_macro_ident = format_ident!("__vitrail_update_local_{}", module_name);
         let query_trait_reexports = self.models.iter().map(|model| {
             let trait_module_ident =
@@ -30,6 +32,14 @@ impl ParsedSchema {
                 pub use super::#trait_module_ident;
             }
         });
+        let delete_trait_reexports = self.models.iter().map(|model| {
+            let trait_module_ident =
+                format_ident!("__vitrail_delete_traits_{}_{}", module_name, model.name);
+            quote! {
+                #[doc(hidden)]
+                pub use super::#trait_module_ident;
+            }
+        });
         let update_trait_reexports = self.models.iter().map(|model| {
             let trait_module_ident =
                 format_ident!("__vitrail_update_traits_{}_{}", module_name, model.name);
@@ -42,6 +52,7 @@ impl ParsedSchema {
         Ok(quote! {
             #query_helper_macros
             #insert_helper_items
+            #delete_helper_items
             #update_helper_items
 
             pub mod #module_name {
@@ -80,6 +91,22 @@ impl ParsedSchema {
                     ::vitrail_pg::Insert::new(values)
                 }
 
+                pub fn delete_many<T>() -> ::vitrail_pg::DeleteMany<Schema, T>
+                where
+                    T: ::vitrail_pg::DeleteManyModel<Schema = Schema, Variables = ()>,
+                {
+                    ::vitrail_pg::DeleteMany::new()
+                }
+
+                pub fn delete_many_with_variables<T>(
+                    variables: T::Variables,
+                ) -> ::vitrail_pg::DeleteMany<Schema, T, T::Variables>
+                where
+                    T: ::vitrail_pg::DeleteManyModel<Schema = Schema>,
+                {
+                    ::vitrail_pg::DeleteMany::<Schema, T, ()>::new_with_variables(variables)
+                }
+
                 pub fn update_many<T>(values: T::Values) -> ::vitrail_pg::UpdateMany<Schema, T>
                 where
                     T: ::vitrail_pg::UpdateManyModel<Schema = Schema, Variables = ()>,
@@ -99,10 +126,12 @@ impl ParsedSchema {
 
                 #(#query_trait_reexports)*
                 #(#insert_trait_reexports)*
+                #(#delete_trait_reexports)*
                 #(#update_trait_reexports)*
 
                 pub(crate) use #local_query_macro_ident as __query;
                 pub(crate) use #local_insert_macro_ident as __insert;
+                pub(crate) use #local_delete_macro_ident as __delete;
                 pub(crate) use #local_update_macro_ident as __update;
             }
         })

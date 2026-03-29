@@ -30,7 +30,7 @@ This section only serves as a brief demonstration of the core API. For full runn
 
 > [!TIP]
 >
-> The macros shown below (`query!`, `insert!`, `update!`) are only thin wrappers that define relevant types and applying derive macros.
+> The macros shown below (`query!`, `insert!`, `update!`, `delete!`) are only thin wrappers that define relevant types and applying derive macros.
 >
 > It's always possible to manually define the relevant model types first and use the derived methods. See the [model-first example](./examples/pg_query_model_first.rs).
 
@@ -118,7 +118,7 @@ println!("First post: {post_title}");
 
 ### Writes
 
-Reads and writes share the same vocabulary, so inserts and updates feel consistent with queries:
+Reads and writes share the same vocabulary, so inserts, updates, and deletes feel consistent with queries:
 
 ```rust
 insert! {
@@ -144,6 +144,23 @@ update! {
       author: {
         email: {
           eq: "alice@example.com".to_owned(),
+        },
+      },
+    },
+  }
+}
+```
+
+```rust
+delete! {
+  crate::app_schema,
+  comment {
+    where: {
+      post: {
+        author: {
+          email: {
+            eq: "alice@example.com".to_owned(),
+          },
         },
       },
     },

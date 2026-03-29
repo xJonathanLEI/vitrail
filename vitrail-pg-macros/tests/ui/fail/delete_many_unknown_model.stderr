@@ -1,0 +1,5 @@
+error[E0433]: failed to resolve: could not find `__vitrail_delete_traits_delete_schema_missing_model` in `delete_schema`
+  --> tests/ui/fail/delete_many_unknown_model.rs:15:27
+   |
+15 | #[vitrail(schema = crate::delete_schema::Schema, model = missing_model)]
+   |                           ^^^^^^^^^^^^^ could not find `__vitrail_delete_traits_delete_schema_missing_model` in `delete_schema`

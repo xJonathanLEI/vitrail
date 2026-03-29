@@ -1,4 +1,5 @@
 mod client;
+mod delete;
 mod insert;
 mod migration;
 mod migrator;
@@ -8,6 +9,7 @@ mod update;
 mod validation;
 
 pub use client::VitrailClient;
+pub use delete::{DeleteMany, DeleteManyModel, DeleteSpec};
 pub use insert::{
     Insert, InsertModel, InsertScalar, InsertSpec, InsertValue, InsertValueSet, InsertValues,
 };

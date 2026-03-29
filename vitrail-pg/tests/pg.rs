@@ -27,3 +27,7 @@ pub(crate) use statements::pg_statements_schema as statements_schema;
 #[path = "pg/update.rs"]
 mod update;
 pub(crate) use update::pg_update_schema as update_schema;
+
+#[path = "pg/delete.rs"]
+mod delete;
+pub(crate) use delete::pg_delete_schema as delete_schema;

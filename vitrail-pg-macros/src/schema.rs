@@ -16,6 +16,7 @@ mod kw {
     syn::custom_keyword!(relation);
 }
 
+mod delete_helpers;
 mod helpers;
 mod insert_helpers;
 mod query_helpers;

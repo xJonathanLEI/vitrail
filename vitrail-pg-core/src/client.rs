@@ -1,6 +1,6 @@
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-use crate::{InsertSpec, QuerySpec, UpdateSpec};
+use crate::{DeleteSpec, InsertSpec, QuerySpec, UpdateSpec};
 
 /// Postgres client entry point.
 #[derive(Clone, Debug)]
@@ -54,6 +54,13 @@ impl VitrailClient {
         U: UpdateSpec,
     {
         update.execute(&self.pool).await
+    }
+
+    pub async fn delete_many<D>(&self, delete: D) -> Result<D::Output, sqlx::Error>
+    where
+        D: DeleteSpec,
+    {
+        delete.execute(&self.pool).await
     }
 
     pub async fn close(&self) {

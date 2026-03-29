@@ -1,6 +1,6 @@
 use vitrail_pg::{
-    InsertInput, InsertResult, QueryResult, QueryVariables, UpdateData, UpdateMany, VitrailClient,
-    schema,
+    DeleteMany, InsertInput, InsertResult, QueryResult, QueryVariables, UpdateData, UpdateMany,
+    VitrailClient, schema,
 };
 
 schema! {
@@ -99,6 +99,16 @@ struct PublishPostsData {
 struct PublishPostsByAuthorEmail;
 
 #[allow(dead_code)]
+#[derive(DeleteMany)]
+#[vitrail(
+    schema = crate::my_schema::Schema,
+    model = post,
+    variables = PostsByAuthorEmailVariables,
+    where(author.email = eq(author_email))
+)]
+struct DeletePostsByAuthorEmail;
+
+#[allow(dead_code)]
 #[derive(QueryResult)]
 #[vitrail(
     schema = crate::my_schema::Schema,
@@ -150,6 +160,15 @@ async fn main() {
         .await
         .unwrap();
 
+    let deleted_posts = client
+        .delete_many(my_schema::delete_many_with_variables::<
+            DeletePostsByAuthorEmail,
+        >(PostsByAuthorEmailVariables {
+            author_email: "alice@example.com".to_owned(),
+        }))
+        .await
+        .unwrap();
+
     let users = client
         .find_many(my_schema::query_with_variables::<UserWithPosts>(
             UserByIdVariables { user_id: user.id },
@@ -159,5 +178,6 @@ async fn main() {
 
     println!("inserted user {}", user.email);
     println!("updated {} posts", updated_posts);
+    println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
 }

@@ -132,3 +132,23 @@ impl UpdateMacroInput {
         expand_helper_macro(self.schema_path, self.body, "update")
     }
 }
+
+pub(crate) struct DeleteMacroInput {
+    schema_path: Path,
+    body: TokenStream2,
+}
+
+impl Parse for DeleteMacroInput {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let schema_path = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let body: TokenStream2 = input.parse()?;
+        Ok(Self { schema_path, body })
+    }
+}
+
+impl DeleteMacroInput {
+    pub(crate) fn expand(self) -> TokenStream2 {
+        expand_helper_macro(self.schema_path, self.body, "delete")
+    }
+}
