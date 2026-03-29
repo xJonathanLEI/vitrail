@@ -161,7 +161,19 @@ impl Model {
                 ModelAttribute::Unique(unique) => {
                     Some(unique.fields.iter().map(String::as_str).collect::<Vec<_>>())
                 }
-                ModelAttribute::Id(_) => None,
+                ModelAttribute::Id(_) | ModelAttribute::Index(_) => None,
+            })
+            .collect()
+    }
+
+    pub fn index_column_sets(&self) -> Vec<Vec<&str>> {
+        self.attributes
+            .iter()
+            .filter_map(|attribute| match attribute {
+                ModelAttribute::Index(index) => {
+                    Some(index.fields.iter().map(String::as_str).collect::<Vec<_>>())
+                }
+                ModelAttribute::Id(_) | ModelAttribute::Unique(_) => None,
             })
             .collect()
     }
@@ -171,7 +183,7 @@ impl Model {
             .iter()
             .find_map(|attribute| match attribute {
                 ModelAttribute::Id(primary_key) => Some(primary_key),
-                ModelAttribute::Unique(_) => None,
+                ModelAttribute::Unique(_) | ModelAttribute::Index(_) => None,
             })
     }
 
@@ -208,6 +220,7 @@ impl Model {
                     primary_key.validate(self, errors);
                 }
                 ModelAttribute::Unique(unique) => unique.validate(self, errors),
+                ModelAttribute::Index(index) => index.validate(self, errors),
             }
         }
 
@@ -589,6 +602,7 @@ impl Field {
     fn validate_attributes(&self, model_name: &str, errors: &mut Vec<ValidationError>) {
         let mut seen_id = false;
         let mut seen_unique = false;
+        let mut seen_index = false;
         let mut seen_default = false;
         let mut seen_relation = false;
         let mut seen_db_uuid = false;
@@ -643,6 +657,31 @@ impl Field {
                                 attribute: "@unique".to_owned(),
                             },
                             "`@unique` can only be used on scalar fields",
+                        ));
+                    }
+                }
+                Attribute::Index => {
+                    if seen_index {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::Attribute {
+                                model: model_name.to_owned(),
+                                field: self.name.clone(),
+                                attribute: "@index".to_owned(),
+                            },
+                            "duplicate `@index` attribute",
+                        ));
+                    } else {
+                        seen_index = true;
+                    }
+
+                    if !self.kind().is_scalar() {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::Attribute {
+                                model: model_name.to_owned(),
+                                field: self.name.clone(),
+                                attribute: "@index".to_owned(),
+                            },
+                            "`@index` can only be used on scalar fields",
                         ));
                     }
                 }
@@ -1022,6 +1061,7 @@ impl ScalarType {
 pub enum Attribute {
     Id,
     Unique,
+    Index,
     Default(DefaultAttribute),
     Relation(RelationAttribute),
     DbUuid,
@@ -1047,6 +1087,7 @@ impl RustTypeAttribute {
 pub enum ModelAttribute {
     Id(ModelPrimaryKeyAttribute),
     Unique(ModelUniqueAttribute),
+    Index(ModelIndexAttribute),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1255,6 +1296,108 @@ impl ModelUniqueAttributeBuilder {
                     attribute: "@@unique".to_owned(),
                 },
                 "`@@unique([...])` cannot be empty",
+            )]))
+        } else {
+            Ok(attribute)
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelIndexAttribute {
+    fields: Vec<String>,
+}
+
+impl ModelIndexAttribute {
+    pub fn builder() -> ModelIndexAttributeBuilder {
+        ModelIndexAttributeBuilder::new()
+    }
+
+    pub fn fields(&self) -> &[String] {
+        &self.fields
+    }
+
+    fn validate(&self, model: &Model, errors: &mut Vec<ValidationError>) {
+        if self.fields.is_empty() {
+            errors.push(ValidationError::new(
+                ValidationLocation::ModelAttribute {
+                    model: model.name.clone(),
+                    attribute: "@@index".to_owned(),
+                },
+                "`@@index([...])` cannot be empty",
+            ));
+            return;
+        }
+
+        let mut seen = HashSet::new();
+        for field_name in &self.fields {
+            if !seen.insert(field_name.as_str()) {
+                errors.push(ValidationError::new(
+                    ValidationLocation::ModelIndexField {
+                        model: model.name.clone(),
+                        field: field_name.clone(),
+                    },
+                    format!("duplicate index field `{}`", field_name),
+                ));
+                continue;
+            }
+
+            match model.field_named(field_name) {
+                Some(field) => {
+                    if matches!(field.ty(), FieldType::Relation { .. }) {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::ModelIndexField {
+                                model: model.name.clone(),
+                                field: field_name.clone(),
+                            },
+                            format!("index field `{}` must be scalar", field_name),
+                        ));
+                    }
+                }
+                None => errors.push(ValidationError::new(
+                    ValidationLocation::ModelIndexField {
+                        model: model.name.clone(),
+                        field: field_name.clone(),
+                    },
+                    format!("unknown index field `{}`", field_name),
+                )),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelIndexAttributeBuilder {
+    fields: Vec<String>,
+}
+
+impl ModelIndexAttributeBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn field(mut self, field: impl Into<String>) -> Self {
+        self.fields.push(field.into());
+        self
+    }
+
+    pub fn fields(mut self, fields: Vec<String>) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    pub fn build(self) -> Result<ModelIndexAttribute, ValidationErrors> {
+        let attribute = ModelIndexAttribute {
+            fields: self.fields,
+        };
+
+        if attribute.fields.is_empty() {
+            Err(ValidationErrors::from(vec![ValidationError::new(
+                ValidationLocation::ModelAttribute {
+                    model: "<model>".to_owned(),
+                    attribute: "@@index".to_owned(),
+                },
+                "`@@index([...])` cannot be empty",
             )]))
         } else {
             Ok(attribute)

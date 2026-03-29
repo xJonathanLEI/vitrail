@@ -19,6 +19,10 @@ pub enum ValidationLocation {
         model: String,
         field: String,
     },
+    ModelIndexField {
+        model: String,
+        field: String,
+    },
     Field {
         model: String,
         field: String,
@@ -63,6 +67,9 @@ impl fmt::Display for ValidationLocation {
             }
             ValidationLocation::ModelUniqueField { model, field } => {
                 write!(f, "unique field `{}` on model `{}`", field, model)
+            }
+            ValidationLocation::ModelIndexField { model, field } => {
+                write!(f, "index field `{}` on model `{}`", field, model)
             }
             ValidationLocation::Field { model, field } => {
                 write!(f, "field `{}.{}`", model, field)

@@ -6,7 +6,7 @@ schema! {
     model user {
         id         Int      @id @default(autoincrement())
         email      String   @unique
-        name       String
+        name       String   @index
         created_at DateTime @default(now())
     }
 
@@ -15,9 +15,11 @@ schema! {
         title      String
         body       String?
         published  Boolean
-        author_id  Int
+        author_id  Int      @index
         created_at DateTime @default(now())
         author     user     @relation(fields: [author_id], references: [id])
+
+        @@index([published, created_at])
     }
 }
 

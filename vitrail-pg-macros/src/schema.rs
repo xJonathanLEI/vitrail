@@ -105,6 +105,10 @@ impl ParsedSchema {
                 .model(model, false)
                 .and_then(|model| model.unique_field_span(field, false))
                 .unwrap_or_else(|| self.model_span(model, false)),
+            core::ValidationLocation::ModelIndexField { model, field } => self
+                .model(model, false)
+                .and_then(|model| model.index_field_span(field, false))
+                .unwrap_or_else(|| self.model_span(model, false)),
             core::ValidationLocation::Field { model, field } => {
                 let prefer_first = message == "first declaration of this field";
                 self.field_span(model, field, prefer_first)
@@ -320,6 +324,19 @@ impl ParsedModel {
         }
     }
 
+    fn index_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        if prefer_first {
+            self.attributes
+                .iter()
+                .find_map(|attribute| attribute.index_field_span(name, true))
+        } else {
+            self.attributes
+                .iter()
+                .rev()
+                .find_map(|attribute| attribute.index_field_span(name, false))
+        }
+    }
+
     fn scalar_fields(&self) -> Vec<&ParsedField> {
         self.fields
             .iter()
@@ -352,6 +369,7 @@ impl Parse for ParsedModelAttribute {
         let kind = match name.to_string().as_str() {
             "id" => ParsedModelAttributeKind::Id(input.parse()?),
             "unique" => ParsedModelAttributeKind::Unique(input.parse()?),
+            "index" => ParsedModelAttributeKind::Index(input.parse()?),
             _ => {
                 return Err(Error::new(
                     name.span(),
@@ -376,6 +394,9 @@ impl ParsedModelAttribute {
             ParsedModelAttributeKind::Unique(unique) => {
                 Ok(core::ModelAttribute::Unique(unique.to_core(model_name)?))
             }
+            ParsedModelAttributeKind::Index(index) => {
+                Ok(core::ModelAttribute::Index(index.to_core(model_name)?))
+            }
         }
     }
 
@@ -389,6 +410,10 @@ impl ParsedModelAttribute {
                 let unique = unique.generate_schema_attribute();
                 quote! { ::vitrail_pg::ModelAttribute::Unique(#unique) }
             }
+            ParsedModelAttributeKind::Index(index) => {
+                let index = index.generate_schema_attribute();
+                quote! { ::vitrail_pg::ModelAttribute::Index(#index) }
+            }
         })
     }
 
@@ -396,20 +421,28 @@ impl ParsedModelAttribute {
         match &self.kind {
             ParsedModelAttributeKind::Id(_) => "@@id",
             ParsedModelAttributeKind::Unique(_) => "@@unique",
+            ParsedModelAttributeKind::Index(_) => "@@index",
         }
     }
 
     fn primary_key_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
         match &self.kind {
             ParsedModelAttributeKind::Id(primary_key) => primary_key.field_span(name, prefer_first),
-            ParsedModelAttributeKind::Unique(_) => None,
+            ParsedModelAttributeKind::Unique(_) | ParsedModelAttributeKind::Index(_) => None,
         }
     }
 
     fn unique_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
         match &self.kind {
-            ParsedModelAttributeKind::Id(_) => None,
+            ParsedModelAttributeKind::Id(_) | ParsedModelAttributeKind::Index(_) => None,
             ParsedModelAttributeKind::Unique(unique) => unique.field_span(name, prefer_first),
+        }
+    }
+
+    fn index_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        match &self.kind {
+            ParsedModelAttributeKind::Id(_) | ParsedModelAttributeKind::Unique(_) => None,
+            ParsedModelAttributeKind::Index(index) => index.field_span(name, prefer_first),
         }
     }
 }
@@ -418,6 +451,7 @@ impl ParsedModelAttribute {
 enum ParsedModelAttributeKind {
     Id(ParsedModelIdAttribute),
     Unique(ParsedModelUniqueAttribute),
+    Index(ParsedModelIndexAttribute),
 }
 
 #[derive(Debug)]
@@ -527,6 +561,69 @@ impl ParsedModelUniqueAttribute {
                 .fields(vec![#(#fields.to_owned()),*])
                 .build()
                 .expect("model unique attribute was validated during macro expansion")
+        }
+    }
+
+    fn field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        if prefer_first {
+            self.fields
+                .iter()
+                .find(|ident| *ident == name)
+                .map(Ident::span)
+        } else {
+            self.fields
+                .iter()
+                .rev()
+                .find(|ident| *ident == name)
+                .map(Ident::span)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ParsedModelIndexAttribute {
+    fields: Vec<Ident>,
+}
+
+impl Parse for ParsedModelIndexAttribute {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let content;
+        parenthesized!(content in input);
+        let fields = parse_ident_list(&content)?;
+
+        if !content.is_empty() {
+            return Err(Error::new(
+                content.span(),
+                "unexpected tokens in `@@index(...)`",
+            ));
+        }
+
+        Ok(Self { fields })
+    }
+}
+
+impl ParsedModelIndexAttribute {
+    fn to_core(
+        &self,
+        _model_name: &str,
+    ) -> std::result::Result<core::ModelIndexAttribute, core::ValidationErrors> {
+        core::ModelIndexAttribute::builder()
+            .fields(self.fields.iter().map(ToString::to_string).collect())
+            .build()
+    }
+
+    fn generate_schema_attribute(&self) -> TokenStream2 {
+        let fields = self
+            .fields
+            .iter()
+            .map(|field| syn::LitStr::new(&field.to_string(), field.span()))
+            .collect::<Vec<_>>();
+
+        quote! {
+            ::vitrail_pg::ModelIndexAttribute::builder()
+                .fields(vec![#(#fields.to_owned()),*])
+                .build()
+                .expect("model index attribute was validated during macro expansion")
         }
     }
 
@@ -784,6 +881,7 @@ impl Parse for ParsedAttribute {
             match first.to_string().as_str() {
                 "id" => ParsedAttributeKind::Id,
                 "unique" => ParsedAttributeKind::Unique,
+                "index" => ParsedAttributeKind::Index,
                 "default" => ParsedAttributeKind::Default(input.parse()?),
                 "relation" => ParsedAttributeKind::Relation(input.parse()?),
                 "rust_ty" => ParsedAttributeKind::RustTy(input.parse()?),
@@ -809,6 +907,7 @@ impl ParsedAttribute {
         match &self.kind {
             ParsedAttributeKind::Id => Ok(core::Attribute::Id),
             ParsedAttributeKind::Unique => Ok(core::Attribute::Unique),
+            ParsedAttributeKind::Index => Ok(core::Attribute::Index),
             ParsedAttributeKind::Default(default) => {
                 Ok(core::Attribute::Default(default.to_core()))
             }
@@ -826,6 +925,7 @@ impl ParsedAttribute {
         Ok(match &self.kind {
             ParsedAttributeKind::Id => quote! { ::vitrail_pg::Attribute::Id },
             ParsedAttributeKind::Unique => quote! { ::vitrail_pg::Attribute::Unique },
+            ParsedAttributeKind::Index => quote! { ::vitrail_pg::Attribute::Index },
             ParsedAttributeKind::Default(default) => {
                 let default = default.generate_schema_default_attribute();
                 quote! { ::vitrail_pg::Attribute::Default(#default) }
@@ -851,6 +951,7 @@ impl ParsedAttribute {
         match self.kind {
             ParsedAttributeKind::Id => "@id",
             ParsedAttributeKind::Unique => "@unique",
+            ParsedAttributeKind::Index => "@index",
             ParsedAttributeKind::Default(_) => "@default",
             ParsedAttributeKind::Relation(_) => "@relation",
             ParsedAttributeKind::DbUuid => "@db.Uuid",
@@ -864,6 +965,7 @@ impl ParsedAttribute {
 enum ParsedAttributeKind {
     Id,
     Unique,
+    Index,
     Default(ParsedDefaultAttribute),
     Relation(ParsedRelationAttribute),
     DbUuid,

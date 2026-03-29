@@ -11,13 +11,15 @@ schema! {
 
     model post_locale {
         id      Int    @id @default(autoincrement())
-        post_id Int
+        post_id Int    @index
         locale  String
         title   String
         post    post   @relation(fields: [post_id], references: [id])
 
         // Each post can have at most one row for a given locale.
         @@unique([post_id, locale])
+        // You can also declare regular, non-unique indexes.
+        @@index([title, locale])
     }
 }
 

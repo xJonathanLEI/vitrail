@@ -21,6 +21,7 @@ impl PostgresSchema {
         for model in schema.models() {
             let mut columns = Vec::new();
             let mut indexes = Vec::new();
+            let mut unique_indexes = Vec::new();
             let mut foreign_keys = Vec::new();
 
             let primary_key = PostgresPrimaryKey {
@@ -41,10 +42,22 @@ impl PostgresSchema {
                         .iter()
                         .any(|attribute| matches!(attribute, Attribute::Unique))
                     {
-                        indexes.push(PostgresIndex {
+                        unique_indexes.push(PostgresIndex {
                             name: format!("{}_{}_key", model.name(), field.name()),
                             columns: vec![field.name().to_owned()],
                             unique: true,
+                        });
+                    }
+
+                    if field
+                        .attributes()
+                        .iter()
+                        .any(|attribute| matches!(attribute, Attribute::Index))
+                    {
+                        indexes.push(PostgresIndex {
+                            name: format!("{}_{}_idx", model.name(), field.name()),
+                            columns: vec![field.name().to_owned()],
+                            unique: false,
                         });
                     }
 
@@ -69,13 +82,23 @@ impl PostgresSchema {
                 });
             }
 
-            for unique_columns in model.unique_column_sets() {
+            for index_columns in model.index_column_sets() {
                 indexes.push(PostgresIndex {
+                    name: format!("{}_{}_idx", model.name(), index_columns.join("_")),
+                    columns: index_columns.into_iter().map(str::to_owned).collect(),
+                    unique: false,
+                });
+            }
+
+            for unique_columns in model.unique_column_sets() {
+                unique_indexes.push(PostgresIndex {
                     name: format!("{}_{}_key", model.name(), unique_columns.join("_")),
                     columns: unique_columns.into_iter().map(str::to_owned).collect(),
                     unique: true,
                 });
             }
+
+            indexes.extend(unique_indexes);
 
             tables.push(PostgresTable {
                 name: model.name().to_owned(),
@@ -443,17 +466,28 @@ impl PostgresSchema {
         }
 
         for target_table in &self.tables {
-            let current_table = current_tables.get(target_table.name.as_str());
+            if current_tables.contains_key(target_table.name.as_str()) {
+                continue;
+            }
 
             for index in &target_table.indexes {
-                let should_create = match current_table {
-                    Some(current_table) => current_table
-                        .index_named(&index.name)
-                        .is_none_or(|candidate| candidate != index),
-                    None => true,
-                };
+                steps.push(MigrationStep::CreateIndex {
+                    table: target_table.name.clone(),
+                    index: index.clone(),
+                });
+            }
+        }
 
-                if should_create {
+        for target_table in &self.tables {
+            let Some(current_table) = current_tables.get(target_table.name.as_str()) else {
+                continue;
+            };
+
+            for index in &target_table.indexes {
+                if current_table
+                    .index_named(&index.name)
+                    .is_none_or(|candidate| candidate != index)
+                {
                     steps.push(MigrationStep::CreateIndex {
                         table: target_table.name.clone(),
                         index: index.clone(),

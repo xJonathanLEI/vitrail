@@ -30,7 +30,16 @@ CREATE TABLE "translation_note" (
 );
 
 -- CreateIndex
+CREATE INDEX "post_locale_title_locale_idx" ON "post_locale"("title", "locale");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "post_locale_post_id_title_key" ON "post_locale"("post_id", "title");
+
+-- CreateIndex
+CREATE INDEX "post_author_id_idx" ON "post"("author_id");
+
+-- CreateIndex
+CREATE INDEX "post_published_created_at_idx" ON "post"("published", "created_at");
 
 -- AddForeignKey
 ALTER TABLE "comment" ADD CONSTRAINT "comment_post_id_fkey" FOREIGN KEY ("post_id") REFERENCES "post"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

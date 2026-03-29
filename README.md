@@ -45,7 +45,7 @@ schema! {
   model user {
     id         Int      @id @default(autoincrement())
     email      String   @unique
-    name       String
+    name       String   @index
     created_at DateTime @default(now())
     posts      post[]
   }
@@ -57,6 +57,8 @@ schema! {
     author_id  Int
     author     user     @relation(fields: [author_id], references: [id])
     comments   comment[]
+
+    @@index([author_id, published])
   }
 
   model comment {

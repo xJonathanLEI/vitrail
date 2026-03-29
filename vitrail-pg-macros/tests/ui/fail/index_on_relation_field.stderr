@@ -1,0 +1,5 @@
+error: `@index` can only be used on scalar fields
+  --> tests/ui/fail/index_on_relation_field.rs:10:23
+   |
+10 |         posts post[] @index
+   |                       ^^^^^

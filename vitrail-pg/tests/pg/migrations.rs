@@ -43,12 +43,14 @@ schema! {
         title      String
         body       String?
         published  Boolean
-        author_id  Int
+        author_id  Int           @index
         created_at DateTime      @default(now())
         updated_at DateTime?
         author     user          @relation(fields: [author_id], references: [id])
         comments   comment[]
         locales    post_locale[]
+
+        @@index([published, created_at])
     }
 
     model comment {
@@ -67,6 +69,7 @@ schema! {
 
         @@id([post_id, locale])
         @@unique([post_id, title])
+        @@index([title, locale])
     }
 
     model translation_note {

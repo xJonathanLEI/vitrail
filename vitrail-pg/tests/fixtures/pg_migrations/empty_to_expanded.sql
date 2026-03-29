@@ -53,6 +53,15 @@ CREATE TABLE "translation_note" (
 CREATE UNIQUE INDEX "user_email_key" ON "user"("email");
 
 -- CreateIndex
+CREATE INDEX "post_author_id_idx" ON "post"("author_id");
+
+-- CreateIndex
+CREATE INDEX "post_published_created_at_idx" ON "post"("published", "created_at");
+
+-- CreateIndex
+CREATE INDEX "post_locale_title_locale_idx" ON "post_locale"("title", "locale");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "post_locale_post_id_title_key" ON "post_locale"("post_id", "title");
 
 -- AddForeignKey

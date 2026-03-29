@@ -533,6 +533,112 @@ fn rejects_duplicate_fields_in_compound_unique_constraints() {
 }
 
 #[test]
+fn accepts_compound_indexes() {
+    let model = Model::builder("post_locale")
+        .fields(vec![
+            Field::builder("id", FieldType::int())
+                .attributes(vec![Attribute::Id])
+                .build()
+                .expect("field should build"),
+            Field::builder("post_id", FieldType::int())
+                .build()
+                .expect("field should build"),
+            Field::builder("locale", FieldType::string())
+                .build()
+                .expect("field should build"),
+            Field::builder("title", FieldType::string())
+                .build()
+                .expect("field should build"),
+        ])
+        .attributes(vec![ModelAttribute::Index(
+            ModelIndexAttribute::builder()
+                .fields(vec!["post_id".into(), "locale".into()])
+                .build()
+                .expect("index attribute should build"),
+        )])
+        .build();
+
+    assert!(model.is_ok());
+}
+
+#[test]
+fn rejects_unknown_fields_in_compound_indexes() {
+    let error = Model::builder("post_locale")
+        .fields(vec![
+            Field::builder("post_id", FieldType::int())
+                .build()
+                .expect("field should build"),
+            Field::builder("locale", FieldType::string())
+                .build()
+                .expect("field should build"),
+        ])
+        .attributes(vec![ModelAttribute::Index(
+            ModelIndexAttribute::builder()
+                .fields(vec!["post_id".into(), "missing".into()])
+                .build()
+                .expect("index attribute should build"),
+        )])
+        .build()
+        .expect_err("model should fail");
+
+    assert!(error.to_string().contains("unknown index field `missing`"));
+}
+
+#[test]
+fn rejects_relation_fields_in_compound_indexes() {
+    let error = Model::builder("post_locale")
+        .fields(vec![
+            Field::builder("post_id", FieldType::int())
+                .build()
+                .expect("field should build"),
+            Field::builder("post", FieldType::relation("post", false, false))
+                .build()
+                .expect("field should build"),
+        ])
+        .attributes(vec![ModelAttribute::Index(
+            ModelIndexAttribute::builder()
+                .fields(vec!["post_id".into(), "post".into()])
+                .build()
+                .expect("index attribute should build"),
+        )])
+        .build()
+        .expect_err("model should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("index field `post` must be scalar")
+    );
+}
+
+#[test]
+fn rejects_duplicate_fields_in_compound_indexes() {
+    let error = Model::builder("post_locale")
+        .fields(vec![
+            Field::builder("post_id", FieldType::int())
+                .build()
+                .expect("field should build"),
+            Field::builder("locale", FieldType::string())
+                .build()
+                .expect("field should build"),
+        ])
+        .attributes(vec![ModelAttribute::Index(
+            ModelIndexAttribute::builder()
+                .fields(vec!["post_id".into(), "post_id".into()])
+                .build()
+                .expect("index attribute should build"),
+        )])
+        .build()
+        .expect_err("model should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate index field `post_id`")
+    );
+}
+
+#[test]
 fn allows_string_rust_type_override() {
     let field = Field::builder("postal_code", FieldType::string())
         .attributes(vec![Attribute::RustType(RustTypeAttribute::new(
