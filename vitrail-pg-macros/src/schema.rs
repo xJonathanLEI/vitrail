@@ -91,6 +91,14 @@ impl ParsedSchema {
                 let prefer_first = message == "first declaration of this model";
                 self.model_span(model, prefer_first)
             }
+            core::ValidationLocation::ModelAttribute { model, attribute } => self
+                .model(model, false)
+                .and_then(|model| model.attribute_span(attribute, false))
+                .unwrap_or_else(|| self.model_span(model, false)),
+            core::ValidationLocation::ModelPrimaryKeyField { model, field } => self
+                .model(model, false)
+                .and_then(|model| model.primary_key_field_span(field, false))
+                .unwrap_or_else(|| self.model_span(model, false)),
             core::ValidationLocation::Field { model, field } => {
                 let prefer_first = message == "first declaration of this field";
                 self.field_span(model, field, prefer_first)
@@ -185,6 +193,7 @@ impl ParsedSchema {
 struct ParsedModel {
     name: Ident,
     fields: Vec<ParsedField>,
+    attributes: Vec<ParsedModelAttribute>,
 }
 
 impl Parse for ParsedModel {
@@ -196,11 +205,28 @@ impl Parse for ParsedModel {
         syn::braced!(content in input);
 
         let mut fields = Vec::new();
+        let mut attributes = Vec::new();
         while !content.is_empty() {
-            fields.push(content.parse()?);
+            let is_model_attribute = if content.peek(Token![@]) {
+                let fork = content.fork();
+                fork.parse::<Token![@]>()?;
+                fork.peek(Token![@])
+            } else {
+                false
+            };
+
+            if is_model_attribute {
+                attributes.push(content.parse()?);
+            } else {
+                fields.push(content.parse()?);
+            }
         }
 
-        Ok(Self { name, fields })
+        Ok(Self {
+            name,
+            fields,
+            attributes,
+        })
     }
 }
 
@@ -212,8 +238,14 @@ impl ParsedModel {
             fields.push(field.to_core(&self.name.to_string())?);
         }
 
+        let mut attributes = Vec::with_capacity(self.attributes.len());
+        for attribute in &self.attributes {
+            attributes.push(attribute.to_core(&self.name.to_string())?);
+        }
+
         core::Model::builder(self.name.to_string())
             .fields(fields)
+            .attributes(attributes)
             .build()
     }
 
@@ -225,12 +257,48 @@ impl ParsedModel {
             fields.push(field.generate_schema_field(schema, self)?);
         }
 
+        let mut attributes = Vec::with_capacity(self.attributes.len());
+        for attribute in &self.attributes {
+            attributes.push(attribute.generate_schema_attribute()?);
+        }
+
         Ok(quote! {
             ::vitrail_pg::Model::builder(#model_name)
                 .fields(vec![#(#fields),*])
+                .attributes(vec![#(#attributes),*])
                 .build()
                 .expect("model was validated during macro expansion")
         })
+    }
+
+    fn attribute_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        let mut matches = self
+            .attributes
+            .iter()
+            .filter(|attribute| attribute.name() == name);
+
+        if prefer_first {
+            matches.next().map(|attribute| attribute.span)
+        } else {
+            self.attributes
+                .iter()
+                .rev()
+                .find(|attribute| attribute.name() == name)
+                .map(|attribute| attribute.span)
+        }
+    }
+
+    fn primary_key_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        if prefer_first {
+            self.attributes
+                .iter()
+                .find_map(|attribute| attribute.primary_key_field_span(name, true))
+        } else {
+            self.attributes
+                .iter()
+                .rev()
+                .find_map(|attribute| attribute.primary_key_field_span(name, false))
+        }
     }
 
     fn scalar_fields(&self) -> Vec<&ParsedField> {
@@ -245,6 +313,136 @@ impl ParsedModel {
             .iter()
             .filter(|field| scalar_type_from_ident(&field.ty.name).is_none())
             .collect()
+    }
+}
+
+/// Parsed model attribute with its source span.
+#[derive(Debug)]
+struct ParsedModelAttribute {
+    kind: ParsedModelAttributeKind,
+    span: Span,
+}
+
+impl Parse for ParsedModelAttribute {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        input.parse::<Token![@]>()?;
+        input.parse::<Token![@]>()?;
+        let name = input.call(Ident::parse_any)?;
+        let span = name.span();
+
+        let kind = match name.to_string().as_str() {
+            "id" => ParsedModelAttributeKind::Id(input.parse()?),
+            _ => {
+                return Err(Error::new(
+                    name.span(),
+                    format!("unknown model attribute `@@{}`", name),
+                ));
+            }
+        };
+
+        Ok(Self { kind, span })
+    }
+}
+
+impl ParsedModelAttribute {
+    fn to_core(
+        &self,
+        model_name: &str,
+    ) -> std::result::Result<core::ModelAttribute, core::ValidationErrors> {
+        match &self.kind {
+            ParsedModelAttributeKind::Id(primary_key) => {
+                Ok(core::ModelAttribute::Id(primary_key.to_core(model_name)?))
+            }
+        }
+    }
+
+    fn generate_schema_attribute(&self) -> Result<TokenStream2> {
+        Ok(match &self.kind {
+            ParsedModelAttributeKind::Id(primary_key) => {
+                let primary_key = primary_key.generate_schema_attribute();
+                quote! { ::vitrail_pg::ModelAttribute::Id(#primary_key) }
+            }
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        match &self.kind {
+            ParsedModelAttributeKind::Id(_) => "@@id",
+        }
+    }
+
+    fn primary_key_field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        match &self.kind {
+            ParsedModelAttributeKind::Id(primary_key) => primary_key.field_span(name, prefer_first),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ParsedModelAttributeKind {
+    Id(ParsedModelIdAttribute),
+}
+
+#[derive(Debug)]
+struct ParsedModelIdAttribute {
+    fields: Vec<Ident>,
+}
+
+impl Parse for ParsedModelIdAttribute {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let content;
+        parenthesized!(content in input);
+        let fields = parse_ident_list(&content)?;
+
+        if !content.is_empty() {
+            return Err(Error::new(
+                content.span(),
+                "unexpected tokens in `@@id(...)`",
+            ));
+        }
+
+        Ok(Self { fields })
+    }
+}
+
+impl ParsedModelIdAttribute {
+    fn to_core(
+        &self,
+        _model_name: &str,
+    ) -> std::result::Result<core::ModelPrimaryKeyAttribute, core::ValidationErrors> {
+        core::ModelPrimaryKeyAttribute::builder()
+            .fields(self.fields.iter().map(ToString::to_string).collect())
+            .build()
+    }
+
+    fn generate_schema_attribute(&self) -> TokenStream2 {
+        let fields = self
+            .fields
+            .iter()
+            .map(|field| syn::LitStr::new(&field.to_string(), field.span()))
+            .collect::<Vec<_>>();
+
+        quote! {
+            ::vitrail_pg::ModelPrimaryKeyAttribute::builder()
+                .fields(vec![#(#fields.to_owned()),*])
+                .build()
+                .expect("model primary key attribute was validated during macro expansion")
+        }
+    }
+
+    fn field_span(&self, name: &str, prefer_first: bool) -> Option<Span> {
+        if prefer_first {
+            self.fields
+                .iter()
+                .find(|ident| *ident == name)
+                .map(Ident::span)
+        } else {
+            self.fields
+                .iter()
+                .rev()
+                .find(|ident| *ident == name)
+                .map(Ident::span)
+        }
     }
 }
 
@@ -263,6 +461,16 @@ impl Parse for ParsedField {
 
         let mut attributes = Vec::new();
         while input.peek(Token![@]) {
+            let is_model_attribute = {
+                let fork = input.fork();
+                fork.parse::<Token![@]>()?;
+                fork.peek(Token![@])
+            };
+
+            if is_model_attribute {
+                break;
+            }
+
             attributes.push(input.parse()?);
         }
 

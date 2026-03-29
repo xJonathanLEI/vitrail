@@ -1,0 +1,11 @@
+error: model `like` cannot mix field-level `@id` with model-level `@@id`
+ --> tests/ui/fail/compound_primary_key_mixed_id.rs:8:11
+  |
+8 |     model like {
+  |           ^^^^
+
+error: remove this `@id` because the model already declares `@@id`
+ --> tests/ui/fail/compound_primary_key_mixed_id.rs:9:9
+  |
+9 |         post_id Int @id
+  |         ^^^^^^^

@@ -122,6 +122,7 @@ impl SchemaBuilder {
 pub struct Model {
     name: String,
     fields: Vec<Field>,
+    attributes: Vec<ModelAttribute>,
 }
 
 impl Model {
@@ -137,6 +138,31 @@ impl Model {
         &self.fields
     }
 
+    pub fn attributes(&self) -> &[ModelAttribute] {
+        &self.attributes
+    }
+
+    pub fn primary_key_columns(&self) -> Vec<&str> {
+        if let Some(primary_key) = self.primary_key_attribute() {
+            return primary_key.fields.iter().map(String::as_str).collect();
+        }
+
+        self.fields
+            .iter()
+            .filter(|field| field.has_id())
+            .map(|field| field.name.as_str())
+            .collect()
+    }
+
+    fn primary_key_attribute(&self) -> Option<&ModelPrimaryKeyAttribute> {
+        self.attributes
+            .iter()
+            .map(|attribute| match attribute {
+                ModelAttribute::Id(primary_key) => primary_key,
+            })
+            .next()
+    }
+
     fn validate_shallow(&self, errors: &mut Vec<ValidationError>) {
         if self.fields.is_empty() {
             errors.push(ValidationError::new(
@@ -150,6 +176,27 @@ impl Model {
 
         let mut seen_fields = HashMap::<&str, usize>::new();
         let mut id_fields = Vec::new();
+        let mut seen_model_id = false;
+
+        for attribute in &self.attributes {
+            match attribute {
+                ModelAttribute::Id(primary_key) => {
+                    if seen_model_id {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::ModelAttribute {
+                                model: self.name.clone(),
+                                attribute: "@@id".to_owned(),
+                            },
+                            "duplicate `@@id` attribute",
+                        ));
+                    } else {
+                        seen_model_id = true;
+                    }
+
+                    primary_key.validate(self, errors);
+                }
+            }
+        }
 
         for (index, field) in self.fields.iter().enumerate() {
             if let Some(previous_index) = seen_fields.insert(field.name.as_str(), index) {
@@ -176,21 +223,47 @@ impl Model {
             }
         }
 
-        match id_fields.len() {
-            0 => errors.push(ValidationError::new(
+        let has_model_id = self.primary_key_attribute().is_some();
+
+        match (id_fields.len(), has_model_id) {
+            (0, false) => errors.push(ValidationError::new(
                 ValidationLocation::Model {
                     model: self.name.clone(),
                 },
-                format!("model `{}` must declare exactly one `@id` field", self.name),
+                format!(
+                    "model `{}` must declare exactly one primary key using `@id` or `@@id`",
+                    self.name
+                ),
             )),
-            1 => {}
+            (0, true) | (1, false) => {}
+            (_, true) if !id_fields.is_empty() => {
+                errors.push(ValidationError::new(
+                    ValidationLocation::Model {
+                        model: self.name.clone(),
+                    },
+                    format!(
+                        "model `{}` cannot mix field-level `@id` with model-level `@@id`",
+                        self.name
+                    ),
+                ));
+
+                for field in id_fields {
+                    errors.push(ValidationError::new(
+                        ValidationLocation::Field {
+                            model: self.name.clone(),
+                            field: field.name.clone(),
+                        },
+                        "remove this `@id` because the model already declares `@@id`",
+                    ));
+                }
+            }
             _ => {
                 errors.push(ValidationError::new(
                     ValidationLocation::Model {
                         model: self.name.clone(),
                     },
                     format!(
-                        "model `{}` declares multiple `@id` fields; compound ids are not supported yet",
+                        "model `{}` declares multiple `@id` fields; use `@@id([...])` for a compound primary key",
                         self.name
                     ),
                 ));
@@ -395,6 +468,7 @@ impl Model {
 pub struct ModelBuilder {
     name: String,
     fields: Vec<Field>,
+    attributes: Vec<ModelAttribute>,
 }
 
 impl ModelBuilder {
@@ -402,6 +476,7 @@ impl ModelBuilder {
         Self {
             name: name.into(),
             fields: Vec::new(),
+            attributes: Vec::new(),
         }
     }
 
@@ -415,10 +490,21 @@ impl ModelBuilder {
         self
     }
 
+    pub fn attribute(mut self, attribute: ModelAttribute) -> Self {
+        self.attributes.push(attribute);
+        self
+    }
+
+    pub fn attributes(mut self, attributes: Vec<ModelAttribute>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
     pub fn build(self) -> Result<Model, ValidationErrors> {
         let model = Model {
             name: self.name,
             fields: self.fields,
+            attributes: self.attributes,
         };
 
         let mut errors = Vec::new();
@@ -876,6 +962,122 @@ pub enum Attribute {
     Default(DefaultAttribute),
     Relation(RelationAttribute),
     DbUuid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModelAttribute {
+    Id(ModelPrimaryKeyAttribute),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelPrimaryKeyAttribute {
+    fields: Vec<String>,
+}
+
+impl ModelPrimaryKeyAttribute {
+    pub fn builder() -> ModelPrimaryKeyAttributeBuilder {
+        ModelPrimaryKeyAttributeBuilder::new()
+    }
+
+    pub fn fields(&self) -> &[String] {
+        &self.fields
+    }
+
+    fn validate(&self, model: &Model, errors: &mut Vec<ValidationError>) {
+        if self.fields.is_empty() {
+            errors.push(ValidationError::new(
+                ValidationLocation::ModelAttribute {
+                    model: model.name.clone(),
+                    attribute: "@@id".to_owned(),
+                },
+                "`@@id([...])` cannot be empty",
+            ));
+            return;
+        }
+
+        let mut seen = HashSet::new();
+        for field_name in &self.fields {
+            if !seen.insert(field_name.as_str()) {
+                errors.push(ValidationError::new(
+                    ValidationLocation::ModelPrimaryKeyField {
+                        model: model.name.clone(),
+                        field: field_name.clone(),
+                    },
+                    format!("duplicate primary key field `{}`", field_name),
+                ));
+                continue;
+            }
+
+            match model.field_named(field_name) {
+                Some(field) => match field.ty() {
+                    FieldType::Scalar(scalar) => {
+                        if scalar.optional() {
+                            errors.push(ValidationError::new(
+                                ValidationLocation::ModelPrimaryKeyField {
+                                    model: model.name.clone(),
+                                    field: field_name.clone(),
+                                },
+                                format!("primary key field `{}` must not be optional", field_name),
+                            ));
+                        }
+                    }
+                    FieldType::Relation { .. } => errors.push(ValidationError::new(
+                        ValidationLocation::ModelPrimaryKeyField {
+                            model: model.name.clone(),
+                            field: field_name.clone(),
+                        },
+                        format!("primary key field `{}` must be scalar", field_name),
+                    )),
+                },
+                None => errors.push(ValidationError::new(
+                    ValidationLocation::ModelPrimaryKeyField {
+                        model: model.name.clone(),
+                        field: field_name.clone(),
+                    },
+                    format!("unknown primary key field `{}`", field_name),
+                )),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelPrimaryKeyAttributeBuilder {
+    fields: Vec<String>,
+}
+
+impl ModelPrimaryKeyAttributeBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn field(mut self, field: impl Into<String>) -> Self {
+        self.fields.push(field.into());
+        self
+    }
+
+    pub fn fields(mut self, fields: Vec<String>) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    pub fn build(self) -> Result<ModelPrimaryKeyAttribute, ValidationErrors> {
+        let attribute = ModelPrimaryKeyAttribute {
+            fields: self.fields,
+        };
+
+        if attribute.fields.is_empty() {
+            Err(ValidationErrors::from(vec![ValidationError::new(
+                ValidationLocation::ModelAttribute {
+                    model: "<model>".to_owned(),
+                    attribute: "@@id".to_owned(),
+                },
+                "`@@id([...])` cannot be empty",
+            )]))
+        } else {
+            Ok(attribute)
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

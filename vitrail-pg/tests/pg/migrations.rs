@@ -39,15 +39,16 @@ schema! {
     }
 
     model post {
-        id         Int       @id @default(autoincrement())
+        id         Int           @id @default(autoincrement())
         title      String
         body       String?
         published  Boolean
         author_id  Int
-        created_at DateTime  @default(now())
+        created_at DateTime      @default(now())
         updated_at DateTime?
-        author     user      @relation(fields: [author_id], references: [id])
+        author     user          @relation(fields: [author_id], references: [id])
         comments   comment[]
+        locales    post_locale[]
     }
 
     model comment {
@@ -55,6 +56,24 @@ schema! {
         body    String
         post_id Int
         post    post   @relation(fields: [post_id], references: [id])
+    }
+
+    model post_locale {
+        post_id Int
+        locale  String
+        title   String
+        post    post               @relation(fields: [post_id], references: [id])
+        notes   translation_note[]
+
+        @@id([post_id, locale])
+    }
+
+    model translation_note {
+        id          Int         @id @default(autoincrement())
+        post_id     Int
+        locale      String
+        body        String
+        translation post_locale @relation(fields: [post_id, locale], references: [post_id, locale])
     }
 }
 

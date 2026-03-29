@@ -22,18 +22,19 @@ impl PostgresSchema {
             let mut columns = Vec::new();
             let mut indexes = Vec::new();
             let mut foreign_keys = Vec::new();
-            let mut primary_key = None;
+
+            let primary_key = PostgresPrimaryKey {
+                name: format!("{}_pkey", model.name()),
+                columns: model
+                    .primary_key_columns()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            };
 
             for field in model.fields() {
                 if field.kind().is_scalar() {
                     columns.push(PostgresColumn::from_field(model.name(), field));
-
-                    if field.has_id() {
-                        primary_key = Some(PostgresPrimaryKey {
-                            name: format!("{}_pkey", model.name()),
-                            columns: vec![field.name().to_owned()],
-                        });
-                    }
 
                     if field
                         .attributes()
@@ -71,7 +72,7 @@ impl PostgresSchema {
             tables.push(PostgresTable {
                 name: model.name().to_owned(),
                 columns,
-                primary_key: primary_key.expect("schema validation guarantees a single @id field"),
+                primary_key,
                 indexes,
                 foreign_keys,
             });
@@ -908,9 +909,9 @@ impl MigrationStep {
             Self::AddForeignKey { table, foreign_key } => format!(
                 "-- AddForeignKey\nALTER TABLE \"{table}\" ADD CONSTRAINT \"{}\" FOREIGN KEY ({}) REFERENCES \"{}\"({}) ON DELETE {} ON UPDATE {};",
                 foreign_key.name,
-                render_identifier_list(&foreign_key.columns),
+                render_foreign_key_identifier_list(&foreign_key.columns),
                 foreign_key.referenced_table,
-                render_identifier_list(&foreign_key.referenced_columns),
+                render_foreign_key_identifier_list(&foreign_key.referenced_columns),
                 foreign_key.on_delete.render(),
                 foreign_key.on_update.render(),
             ),
@@ -973,4 +974,12 @@ fn render_identifier_list(columns: &[String]) -> String {
         .map(|column| format!(r#""{column}""#))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn render_foreign_key_identifier_list(columns: &[String]) -> String {
+    columns
+        .iter()
+        .map(|column| format!(r#""{column}""#))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

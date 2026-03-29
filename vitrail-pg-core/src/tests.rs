@@ -303,3 +303,125 @@ fn allows_inferred_one_to_many_relation_fields() {
 
     assert!(schema.is_ok());
 }
+
+#[test]
+fn accepts_compound_primary_keys() {
+    let schema = Schema::builder()
+        .models(vec![
+            Model::builder("user")
+                .fields(vec![
+                    Field::builder("id", FieldType::int())
+                        .attributes(vec![Attribute::Id])
+                        .build()
+                        .expect("field should build"),
+                    Field::builder("likes", FieldType::relation("Like", false, true))
+                        .build()
+                        .expect("field should build"),
+                ])
+                .build()
+                .expect("model should build"),
+            Model::builder("post")
+                .fields(vec![
+                    Field::builder("id", FieldType::int())
+                        .attributes(vec![Attribute::Id])
+                        .build()
+                        .expect("field should build"),
+                    Field::builder("likes", FieldType::relation("Like", false, true))
+                        .build()
+                        .expect("field should build"),
+                ])
+                .build()
+                .expect("model should build"),
+            Model::builder("like")
+                .fields(vec![
+                    Field::builder("post_id", FieldType::int())
+                        .build()
+                        .expect("field should build"),
+                    Field::builder("user_id", FieldType::int())
+                        .build()
+                        .expect("field should build"),
+                    Field::builder("post", FieldType::relation("post", false, false))
+                        .attributes(vec![Attribute::Relation(
+                            RelationAttribute::builder()
+                                .fields(vec!["post_id".into()])
+                                .references(vec!["id".into()])
+                                .build()
+                                .expect("relation should build"),
+                        )])
+                        .build()
+                        .expect("field should build"),
+                    Field::builder("user", FieldType::relation("user", false, false))
+                        .attributes(vec![Attribute::Relation(
+                            RelationAttribute::builder()
+                                .fields(vec!["user_id".into()])
+                                .references(vec!["id".into()])
+                                .build()
+                                .expect("relation should build"),
+                        )])
+                        .build()
+                        .expect("field should build"),
+                ])
+                .attributes(vec![ModelAttribute::Id(
+                    ModelPrimaryKeyAttribute::builder()
+                        .fields(vec!["post_id".into(), "user_id".into()])
+                        .build()
+                        .expect("primary key should build"),
+                )])
+                .build()
+                .expect("model should build"),
+        ])
+        .build();
+
+    assert!(schema.is_ok());
+}
+
+#[test]
+fn rejects_mixing_field_and_model_primary_keys() {
+    let error = Model::builder("like")
+        .fields(vec![
+            Field::builder("post_id", FieldType::int())
+                .attributes(vec![Attribute::Id])
+                .build()
+                .expect("field should build"),
+            Field::builder("user_id", FieldType::int())
+                .build()
+                .expect("field should build"),
+        ])
+        .attributes(vec![ModelAttribute::Id(
+            ModelPrimaryKeyAttribute::builder()
+                .fields(vec!["post_id".into(), "user_id".into()])
+                .build()
+                .expect("primary key should build"),
+        )])
+        .build()
+        .expect_err("model should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot mix field-level `@id` with model-level `@@id`")
+    );
+}
+
+#[test]
+fn rejects_optional_fields_in_compound_primary_keys() {
+    let error = Model::builder("like")
+        .fields(vec![
+            Field::builder("post_id", FieldType::scalar(ScalarType::Int, true))
+                .build()
+                .expect("field should build"),
+            Field::builder("user_id", FieldType::int())
+                .build()
+                .expect("field should build"),
+        ])
+        .attributes(vec![ModelAttribute::Id(
+            ModelPrimaryKeyAttribute::builder()
+                .fields(vec!["post_id".into(), "user_id".into()])
+                .build()
+                .expect("primary key should build"),
+        )])
+        .build()
+        .expect_err("model should fail");
+
+    assert!(error.to_string().contains("must not be optional"));
+}

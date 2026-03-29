@@ -7,6 +7,14 @@ pub enum ValidationLocation {
     Model {
         model: String,
     },
+    ModelAttribute {
+        model: String,
+        attribute: String,
+    },
+    ModelPrimaryKeyField {
+        model: String,
+        field: String,
+    },
     Field {
         model: String,
         field: String,
@@ -43,6 +51,12 @@ impl fmt::Display for ValidationLocation {
         match self {
             ValidationLocation::Schema => write!(f, "schema"),
             ValidationLocation::Model { model } => write!(f, "model `{}`", model),
+            ValidationLocation::ModelAttribute { model, attribute } => {
+                write!(f, "attribute `{}` on model `{}`", attribute, model)
+            }
+            ValidationLocation::ModelPrimaryKeyField { model, field } => {
+                write!(f, "primary key field `{}` on model `{}`", field, model)
+            }
             ValidationLocation::Field { model, field } => {
                 write!(f, "field `{}.{}`", model, field)
             }

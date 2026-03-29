@@ -554,3 +554,181 @@ async fn find_first_returns_row_not_found_when_no_rows_exist() {
 
     database.cleanup().await;
 }
+
+schema! {
+    name compound_query_schema
+
+    model post {
+        id      Int           @id @default(autoincrement())
+        title   String
+        locales post_locale[]
+    }
+
+    model post_locale {
+        post_id Int
+        locale  String
+        title   String
+        post    post               @relation(fields: [post_id], references: [id])
+        notes   translation_note[]
+
+        @@id([post_id, locale])
+    }
+
+    model translation_note {
+        id          Int         @id @default(autoincrement())
+        post_id     Int
+        locale      String
+        body        String
+        translation post_locale @relation(fields: [post_id, locale], references: [post_id, locale])
+    }
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query::compound_query_schema::Schema, model = post_locale)]
+struct CompoundPostLocaleSummary {
+    post_id: i64,
+    locale: String,
+    title: String,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query::compound_query_schema::Schema, model = translation_note)]
+struct CompoundTranslationNoteWithTranslation {
+    id: i64,
+    body: String,
+    #[vitrail(include)]
+    translation: CompoundPostLocaleSummary,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query::compound_query_schema::Schema, model = post)]
+struct CompoundPostWithLocales {
+    id: i64,
+    title: String,
+    #[vitrail(include)]
+    locales: Vec<CompoundPostLocaleSummary>,
+}
+
+async fn setup_compound_database(database_url: &str) -> i64 {
+    apply_schema(
+        database_url,
+        &PostgresSchema::from_schema_access::<crate::query::compound_query_schema::Schema>(),
+    )
+    .await;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let post_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO "post" ("title")
+        VALUES ('Localized post')
+        RETURNING "id"::bigint
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should insert post");
+
+    for (locale, title) in [("en", "Hello"), ("fr", "Bonjour")] {
+        sqlx::query(
+            r#"
+            INSERT INTO "post_locale" ("post_id", "locale", "title")
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(post_id)
+        .bind(locale)
+        .bind(title)
+        .execute(&pool)
+        .await
+        .expect("should insert post locale");
+    }
+
+    for (locale, body) in [
+        ("fr", "French translation note"),
+        ("en", "English translation note"),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO "translation_note" ("post_id", "locale", "body")
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(post_id)
+        .bind(locale)
+        .bind(body)
+        .execute(&pool)
+        .await
+        .expect("should insert translation note");
+    }
+
+    pool.close().await;
+    post_id
+}
+
+#[tokio::test]
+async fn compound_to_one_include_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let post_id = setup_compound_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let notes = client
+        .find_many(crate::query::compound_query_schema::query::<
+            CompoundTranslationNoteWithTranslation,
+        >())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes[0].id, 1);
+    assert_eq!(notes[0].body, "French translation note");
+    assert_eq!(notes[0].translation.post_id, post_id);
+    assert_eq!(notes[0].translation.locale, "fr");
+    assert_eq!(notes[0].translation.title, "Bonjour");
+    assert_eq!(notes[1].id, 2);
+    assert_eq!(notes[1].body, "English translation note");
+    assert_eq!(notes[1].translation.post_id, post_id);
+    assert_eq!(notes[1].translation.locale, "en");
+    assert_eq!(notes[1].translation.title, "Hello");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn compound_to_many_include_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let post_id = setup_compound_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(crate::query::compound_query_schema::query::<
+            CompoundPostWithLocales,
+        >())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].id, post_id);
+    assert_eq!(posts[0].title, "Localized post");
+    assert_eq!(posts[0].locales.len(), 2);
+    assert_eq!(posts[0].locales[0].post_id, post_id);
+    assert_eq!(posts[0].locales[0].locale, "en");
+    assert_eq!(posts[0].locales[0].title, "Hello");
+    assert_eq!(posts[0].locales[1].post_id, post_id);
+    assert_eq!(posts[0].locales[1].locale, "fr");
+    assert_eq!(posts[0].locales[1].title, "Bonjour");
+
+    database.cleanup().await;
+}

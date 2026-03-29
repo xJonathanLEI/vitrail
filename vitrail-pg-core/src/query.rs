@@ -596,8 +596,8 @@ struct RelationSql<'a> {
     selection: QuerySelection,
     parent_table_alias: String,
     nested_alias: String,
-    nested_field: String,
-    parent_field: String,
+    nested_fields: Vec<&'a str>,
+    parent_fields: Vec<&'a str>,
 }
 
 impl<'a> SqlBuilder<'a> {
@@ -679,14 +679,6 @@ impl<'a> SqlBuilder<'a> {
 
         let (nested_fields, parent_fields) = self.relation_fields(model, field, target_model)?;
 
-        if nested_fields.len() != 1 || parent_fields.len() != 1 {
-            return Err(schema_error(format!(
-                "relation `{}.{}` currently requires exactly one parent field and one nested field",
-                model.name(),
-                relation.field
-            )));
-        }
-
         let join_alias = format!("t{}", self.next_alias);
         self.next_alias += 1;
 
@@ -699,8 +691,8 @@ impl<'a> SqlBuilder<'a> {
             selection: relation.selection.clone(),
             parent_table_alias: table_alias.to_owned(),
             nested_alias: nested_alias.clone(),
-            nested_field: nested_fields[0].to_owned(),
-            parent_field: parent_fields[0].to_owned(),
+            nested_fields,
+            parent_fields,
         })?;
 
         self.joins.push(format!(
@@ -712,12 +704,11 @@ impl<'a> SqlBuilder<'a> {
     }
 
     fn relation_subquery_sql(&mut self, relation: RelationSql<'a>) -> Result<String, sqlx::Error> {
-        let mut where_clauses = vec![format!(
-            "\"{}\".{} = \"{}\".{}",
-            relation.nested_alias,
-            quoted_ident(&relation.nested_field),
-            relation.parent_table_alias,
-            quoted_ident(&relation.parent_field),
+        let mut where_clauses = vec![relation_predicates(
+            &relation.nested_alias,
+            &relation.nested_fields,
+            &relation.parent_table_alias,
+            &relation.parent_fields,
         )];
         let mut joins = Vec::new();
         let row_expr = self.json_row_expr(
@@ -850,26 +841,17 @@ impl<'a> SqlBuilder<'a> {
                 let (nested_fields, parent_fields) =
                     self.relation_fields(model, relation_field, target_model)?;
 
-                if nested_fields.len() != 1 || parent_fields.len() != 1 {
-                    return Err(schema_error(format!(
-                        "relation `{}.{}` currently requires exactly one parent field and one nested field",
-                        model.name(),
-                        relation_field.name()
-                    )));
-                }
-
                 let nested_alias = format!("t{}", self.next_alias);
                 self.next_alias += 1;
                 let nested_filter = self.filter_sql(target_model, filter, &nested_alias)?;
+                let relation_predicate =
+                    relation_predicates(&nested_alias, &nested_fields, table_alias, &parent_fields);
 
                 Ok(format!(
-                    "EXISTS (SELECT 1 FROM {} AS \"{}\" WHERE \"{}\".{} = \"{}\".{} AND {})",
+                    "EXISTS (SELECT 1 FROM {} AS \"{}\" WHERE {} AND {})",
                     quoted_ident(target_model.name()),
                     nested_alias,
-                    nested_alias,
-                    quoted_ident(nested_fields[0]),
-                    table_alias,
-                    quoted_ident(parent_fields[0]),
+                    relation_predicate,
                     nested_filter,
                 ))
             }
@@ -972,14 +954,6 @@ impl<'a> SqlBuilder<'a> {
 
         let (nested_fields, parent_fields) = self.relation_fields(model, field, target_model)?;
 
-        if nested_fields.len() != 1 || parent_fields.len() != 1 {
-            return Err(schema_error(format!(
-                "relation `{}.{}` currently requires exactly one parent field and one nested field",
-                model.name(),
-                relation.field
-            )));
-        }
-
         let join_alias = format!("t{}", self.next_alias);
         self.next_alias += 1;
 
@@ -992,8 +966,8 @@ impl<'a> SqlBuilder<'a> {
             selection: relation.selection.clone(),
             parent_table_alias: table_alias.to_owned(),
             nested_alias: nested_alias.clone(),
-            nested_field: nested_fields[0].to_owned(),
-            parent_field: parent_fields[0].to_owned(),
+            nested_fields,
+            parent_fields,
         })?;
 
         joins.push(format!(
@@ -1028,19 +1002,51 @@ impl<'a> SqlBuilder<'a> {
 }
 
 fn aggregate_order_by(model: &Model, table_alias: &str) -> String {
-    let field_name = model
-        .field_named("id")
-        .map(|field| field.name())
-        .or_else(|| {
-            model
-                .fields()
-                .iter()
-                .find(|field| field.kind().is_scalar())
-                .map(|field| field.name())
-        })
-        .unwrap_or("id");
+    let primary_key_columns = model.primary_key_columns();
+    let field_names = if primary_key_columns.is_empty() {
+        model
+            .field_named("id")
+            .map(|field| vec![field.name()])
+            .or_else(|| {
+                model
+                    .fields()
+                    .iter()
+                    .find(|field| field.kind().is_scalar())
+                    .map(|field| vec![field.name()])
+            })
+            .unwrap_or_else(|| vec!["id"])
+    } else {
+        primary_key_columns
+    };
 
-    format!(" ORDER BY \"{table_alias}\".{}", quoted_ident(field_name))
+    format!(
+        " ORDER BY {}",
+        field_names
+            .into_iter()
+            .map(|field_name| format!("\"{table_alias}\".{}", quoted_ident(field_name)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn relation_predicates(
+    nested_alias: &str,
+    nested_fields: &[&str],
+    parent_alias: &str,
+    parent_fields: &[&str],
+) -> String {
+    nested_fields
+        .iter()
+        .zip(parent_fields)
+        .map(|(nested_field, parent_field)| {
+            format!(
+                "\"{nested_alias}\".{} = \"{parent_alias}\".{}",
+                quoted_ident(nested_field),
+                quoted_ident(parent_field),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 pub(crate) fn quoted_ident(ident: &str) -> String {

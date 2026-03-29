@@ -17,6 +17,7 @@ pub(crate) use query::pg_query_schema as query_schema;
 
 #[path = "pg/statements.rs"]
 mod statements;
+pub(crate) use statements::pg_compound_statements_schema as compound_statements_schema;
 pub(crate) use statements::pg_statements_schema as statements_schema;
 
 #[path = "pg/update.rs"]

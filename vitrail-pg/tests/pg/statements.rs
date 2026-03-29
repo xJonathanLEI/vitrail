@@ -472,3 +472,65 @@ fn helper_insert_with_nullable_field_and_subset_select_generates_expected_sql() 
         .join(" ")
     );
 }
+
+schema! {
+    name compound_statements_schema
+
+    model post_locale {
+        post_id Int
+        locale String
+        title String
+        notes translation_note[]
+
+        @@id([post_id, locale])
+    }
+
+    model translation_note {
+        id Int @id @default(autoincrement())
+        post_id Int
+        locale String
+        body String
+        translation post_locale @relation(fields: [post_id, locale], references: [post_id, locale])
+    }
+}
+
+pub(crate) use self::compound_statements_schema as pg_compound_statements_schema;
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::compound_statements_schema::Schema, model = translation_note)]
+struct TranslationNoteWithTranslation {
+    id: i64,
+    body: String,
+    #[vitrail(include)]
+    translation: PostLocaleSummary,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::compound_statements_schema::Schema, model = post_locale)]
+struct PostLocaleSummary {
+    post_id: i64,
+    locale: String,
+    title: String,
+}
+
+#[test]
+fn compound_to_one_include_generates_expected_sql() {
+    let sql = crate::compound_statements_schema::query::<TranslationNoteWithTranslation>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "translation_note__id","#,
+            r#""t0"."body" AS "translation_note__body","#,
+            r#""t1"."data" AS "translation_note__translation""#,
+            r#"FROM "translation_note" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT json_build_array(("t2"."post_id")::bigint, "t2"."locale", "t2"."title") AS "data" FROM "post_locale" AS "t2" WHERE "t2"."post_id" = "t0"."post_id" AND "t2"."locale" = "t0"."locale" LIMIT 1) AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
