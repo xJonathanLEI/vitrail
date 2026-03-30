@@ -159,6 +159,11 @@ struct PostByExcludedTitleVariables {
     excluded_title: String,
 }
 
+#[derive(QueryVariables)]
+struct PostsByIdsVariables {
+    post_ids: Vec<i64>,
+}
+
 #[allow(dead_code)]
 #[derive(QueryResult)]
 #[vitrail(
@@ -168,6 +173,19 @@ struct PostByExcludedTitleVariables {
     where(title = not(excluded_title))
 )]
 struct PostWithDifferentTitle {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::statements_schema::Schema,
+    model = post,
+    variables = PostsByIdsVariables,
+    where(id = in(post_ids))
+)]
+struct PostByIds {
     id: i64,
     title: String,
 }
@@ -457,6 +475,38 @@ fn ad_hoc_not_equal_where_generates_expected_sql() {
 }
 
 #[test]
+fn ad_hoc_in_where_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        post {
+            select: {
+                id: true,
+                title: true,
+            },
+            where: {
+                id: {
+                    in: vec![7_i64, 11_i64]
+                },
+            },
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"WHERE ("t0"."id")::bigint = ANY($1)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
 fn model_first_where_generates_expected_sql() {
     let sql = crate::statements_schema::query_with_variables::<UserById>(UserByIdVariables {
         user_id: 7,
@@ -535,6 +585,27 @@ fn model_first_not_equal_where_generates_expected_sql() {
             r#""t0"."title" AS "post__title""#,
             r#"FROM "post" AS "t0""#,
             r#"WHERE "t0"."title" <> $1"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn model_first_in_where_generates_expected_sql() {
+    let sql = crate::statements_schema::query_with_variables::<PostByIds>(PostsByIdsVariables {
+        post_ids: vec![7, 11],
+    })
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"WHERE ("t0"."id")::bigint = ANY($1)"#,
         ]
         .join(" ")
     );

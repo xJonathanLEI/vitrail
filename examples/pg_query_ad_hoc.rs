@@ -44,7 +44,7 @@ async fn main() {
         .await
         .unwrap();
 
-    client
+    let hello_post = client
         .insert(insert! {
             crate::my_schema,
             post {
@@ -59,7 +59,7 @@ async fn main() {
         .await
         .unwrap();
 
-    client
+    let draft_post = client
         .insert(insert! {
             crate::my_schema,
             post {
@@ -142,8 +142,8 @@ async fn main() {
                     title: true,
                 },
                 where: {
-                    title: {
-                        not: "Untitled draft".to_owned()
+                    id: {
+                        in: vec![hello_post.id, draft_post.id]
                     },
                 },
             }
@@ -155,5 +155,5 @@ async fn main() {
     println!("updated {} posts", updated_posts);
     println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
-    println!("fetched {} posts with a not(...) filter", posts.len());
+    println!("fetched {} posts with an in(...) filter", posts.len());
 }

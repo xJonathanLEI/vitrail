@@ -173,11 +173,22 @@ pub enum QueryVariableValue {
     Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
     Uuid(Uuid),
+    List(Vec<QueryVariableValue>),
+}
+
+pub trait QueryListScalar: Send {
+    fn into_list_query_variable_value(self) -> QueryVariableValue;
 }
 
 impl From<i64> for QueryVariableValue {
     fn from(value: i64) -> Self {
         Self::Int(value)
+    }
+}
+
+impl QueryListScalar for i64 {
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        self.into()
     }
 }
 
@@ -193,9 +204,30 @@ impl From<&str> for QueryVariableValue {
     }
 }
 
+impl QueryListScalar for &str {
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl<T> QueryListScalar for T
+where
+    T: StringValueType,
+{
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        QueryVariableValue::String(self.into_db_string())
+    }
+}
+
 impl From<bool> for QueryVariableValue {
     fn from(value: bool) -> Self {
         Self::Bool(value)
+    }
+}
+
+impl QueryListScalar for bool {
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        self.into()
     }
 }
 
@@ -205,15 +237,33 @@ impl From<f64> for QueryVariableValue {
     }
 }
 
+impl QueryListScalar for f64 {
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
 impl From<Decimal> for QueryVariableValue {
     fn from(value: Decimal) -> Self {
         Self::Decimal(value)
     }
 }
 
+impl QueryListScalar for Decimal {
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
 impl From<Vec<u8>> for QueryVariableValue {
     fn from(value: Vec<u8>) -> Self {
         Self::Bytes(value)
+    }
+}
+
+impl QueryListScalar for Vec<u8> {
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        self.into()
     }
 }
 
@@ -229,9 +279,35 @@ impl From<chrono::DateTime<chrono::Utc>> for QueryVariableValue {
     }
 }
 
+impl QueryListScalar for chrono::DateTime<chrono::Utc> {
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
 impl From<Uuid> for QueryVariableValue {
     fn from(value: Uuid) -> Self {
         Self::Uuid(value)
+    }
+}
+
+impl QueryListScalar for Uuid {
+    fn into_list_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl<T> From<Vec<T>> for QueryVariableValue
+where
+    T: QueryListScalar,
+{
+    fn from(values: Vec<T>) -> Self {
+        Self::List(
+            values
+                .into_iter()
+                .map(QueryListScalar::into_list_query_variable_value)
+                .collect(),
+        )
     }
 }
 
@@ -310,6 +386,15 @@ where
     }
 }
 
+impl<T> QueryScalar for Vec<T>
+where
+    T: QueryListScalar,
+{
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
 impl<T> QueryScalar for Option<T>
 where
     T: QueryScalar,
@@ -351,6 +436,48 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum QueryFilterValues {
+    Variable(String),
+    Values(Vec<QueryFilterValue>),
+}
+
+impl QueryFilterValues {
+    pub fn variable(name: impl Into<String>) -> Self {
+        Self::Variable(name.into())
+    }
+
+    pub fn values<T>(values: impl IntoIterator<Item = T>) -> Self
+    where
+        T: QueryListScalar,
+    {
+        Self::Values(
+            values
+                .into_iter()
+                .map(|value| QueryFilterValue::Value(value.into_list_query_variable_value()))
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
+impl<T> From<Vec<T>> for QueryFilterValues
+where
+    T: QueryListScalar,
+{
+    fn from(values: Vec<T>) -> Self {
+        Self::values(values)
+    }
+}
+
+impl<T, const N: usize> From<[T; N]> for QueryFilterValues
+where
+    T: QueryListScalar,
+{
+    fn from(values: [T; N]) -> Self {
+        Self::values(values)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum QueryFilter {
     And(Vec<QueryFilter>),
     Or(Vec<QueryFilter>),
@@ -362,6 +489,10 @@ pub enum QueryFilter {
     Ne {
         field: &'static str,
         value: QueryFilterValue,
+    },
+    In {
+        field: &'static str,
+        values: QueryFilterValues,
     },
     Relation {
         field: &'static str,
@@ -381,6 +512,13 @@ impl QueryFilter {
         Self::Ne {
             field,
             value: value.into(),
+        }
+    }
+
+    pub fn r#in(field: &'static str, values: impl Into<QueryFilterValues>) -> Self {
+        Self::In {
+            field,
+            values: values.into(),
         }
     }
 
@@ -1228,6 +1366,65 @@ impl<'a> SqlBuilder<'a> {
                     _ => unreachable!("handled by outer match"),
                 }
             }
+            QueryFilter::In { field, values } => {
+                let field = model.field_named(field).ok_or_else(|| {
+                    schema_error(format!(
+                        "unknown field `{}.{}` in query filter",
+                        model.name(),
+                        field
+                    ))
+                })?;
+
+                let scalar = match field.ty() {
+                    FieldType::Scalar(scalar) => scalar.scalar(),
+                    FieldType::Relation { .. } => {
+                        return Err(schema_error(format!(
+                            "field `{}.{}` is not scalar and cannot appear in `where`",
+                            model.name(),
+                            field.name()
+                        )));
+                    }
+                };
+
+                let bindings = self.resolve_filter_values(values)?;
+                if bindings.is_empty() {
+                    return Err(schema_error(format!(
+                        "`in` filter for field `{}.{}` requires at least one value",
+                        model.name(),
+                        field.name()
+                    )));
+                }
+
+                if !query_values_match_field(&bindings, field) {
+                    return Err(schema_error(format!(
+                        "filter values for field `{}.{}` are incompatible with schema type `{}`",
+                        model.name(),
+                        field.name(),
+                        field.ty().name()
+                    )));
+                }
+
+                if bindings.iter().any(|binding| {
+                    matches!(
+                        binding,
+                        QueryVariableValue::Null | QueryVariableValue::List(_)
+                    )
+                }) {
+                    return Err(schema_error(format!(
+                        "`in` filter for field `{}.{}` only supports non-null scalar values",
+                        model.name(),
+                        field.name()
+                    )));
+                }
+
+                let placeholder = self.push_binding(QueryVariableValue::List(bindings), scalar)?;
+
+                Ok(format!(
+                    "{} = ANY({})",
+                    column_expr(table_alias, field.name(), scalar),
+                    placeholder
+                ))
+            }
             QueryFilter::Relation { field, filter } => {
                 let relation_field = model.field_named(field).ok_or_else(|| {
                     schema_error(format!(
@@ -1286,6 +1483,44 @@ impl<'a> SqlBuilder<'a> {
                 .get(name)
                 .cloned()
                 .ok_or_else(|| schema_error(format!("missing query variable `{name}`"))),
+        }
+    }
+
+    fn resolve_filter_values(
+        &self,
+        values: &QueryFilterValues,
+    ) -> Result<Vec<QueryVariableValue>, sqlx::Error> {
+        match values {
+            QueryFilterValues::Values(values) => values
+                .iter()
+                .map(|value| self.resolve_filter_value(value))
+                .collect(),
+            QueryFilterValues::Variable(name) => {
+                let value = self
+                    .variables
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| schema_error(format!("missing query variable `{name}`")))?;
+
+                match value {
+                    QueryVariableValue::List(values) => Ok(values),
+                    value => Err(schema_error(format!(
+                        "query variable `{name}` must be a list for `in` filters, got `{}`",
+                        match value {
+                            QueryVariableValue::Null => "null",
+                            QueryVariableValue::Int(_) => "int",
+                            QueryVariableValue::String(_) => "string",
+                            QueryVariableValue::Bool(_) => "bool",
+                            QueryVariableValue::Float(_) => "float",
+                            QueryVariableValue::Decimal(_) => "decimal",
+                            QueryVariableValue::Bytes(_) => "bytes",
+                            QueryVariableValue::DateTime(_) => "datetime",
+                            QueryVariableValue::Uuid(_) => "uuid",
+                            QueryVariableValue::List(_) => unreachable!(),
+                        }
+                    ))),
+                }
+            }
         }
     }
 
@@ -1517,7 +1752,41 @@ fn query_value_matches_field(value: &QueryVariableValue, field: &crate::schema::
         QueryVariableValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         QueryVariableValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
         QueryVariableValue::Uuid(_) => scalar.scalar() == ScalarType::String && field.has_db_uuid(),
+        QueryVariableValue::List(_) => false,
     }
+}
+
+fn query_values_match_field(values: &[QueryVariableValue], field: &crate::schema::Field) -> bool {
+    let Some(first) = values.first() else {
+        return true;
+    };
+
+    if matches!(
+        first,
+        QueryVariableValue::Null | QueryVariableValue::List(_)
+    ) {
+        return false;
+    }
+
+    values.iter().all(|value| {
+        matches!(
+            (first, value),
+            (QueryVariableValue::Int(_), QueryVariableValue::Int(_))
+                | (QueryVariableValue::String(_), QueryVariableValue::String(_))
+                | (QueryVariableValue::Bool(_), QueryVariableValue::Bool(_))
+                | (QueryVariableValue::Float(_), QueryVariableValue::Float(_))
+                | (
+                    QueryVariableValue::Decimal(_),
+                    QueryVariableValue::Decimal(_)
+                )
+                | (QueryVariableValue::Bytes(_), QueryVariableValue::Bytes(_))
+                | (
+                    QueryVariableValue::DateTime(_),
+                    QueryVariableValue::DateTime(_)
+                )
+                | (QueryVariableValue::Uuid(_), QueryVariableValue::Uuid(_))
+        ) && query_value_matches_field(value, field)
+    })
 }
 
 fn bind_query<'q>(
@@ -1535,6 +1804,92 @@ fn bind_query<'q>(
             QueryVariableValue::Bytes(value) => query.bind(value),
             QueryVariableValue::DateTime(value) => query.bind(*value),
             QueryVariableValue::Uuid(value) => query.bind(*value),
+            QueryVariableValue::List(values) => {
+                let first = values
+                    .first()
+                    .expect("list-valued query variables must not be empty when bound");
+
+                match first {
+                    QueryVariableValue::Null => {
+                        unreachable!("list-valued query variables must not contain null items")
+                    }
+                    QueryVariableValue::Int(_) => query.bind(
+                        values
+                            .iter()
+                            .map(|value| match value {
+                                QueryVariableValue::Int(value) => *value,
+                                _ => unreachable!("list-valued query variables must be homogenous"),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    QueryVariableValue::String(_) => query.bind(
+                        values
+                            .iter()
+                            .map(|value| match value {
+                                QueryVariableValue::String(value) => value.clone(),
+                                _ => unreachable!("list-valued query variables must be homogenous"),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    QueryVariableValue::Bool(_) => query.bind(
+                        values
+                            .iter()
+                            .map(|value| match value {
+                                QueryVariableValue::Bool(value) => *value,
+                                _ => unreachable!("list-valued query variables must be homogenous"),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    QueryVariableValue::Float(_) => query.bind(
+                        values
+                            .iter()
+                            .map(|value| match value {
+                                QueryVariableValue::Float(value) => *value,
+                                _ => unreachable!("list-valued query variables must be homogenous"),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    QueryVariableValue::Decimal(_) => query.bind(
+                        values
+                            .iter()
+                            .map(|value| match value {
+                                QueryVariableValue::Decimal(value) => *value,
+                                _ => unreachable!("list-valued query variables must be homogenous"),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    QueryVariableValue::Bytes(_) => query.bind(
+                        values
+                            .iter()
+                            .map(|value| match value {
+                                QueryVariableValue::Bytes(value) => value.clone(),
+                                _ => unreachable!("list-valued query variables must be homogenous"),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    QueryVariableValue::DateTime(_) => query.bind(
+                        values
+                            .iter()
+                            .map(|value| match value {
+                                QueryVariableValue::DateTime(value) => *value,
+                                _ => unreachable!("list-valued query variables must be homogenous"),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    QueryVariableValue::Uuid(_) => query.bind(
+                        values
+                            .iter()
+                            .map(|value| match value {
+                                QueryVariableValue::Uuid(value) => *value,
+                                _ => unreachable!("list-valued query variables must be homogenous"),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    QueryVariableValue::List(_) => {
+                        unreachable!("list-valued query variables must not contain nested lists")
+                    }
+                }
+            }
         };
     }
 

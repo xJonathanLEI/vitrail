@@ -70,6 +70,12 @@ impl ParsedSchema {
                             ::vitrail_pg::QueryFilterValue::value($value),
                         )
                     };
+                    (#ident : { in : $value:expr $(,)? }) => {
+                        ::vitrail_pg::QueryFilter::r#in(
+                            stringify!(#ident),
+                            ::vitrail_pg::QueryFilterValues::from($value),
+                        )
+                    };
                     (#ident : { not : null $(,)? }) => {
                         ::vitrail_pg::QueryFilter::is_not_null(stringify!(#ident))
                     };
@@ -87,7 +93,7 @@ impl ParsedSchema {
                             stringify!(#ident),
                             "` in query helper for model `",
                             #model_name,
-                            "`; only `eq`, `null`, and `{ not: ... }` are currently supported"
+                            "`; only `eq`, `in`, `null`, and `{ not: ... }` are currently supported"
                         ))
                     }};
                     (#ident : $value:tt) => {{
@@ -96,7 +102,7 @@ impl ParsedSchema {
                             stringify!(#ident),
                             "` in query helper for model `",
                             #model_name,
-                            "`; expected `null`, `{ eq: ... }`, or `{ not: ... }`"
+                            "`; expected `null`, `{ eq: ... }`, `{ in: ... }`, or `{ not: ... }`"
                         ))
                     }};
                 }

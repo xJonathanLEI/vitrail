@@ -122,6 +122,11 @@ struct ExcludedPostBodyVariables {
     excluded_body: String,
 }
 
+#[derive(QueryVariables)]
+struct PostIdsVariables {
+    post_ids: Vec<i64>,
+}
+
 #[derive(UpdateMany)]
 #[vitrail(
     schema = crate::update_schema::Schema,
@@ -131,6 +136,16 @@ struct ExcludedPostBodyVariables {
     where(body = not(excluded_body))
 )]
 struct DerivedPublishPostsByExcludedBody;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = PostIdsVariables,
+    where(id = in(post_ids))
+)]
+struct DerivedPublishPostsByIds;
 
 struct PublishUnpublishedPosts;
 
@@ -1116,6 +1131,28 @@ fn update_many_generates_expected_sql_for_not_equal_filter() {
 }
 
 #[test]
+fn update_many_generates_expected_sql_for_in_filter() {
+    let sql = crate::update_schema::update_many_with_variables::<DerivedPublishPostsByIds>(
+        PostIdsVariables {
+            post_ids: vec![1, 3],
+        },
+        PublishPostsData { published: true },
+    )
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = $1"#,
+            r#"WHERE ("t0"."id")::bigint = ANY($2)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
 fn update_helper_generates_expected_sql_for_not_null_filter() {
     let sql = update! {
         crate::update_schema,
@@ -1168,6 +1205,35 @@ fn update_helper_generates_expected_sql_for_not_equal_filter() {
             r#"UPDATE "post" AS "t0""#,
             r#"SET "published" = $1"#,
             r#"WHERE "t0"."body" <> $2"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_helper_generates_expected_sql_for_in_filter() {
+    let sql = update! {
+        crate::update_schema,
+        post {
+            data: {
+                published: true,
+            },
+            where: {
+                id: {
+                    in: vec![1_i64, 3_i64]
+                },
+            },
+        }
+    }
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = $1"#,
+            r#"WHERE ("t0"."id")::bigint = ANY($2)"#,
         ]
         .join(" ")
     );

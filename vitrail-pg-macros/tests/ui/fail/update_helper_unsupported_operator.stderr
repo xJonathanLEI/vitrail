@@ -1,4 +1,4 @@
-error: unsupported `where` operator `gt` for scalar field `published` in update helper for model `post`; only `eq`, `null`, and `{ not: ... }` are currently supported
+error: unsupported `where` operator `gt` for scalar field `published` in update helper for model `post`; only `eq`, `in`, `null`, and `{ not: ... }` are currently supported
   --> tests/ui/fail/update_helper_unsupported_operator.rs:5:1
    |
  5 | / schema! {

@@ -1,4 +1,4 @@
-error: delete filters using `eq(...)` or `not(...)` require `#[vitrail(variables = YourVariablesType)]`
+error: delete filters using `eq(...)`, `in(...)`, or `not(...)` require `#[vitrail(variables = YourVariablesType)]`
   --> tests/ui/fail/delete_not_without_variables.rs:20:8
    |
 20 | struct DeletePostsByExcludedTitle;

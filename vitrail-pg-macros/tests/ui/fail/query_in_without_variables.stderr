@@ -1,0 +1,28 @@
+error: query filters using `eq(...)`, `in(...)`, or `not(...)` require `#[vitrail(variables = YourVariablesType)]`
+  --> tests/ui/fail/query_in_without_variables.rs:20:8
+   |
+20 | struct PostByIds {
+   |        ^^^^^^^^^
+
+error[E0277]: the trait bound `PostByIds: vitrail_pg_core::QueryModel` is not satisfied
+  --> tests/ui/fail/query_in_without_variables.rs:26:42
+   |
+26 |     let _ = crate::query_schema::query::<PostByIds>();
+   |                                          ^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `vitrail_pg_core::QueryModel` is not implemented for `PostByIds`
+  --> tests/ui/fail/query_in_without_variables.rs:20:1
+   |
+20 | struct PostByIds {
+   | ^^^^^^^^^^^^^^^^
+note: required by a bound in `query`
+  --> tests/ui/fail/query_in_without_variables.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_schema
+ 7 | |
+ 8 | |     model post {
+...  |
+12 | | }
+   | |_^ required by this bound in `query`
+   = note: this error originates in the macro `schema` (in Nightly builds, run with -Z macro-backtrace for more info)

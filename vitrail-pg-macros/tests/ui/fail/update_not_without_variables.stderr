@@ -1,4 +1,4 @@
-error: update filters using `eq(...)` or `not(...)` require `#[vitrail(variables = YourVariablesType)]`
+error: update filters using `eq(...)`, `in(...)`, or `not(...)` require `#[vitrail(variables = YourVariablesType)]`
   --> tests/ui/fail/update_not_without_variables.rs:28:8
    |
 28 | struct PublishPostsByExcludedTitle;

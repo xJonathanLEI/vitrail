@@ -76,6 +76,11 @@ struct PostBodyVariables {
     excluded_body: String,
 }
 
+#[derive(vitrail_pg::QueryVariables)]
+struct CommentIdsVariables {
+    comment_ids: Vec<i64>,
+}
+
 #[derive(DeleteMany)]
 #[vitrail(
     schema = crate::delete_schema::Schema,
@@ -84,6 +89,15 @@ struct PostBodyVariables {
     where(post.body = not(excluded_body))
 )]
 struct DerivedDeleteCommentsByPostBody;
+
+#[derive(DeleteMany)]
+#[vitrail(
+    schema = crate::delete_schema::Schema,
+    model = comment,
+    variables = CommentIdsVariables,
+    where(id = in(comment_ids))
+)]
+struct DerivedDeleteCommentsByIds;
 
 struct DeleteReviewedComments;
 
@@ -299,6 +313,71 @@ async fn delete_many_deletes_rows_matching_not_equal_filter() {
 
     assert_eq!(remaining_bob_comments, 1);
 
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn delete_many_deletes_rows_matching_in_filter() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let deleted_ids = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT "id"::bigint
+        FROM "comment"
+        ORDER BY "id"
+        LIMIT 2
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("should fetch comment ids to delete");
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .delete_many(crate::delete_schema::delete_many_with_variables::<
+            DerivedDeleteCommentsByIds,
+        >(CommentIdsVariables {
+            comment_ids: deleted_ids.clone(),
+        }))
+        .await
+        .expect("delete should succeed");
+
+    assert_eq!(count, 2);
+
+    let remaining_comments: i64 = sqlx::query_scalar(r#"SELECT COUNT(*)::bigint FROM "comment""#)
+        .fetch_one(&pool)
+        .await
+        .expect("should count comments");
+
+    assert_eq!(remaining_comments, 1);
+
+    let deleted_comments: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "comment"
+        WHERE "id" = ANY($1)
+        "#,
+    )
+    .bind(&deleted_ids)
+    .fetch_one(&pool)
+    .await
+    .expect("should count deleted comments");
+
+    assert_eq!(deleted_comments, 0);
+
+    client.close().await;
     pool.close().await;
     database.cleanup().await;
 }
@@ -762,6 +841,51 @@ fn delete_helper_generates_expected_sql_for_not_equal_filter() {
         [
             r#"DELETE FROM "comment" AS "t0""#,
             r#"WHERE EXISTS (SELECT 1 FROM "post" AS "t1" WHERE "t1"."id" = "t0"."post_id" AND "t1"."body" <> $1)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn delete_many_generates_expected_sql_for_in_filter() {
+    let sql = crate::delete_schema::delete_many_with_variables::<DerivedDeleteCommentsByIds>(
+        CommentIdsVariables {
+            comment_ids: vec![1, 3],
+        },
+    )
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"DELETE FROM "comment" AS "t0""#,
+            r#"WHERE ("t0"."id")::bigint = ANY($1)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn delete_helper_generates_expected_sql_for_in_filter() {
+    let sql = delete! {
+        crate::delete_schema,
+        comment {
+            where: {
+                id: {
+                    in: vec![1_i64, 3_i64]
+                },
+            },
+        }
+    }
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"DELETE FROM "comment" AS "t0""#,
+            r#"WHERE ("t0"."id")::bigint = ANY($1)"#,
         ]
         .join(" ")
     );

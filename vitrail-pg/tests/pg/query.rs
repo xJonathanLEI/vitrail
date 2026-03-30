@@ -174,6 +174,11 @@ struct PostByExcludedTitleVariables {
     excluded_title: String,
 }
 
+#[derive(QueryVariables)]
+struct PostsByIdsVariables {
+    post_ids: Vec<i64>,
+}
+
 #[derive(QueryResult)]
 #[vitrail(
     schema = crate::query_schema::Schema,
@@ -182,6 +187,18 @@ struct PostByExcludedTitleVariables {
     where(title = not(excluded_title))
 )]
 struct PostWithDifferentTitle {
+    id: i64,
+    title: String,
+}
+
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = post,
+    variables = PostsByIdsVariables,
+    where(id = in(post_ids))
+)]
+struct PostByIds {
     id: i64,
     title: String,
 }
@@ -459,6 +476,64 @@ async fn model_first_not_null_where_query_on_postgres() {
 }
 
 #[tokio::test]
+async fn ad_hoc_in_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let post_ids = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT "id"::bigint
+        FROM "post"
+        WHERE "author_id" = $1
+        ORDER BY "id"
+        "#,
+    )
+    .bind(author_id)
+    .fetch_all(&pool)
+    .await
+    .expect("should fetch post ids");
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(query! {
+            crate::query_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                },
+                where: {
+                    id: {
+                        in: post_ids.clone()
+                    }
+                },
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 2);
+    assert_eq!(posts[0].id, post_ids[0]);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
+    assert_eq!(posts[1].id, post_ids[1]);
+    assert_eq!(posts[1].title, "Second post");
+
+    client.close().await;
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn ad_hoc_not_equal_where_query_on_postgres() {
     let database = TestDatabase::new().await;
     let database_url = database.url().to_owned();
@@ -490,6 +565,55 @@ async fn ad_hoc_not_equal_where_query_on_postgres() {
     assert_eq!(posts[0].id, 1);
     assert_eq!(posts[0].title, "Hello from Vitrail");
 
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_in_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let post_ids = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT "id"::bigint
+        FROM "post"
+        WHERE "author_id" = $1
+        ORDER BY "id"
+        "#,
+    )
+    .bind(author_id)
+    .fetch_all(&pool)
+    .await
+    .expect("should fetch post ids");
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(crate::query_schema::query_with_variables::<PostByIds>(
+            PostsByIdsVariables {
+                post_ids: post_ids.clone(),
+            },
+        ))
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 2);
+    assert_eq!(posts[0].id, post_ids[0]);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
+    assert_eq!(posts[1].id, post_ids[1]);
+    assert_eq!(posts[1].title, "Second post");
+
+    client.close().await;
+    pool.close().await;
     database.cleanup().await;
 }
 

@@ -88,6 +88,11 @@ struct PostByExcludedTitleVariables {
     excluded_title: String,
 }
 
+#[derive(QueryVariables)]
+struct PostByIdsVariables {
+    post_ids: Vec<i64>,
+}
+
 #[allow(dead_code)]
 #[derive(UpdateData)]
 #[vitrail(schema = crate::my_schema::Schema, model = post)]
@@ -138,10 +143,10 @@ struct UserWithPosts {
 #[vitrail(
     schema = crate::my_schema::Schema,
     model = post,
-    variables = PostByExcludedTitleVariables,
-    where(title = not(excluded_title))
+    variables = PostByIdsVariables,
+    where(id = in(post_ids))
 )]
-struct PostWithDifferentTitle {
+struct PostByIds {
     id: i64,
     title: String,
 }
@@ -162,7 +167,7 @@ async fn main() {
         .await
         .unwrap();
 
-    client
+    let hello_post = client
         .insert(my_schema::insert::<InsertedPost>(NewPost {
             title: "Hello Vitrail".to_owned(),
             body: Some("Draft body".to_owned()),
@@ -172,7 +177,7 @@ async fn main() {
         .await
         .unwrap();
 
-    client
+    let draft_post = client
         .insert(my_schema::insert::<InsertedPost>(NewPost {
             title: "Untitled draft".to_owned(),
             body: None,
@@ -211,9 +216,9 @@ async fn main() {
         .unwrap();
 
     let posts = client
-        .find_many(my_schema::query_with_variables::<PostWithDifferentTitle>(
-            PostByExcludedTitleVariables {
-                excluded_title: "Untitled draft".to_owned(),
+        .find_many(my_schema::query_with_variables::<PostByIds>(
+            PostByIdsVariables {
+                post_ids: vec![hello_post.id, draft_post.id],
             },
         ))
         .await
@@ -223,5 +228,5 @@ async fn main() {
     println!("updated {} posts", updated_posts);
     println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
-    println!("fetched {} posts with a not(...) filter", posts.len());
+    println!("fetched {} posts with an in(...) filter", posts.len());
 }
