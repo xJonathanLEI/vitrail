@@ -1,5 +1,6 @@
 mod client;
 mod delete;
+mod filter;
 mod insert;
 mod migration;
 mod migrator;

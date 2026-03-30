@@ -1,11 +1,12 @@
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::ext::IdentExt;
-use syn::parse::ParseStream;
 use syn::spanned::Spanned;
 use syn::{
     Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Token, Type, parenthesized,
 };
+
+use crate::filter::{RootFilter, parse_root_filter};
 
 pub(crate) struct QueryResultDerive {
     ident: Ident,
@@ -14,7 +15,7 @@ pub(crate) struct QueryResultDerive {
     schema_path: Path,
     model_name: LitStr,
     variables_ty: Option<Type>,
-    root_filters: Vec<QueryResultRootFilter>,
+    root_filters: Vec<RootFilter>,
 }
 
 impl QueryResultDerive {
@@ -133,7 +134,7 @@ impl QueryResultDerive {
             let mut filters = root_filters
                 .iter()
                 .filter(|filter| filter.variable().is_none())
-                .map(QueryResultRootFilter::expand)
+                .map(RootFilter::expand)
                 .collect::<Vec<_>>();
 
             filters.extend(scalar_fields.iter().filter_map(|field| {
@@ -166,7 +167,7 @@ impl QueryResultDerive {
             let filter_exprs = {
                 let mut filters = root_filters
                     .iter()
-                    .map(QueryResultRootFilter::expand)
+                    .map(RootFilter::expand)
                     .collect::<Vec<_>>();
 
                 filters.extend(scalar_fields.iter().filter_map(|field| {
@@ -230,27 +231,21 @@ impl QueryResultDerive {
         };
 
         let root_filter_validation_tokens = {
-            let schema_module_ident = schema_path
-                .segments
-                .iter()
-                .rev()
-                .nth(1)
-                .map(|segment| segment.ident.clone())
-                .ok_or_else(|| {
-                    Error::new(
-                        schema_path.span(),
-                        "`#[vitrail(schema = ...)]` must point to a schema type like `crate::my_schema::Schema` when used with `where(...)`",
-                    )
-                })?;
+            let schema_module_ident = schema_module_ident(&schema_path, "QueryResult")?;
             let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
                 Error::new(
                     model_name.span(),
                     "`#[vitrail(model = ...)]` must be a valid identifier when used with `where(...)`",
                 )
             })?;
+            let where_path_assert_ident = format_ident!(
+                "__vitrail_assert_query_where_path_{}_{}",
+                schema_module_ident,
+                model_ident,
+            );
             let validations = root_filters
                 .iter()
-                .map(|filter| filter.validation_tokens(&schema_module_ident, &model_ident))
+                .map(|filter| filter.validation_tokens(&where_path_assert_ident))
                 .collect::<Vec<_>>();
 
             quote! {
@@ -299,7 +294,7 @@ impl QueryResultDerive {
         let variable_validation_tokens = if let Some(variables_ty) = &variables_ty {
             let mut validations = root_filters
                 .iter()
-                .filter_map(QueryResultRootFilter::variable)
+                .filter_map(RootFilter::variable)
                 .collect::<Vec<_>>();
 
             validations.extend(scalar_fields.iter().filter_map(|field| {
@@ -675,7 +670,7 @@ impl QueryResultField {
 
 fn parse_container_attrs(
     attrs: &[Attribute],
-) -> Result<(Path, LitStr, Option<Type>, Vec<QueryResultRootFilter>)> {
+) -> Result<(Path, LitStr, Option<Type>, Vec<RootFilter>)> {
     let mut schema_path = None;
     let mut model_name = None;
     let mut variables_ty = None;
@@ -706,7 +701,7 @@ fn parse_container_attrs(
                 return Ok(());
             }
             if meta.path.is_ident("where") {
-                root_filters.push(parse_query_result_root_filter(meta.input)?);
+                root_filters.push(parse_root_filter(meta.input)?);
                 return Ok(());
             }
             Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
@@ -727,141 +722,6 @@ fn parse_container_attrs(
     })?;
 
     Ok((schema_path, model_name, variables_ty, root_filters))
-}
-
-struct QueryResultRootFilter {
-    field: LitStr,
-    filter: QueryResultFieldFilter,
-}
-
-impl QueryResultRootFilter {
-    fn expand(&self) -> TokenStream2 {
-        let field_name = &self.field;
-
-        match &self.filter {
-            QueryResultFieldFilter::Eq { variable } => quote! {
-                ::vitrail_pg::QueryFilter::eq(
-                    #field_name,
-                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
-                )
-            },
-            QueryResultFieldFilter::In { variable } => quote! {
-                ::vitrail_pg::QueryFilter::r#in(
-                    #field_name,
-                    ::vitrail_pg::QueryFilterValues::variable(stringify!(#variable)),
-                )
-            },
-            QueryResultFieldFilter::Ne { variable } => quote! {
-                ::vitrail_pg::QueryFilter::ne(
-                    #field_name,
-                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
-                )
-            },
-            QueryResultFieldFilter::IsNull => quote! {
-                ::vitrail_pg::QueryFilter::is_null(#field_name)
-            },
-            QueryResultFieldFilter::IsNotNull => quote! {
-                ::vitrail_pg::QueryFilter::is_not_null(#field_name)
-            },
-        }
-    }
-
-    fn validation_tokens(&self, schema_module_ident: &Ident, model_ident: &Ident) -> TokenStream2 {
-        let field_ident = syn::parse_str::<Ident>(&self.field.value())
-            .expect("root filter fields are parsed as identifiers");
-        let where_assert_macro_ident = format_ident!(
-            "__vitrail_assert_where_{}_{}",
-            schema_module_ident,
-            model_ident,
-            span = self.field.span()
-        );
-
-        quote! {
-            #where_assert_macro_ident!(#field_ident);
-        }
-    }
-
-    fn variable(&self) -> Option<&Ident> {
-        match &self.filter {
-            QueryResultFieldFilter::Eq { variable }
-            | QueryResultFieldFilter::In { variable }
-            | QueryResultFieldFilter::Ne { variable } => Some(variable),
-            QueryResultFieldFilter::IsNull | QueryResultFieldFilter::IsNotNull => None,
-        }
-    }
-}
-
-fn parse_query_result_root_filter(input: ParseStream<'_>) -> Result<QueryResultRootFilter> {
-    let content;
-    parenthesized!(content in input);
-
-    let field = content.call(Ident::parse_any)?;
-    content.parse::<Token![=]>()?;
-    let operator = content.call(Ident::parse_any)?;
-
-    let filter = if operator == "eq" {
-        let operator_args;
-        parenthesized!(operator_args in content);
-        let variable = operator_args.call(Ident::parse_any)?;
-
-        if !operator_args.is_empty() {
-            return Err(Error::new(
-                operator_args.span(),
-                "unexpected tokens in `where(... = eq(...))`",
-            ));
-        }
-
-        QueryResultFieldFilter::Eq { variable }
-    } else if operator == "in" {
-        let operator_args;
-        parenthesized!(operator_args in content);
-        let variable = operator_args.call(Ident::parse_any)?;
-
-        if !operator_args.is_empty() {
-            return Err(Error::new(
-                operator_args.span(),
-                "unexpected tokens in `where(... = in(...))`",
-            ));
-        }
-
-        QueryResultFieldFilter::In { variable }
-    } else if operator == "null" {
-        QueryResultFieldFilter::IsNull
-    } else if operator == "not" {
-        let operator_args;
-        parenthesized!(operator_args in content);
-        let value = operator_args.call(Ident::parse_any)?;
-
-        if !operator_args.is_empty() {
-            return Err(Error::new(
-                operator_args.span(),
-                "unexpected tokens in `where(... = not(...))`",
-            ));
-        }
-
-        if value == "null" {
-            QueryResultFieldFilter::IsNotNull
-        } else {
-            QueryResultFieldFilter::Ne { variable: value }
-        }
-    } else {
-        return Err(Error::new(
-            operator.span(),
-            "unsupported `where` operator; only `eq`, `in`, `null`, and `not(...)` are currently supported",
-        ));
-    };
-
-    if !content.is_empty() {
-        return Err(Error::new(
-            content.span(),
-            "unexpected tokens in `where(...)`",
-        ));
-    }
-
-    Ok(QueryResultRootFilter {
-        field: LitStr::new(&field.to_string(), field.span()),
-        filter,
-    })
 }
 
 pub(crate) struct QueryVariablesDerive {

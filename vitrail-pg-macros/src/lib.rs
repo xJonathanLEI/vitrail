@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 
 mod delete;
+mod filter;
 mod insert;
 mod macro_inputs;
 mod query;

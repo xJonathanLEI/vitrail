@@ -2,7 +2,10 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedSchema, dollar_crate, rust_field_type_tokens, to_pascal_case};
+use super::{
+    ParsedSchema, dollar_crate, filter_helpers::generate_filter_helper_items,
+    rust_field_type_tokens, to_pascal_case,
+};
 
 impl ParsedSchema {
     pub(super) fn generate_query_helper_macros(&self, module_name: &Ident) -> Result<TokenStream2> {
@@ -25,10 +28,18 @@ impl ParsedSchema {
                 format_ident!("__vitrail_assert_select_{}_{}", module_name, model.name);
             let include_assert_ident =
                 format_ident!("__vitrail_assert_include_{}_{}", module_name, model.name);
-            let where_assert_ident =
-                format_ident!("__vitrail_assert_where_{}_{}", module_name, model.name);
+            let where_path_assert_ident = format_ident!(
+                "__vitrail_assert_query_where_path_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_filter_macro_ident = format_ident!(
+                "__vitrail_query_where_filter_{}_{}",
+                module_name,
+                model.name
+            );
             let where_field_filter_ident = format_ident!(
-                "__vitrail_where_field_filter_{}_{}",
+                "__vitrail_query_where_field_filter_{}_{}",
                 module_name,
                 model.name
             );
@@ -52,61 +63,15 @@ impl ParsedSchema {
                 quote! { (#ident) => {}; }
             });
 
-            let where_assert_arms = scalar_fields.iter().map(|field| {
-                let ident = &field.name;
-                quote! { (#ident) => {}; }
-            });
-
-            let scalar_where_field_arms = scalar_fields.iter().map(|field| {
-                let ident = &field.name;
-
-                quote! {
-                    (#ident : null) => {
-                        ::vitrail_pg::QueryFilter::is_null(stringify!(#ident))
-                    };
-                    (#ident : { eq : $value:expr $(,)? }) => {
-                        ::vitrail_pg::QueryFilter::eq(
-                            stringify!(#ident),
-                            ::vitrail_pg::QueryFilterValue::value($value),
-                        )
-                    };
-                    (#ident : { in : $value:expr $(,)? }) => {
-                        ::vitrail_pg::QueryFilter::r#in(
-                            stringify!(#ident),
-                            ::vitrail_pg::QueryFilterValues::from($value),
-                        )
-                    };
-                    (#ident : { not : null $(,)? }) => {
-                        ::vitrail_pg::QueryFilter::is_not_null(stringify!(#ident))
-                    };
-                    (#ident : { not : $value:expr $(,)? }) => {
-                        ::vitrail_pg::QueryFilter::ne(
-                            stringify!(#ident),
-                            ::vitrail_pg::QueryFilterValue::value($value),
-                        )
-                    };
-                    (#ident : { $operator:ident : $value:tt $(,)? }) => {{
-                        compile_error!(concat!(
-                            "unsupported `where` operator `",
-                            stringify!($operator),
-                            "` for scalar field `",
-                            stringify!(#ident),
-                            "` in query helper for model `",
-                            #model_name,
-                            "`; only `eq`, `in`, `null`, and `{ not: ... }` are currently supported"
-                        ))
-                    }};
-                    (#ident : $value:tt) => {{
-                        compile_error!(concat!(
-                            "malformed filter for scalar field `",
-                            stringify!(#ident),
-                            "` in query helper for model `",
-                            #model_name,
-                            "`; expected `null`, `{ eq: ... }`, `{ in: ... }`, or `{ not: ... }`"
-                        ))
-                    }};
-                }
-            });
+            let filter_helper_items = generate_filter_helper_items(
+                self,
+                module_name,
+                model,
+                "query",
+                &where_path_assert_ident,
+                &where_filter_macro_ident,
+                &where_field_filter_ident,
+            )?;
 
             let query_result_traits = scalar_fields
                 .iter()
@@ -296,35 +261,7 @@ impl ParsedSchema {
                     };
                 }
 
-                #[doc(hidden)]
-                #[macro_export]
-                macro_rules! #where_assert_ident {
-                    #(#where_assert_arms)*
-                    ($other:ident) => {
-                        compile_error!(concat!(
-                            "unknown scalar field `",
-                            stringify!($other),
-                            "` in `where(...)` filter for model `",
-                            #model_name,
-                            "`"
-                        ));
-                    };
-                }
-
-                #[doc(hidden)]
-                #[macro_export]
-                macro_rules! #where_field_filter_ident {
-                    #(#scalar_where_field_arms)*
-                    ($other:ident : $value:tt) => {{
-                        compile_error!(concat!(
-                            "unknown scalar field `",
-                            stringify!($other),
-                            "` in `where(...)` filter for model `",
-                            #model_name,
-                            "`"
-                        ))
-                    }};
-                }
+                #filter_helper_items
 
                 #[doc(hidden)]
                 pub mod #trait_module_ident {
@@ -384,8 +321,6 @@ impl ParsedSchema {
                     ) => {{
                         $( #select_assert_ident!($select_field); )*
                         $( $( #include_assert_ident!($include_field); )* )?
-                        $( $( #where_assert_ident!($where_field); )* )?
-
                         ::vitrail_pg::QuerySelection {
                             model: #model_name,
                             scalar_fields: vec![$( stringify!($select_field) ),*],
@@ -399,23 +334,11 @@ impl ParsedSchema {
                                     ),*
                                 )?
                             ],
-                            filter: {
-                                let __vitrail_filters = vec![
-                                    $(
-                                        $(
-                                            #where_field_filter_ident!($where_field : $where_value)
-                                        ),*
-                                    )?
-                                ];
-
-                                if __vitrail_filters.is_empty() {
-                                    None
-                                } else if __vitrail_filters.len() == 1 {
-                                    Some(__vitrail_filters.into_iter().next().expect("single filter should exist"))
-                                } else {
-                                    Some(::vitrail_pg::QueryFilter::And(__vitrail_filters))
-                                }
-                            },
+                            filter: None $(.or_else(|| {
+                                #where_filter_macro_ident!({
+                                    $($where_field : $where_value),*
+                                })
+                            }))?,
                         }
                     }};
                 }

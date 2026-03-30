@@ -1,15 +1,12 @@
+use crate::filter::{RootFilter, parse_root_filter};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use std::collections::HashSet;
-use syn::ext::IdentExt;
-use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{
-    Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Token, Type, parenthesized,
-};
+use syn::{Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Type};
 
 type UpdateDataContainerAttrs = (Path, LitStr);
-type UpdateManyContainerAttrs = (Path, LitStr, Type, Option<Type>, Vec<UpdateManyRootFilter>);
+type UpdateManyContainerAttrs = (Path, LitStr, Type, Option<Type>, Vec<RootFilter>);
 
 pub(crate) struct UpdateDataDerive {
     ident: Ident,
@@ -151,7 +148,7 @@ pub(crate) struct UpdateManyDerive {
     model_name: LitStr,
     data_ty: Type,
     variables_ty: Option<Type>,
-    root_filters: Vec<UpdateManyRootFilter>,
+    root_filters: Vec<RootFilter>,
 }
 
 impl UpdateManyDerive {
@@ -238,7 +235,7 @@ impl UpdateManyDerive {
         let typed_validation_fn = if let Some(variables_ty) = &variables_ty {
             let variable_accesses = root_filters
                 .iter()
-                .filter_map(UpdateManyRootFilter::variable)
+                .filter_map(RootFilter::variable)
                 .collect::<Vec<_>>();
 
             quote! {
@@ -282,7 +279,7 @@ impl UpdateManyDerive {
 
         let filter_exprs = root_filters
             .iter()
-            .map(UpdateManyRootFilter::expand)
+            .map(RootFilter::expand)
             .collect::<Vec<_>>();
 
         let filter_tokens = if filter_exprs.is_empty() {
@@ -485,7 +482,7 @@ fn parse_update_many_container_attrs(attrs: &[Attribute]) -> Result<UpdateManyCo
                 return Ok(());
             }
             if meta.path.is_ident("where") {
-                root_filters.push(parse_update_many_root_filter(meta.input)?);
+                root_filters.push(parse_root_filter(meta.input)?);
                 return Ok(());
             }
             Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
@@ -512,160 +509,6 @@ fn parse_update_many_container_attrs(attrs: &[Attribute]) -> Result<UpdateManyCo
     })?;
 
     Ok((schema_path, model_name, data_ty, variables_ty, root_filters))
-}
-
-struct UpdateManyRootFilter {
-    path: Vec<Ident>,
-    filter: UpdateManyScalarFilter,
-}
-
-enum UpdateManyScalarFilter {
-    Eq { variable: Ident },
-    In { variable: Ident },
-    Ne { variable: Ident },
-    IsNull,
-    IsNotNull,
-}
-
-impl UpdateManyRootFilter {
-    fn expand(&self) -> TokenStream2 {
-        let final_field = self
-            .path
-            .last()
-            .expect("update filter path should never be empty");
-
-        let mut filter = match &self.filter {
-            UpdateManyScalarFilter::Eq { variable } => quote! {
-                ::vitrail_pg::QueryFilter::eq(
-                    stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
-                )
-            },
-            UpdateManyScalarFilter::In { variable } => quote! {
-                ::vitrail_pg::QueryFilter::r#in(
-                    stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValues::variable(stringify!(#variable)),
-                )
-            },
-            UpdateManyScalarFilter::Ne { variable } => quote! {
-                ::vitrail_pg::QueryFilter::ne(
-                    stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
-                )
-            },
-            UpdateManyScalarFilter::IsNull => quote! {
-                ::vitrail_pg::QueryFilter::is_null(stringify!(#final_field))
-            },
-            UpdateManyScalarFilter::IsNotNull => quote! {
-                ::vitrail_pg::QueryFilter::is_not_null(stringify!(#final_field))
-            },
-        };
-
-        for segment in self.path[..self.path.len() - 1].iter().rev() {
-            filter = quote! {
-                ::vitrail_pg::QueryFilter::relation(stringify!(#segment), #filter)
-            };
-        }
-
-        filter
-    }
-
-    fn validation_tokens(&self, where_path_assert_ident: &Ident) -> TokenStream2 {
-        let segments = &self.path;
-        quote! {
-            #where_path_assert_ident!(#(#segments).*);
-        }
-    }
-
-    fn variable(&self) -> Option<&Ident> {
-        match &self.filter {
-            UpdateManyScalarFilter::Eq { variable }
-            | UpdateManyScalarFilter::In { variable }
-            | UpdateManyScalarFilter::Ne { variable } => Some(variable),
-            UpdateManyScalarFilter::IsNull | UpdateManyScalarFilter::IsNotNull => None,
-        }
-    }
-}
-
-impl Parse for UpdateManyRootFilter {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut path = vec![input.call(Ident::parse_any)?];
-
-        while input.peek(Token![.]) {
-            input.parse::<Token![.]>()?;
-            path.push(input.call(Ident::parse_any)?);
-        }
-
-        input.parse::<Token![=]>()?;
-        let operator = input.call(Ident::parse_any)?;
-
-        let filter = if operator == "eq" {
-            let operator_args;
-            parenthesized!(operator_args in input);
-            let variable = operator_args.call(Ident::parse_any)?;
-
-            if !operator_args.is_empty() {
-                return Err(Error::new(
-                    operator_args.span(),
-                    "unexpected tokens in `where(... = eq(...))`",
-                ));
-            }
-
-            UpdateManyScalarFilter::Eq { variable }
-        } else if operator == "in" {
-            let operator_args;
-            parenthesized!(operator_args in input);
-            let variable = operator_args.call(Ident::parse_any)?;
-
-            if !operator_args.is_empty() {
-                return Err(Error::new(
-                    operator_args.span(),
-                    "unexpected tokens in `where(... = in(...))`",
-                ));
-            }
-
-            UpdateManyScalarFilter::In { variable }
-        } else if operator == "null" {
-            UpdateManyScalarFilter::IsNull
-        } else if operator == "not" {
-            let operator_args;
-            parenthesized!(operator_args in input);
-            let value = operator_args.call(Ident::parse_any)?;
-
-            if !operator_args.is_empty() {
-                return Err(Error::new(
-                    operator_args.span(),
-                    "unexpected tokens in `where(... = not(...))`",
-                ));
-            }
-
-            if value == "null" {
-                UpdateManyScalarFilter::IsNotNull
-            } else {
-                UpdateManyScalarFilter::Ne { variable: value }
-            }
-        } else {
-            return Err(Error::new(
-                operator.span(),
-                "unsupported `where` operator; only `eq`, `in`, `null`, and `not(...)` are currently supported",
-            ));
-        };
-
-        if !input.is_empty() {
-            return Err(Error::new(
-                input.span(),
-                "unexpected tokens in `where(...)`",
-            ));
-        }
-
-        Ok(Self { path, filter })
-    }
-}
-
-fn parse_update_many_root_filter(input: ParseStream<'_>) -> Result<UpdateManyRootFilter> {
-    let content;
-    parenthesized!(content in input);
-    content.parse()
 }
 
 pub(crate) fn schema_module_path(schema_path: &Path, derive_name: &str) -> Result<Path> {

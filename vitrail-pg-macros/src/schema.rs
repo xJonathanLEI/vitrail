@@ -17,6 +17,7 @@ mod kw {
 }
 
 mod delete_helpers;
+mod filter_helpers;
 mod helpers;
 mod insert_helpers;
 mod query_helpers;

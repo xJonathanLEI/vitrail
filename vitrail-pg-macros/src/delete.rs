@@ -1,12 +1,11 @@
+use crate::filter::{RootFilter, parse_root_filter};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use syn::ext::IdentExt;
-use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Token, parenthesized};
+use syn::{Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result};
 
 use crate::update::{schema_module_ident, schema_module_path};
 
-type DeleteManyContainerAttrs = (Path, LitStr, Option<syn::Type>, Vec<DeleteManyRootFilter>);
+type DeleteManyContainerAttrs = (Path, LitStr, Option<syn::Type>, Vec<RootFilter>);
 
 pub(crate) struct DeleteManyDerive {
     ident: Ident,
@@ -14,7 +13,7 @@ pub(crate) struct DeleteManyDerive {
     schema_path: Path,
     model_name: LitStr,
     variables_ty: Option<syn::Type>,
-    root_filters: Vec<DeleteManyRootFilter>,
+    root_filters: Vec<RootFilter>,
 }
 
 impl DeleteManyDerive {
@@ -99,7 +98,7 @@ impl DeleteManyDerive {
         let typed_validation_fn = if let Some(variables_ty) = &variables_ty {
             let variable_accesses = root_filters
                 .iter()
-                .filter_map(DeleteManyRootFilter::variable)
+                .filter_map(RootFilter::variable)
                 .collect::<Vec<_>>();
 
             quote! {
@@ -141,7 +140,7 @@ impl DeleteManyDerive {
 
         let filter_exprs = root_filters
             .iter()
-            .map(DeleteManyRootFilter::expand)
+            .map(RootFilter::expand)
             .collect::<Vec<_>>();
 
         let filter_tokens = if filter_exprs.is_empty() {
@@ -230,7 +229,7 @@ fn parse_delete_many_container_attrs(attrs: &[Attribute]) -> Result<DeleteManyCo
                 return Ok(());
             }
             if meta.path.is_ident("where") {
-                root_filters.push(parse_delete_many_root_filter(meta.input)?);
+                root_filters.push(parse_root_filter(meta.input)?);
                 return Ok(());
             }
             Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
@@ -251,158 +250,4 @@ fn parse_delete_many_container_attrs(attrs: &[Attribute]) -> Result<DeleteManyCo
     })?;
 
     Ok((schema_path, model_name, variables_ty, root_filters))
-}
-
-struct DeleteManyRootFilter {
-    path: Vec<Ident>,
-    filter: DeleteManyScalarFilter,
-}
-
-enum DeleteManyScalarFilter {
-    Eq { variable: Ident },
-    In { variable: Ident },
-    Ne { variable: Ident },
-    IsNull,
-    IsNotNull,
-}
-
-impl DeleteManyRootFilter {
-    fn expand(&self) -> TokenStream2 {
-        let final_field = self
-            .path
-            .last()
-            .expect("delete filter path should never be empty");
-
-        let mut filter = match &self.filter {
-            DeleteManyScalarFilter::Eq { variable } => quote! {
-                ::vitrail_pg::QueryFilter::eq(
-                    stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
-                )
-            },
-            DeleteManyScalarFilter::In { variable } => quote! {
-                ::vitrail_pg::QueryFilter::r#in(
-                    stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValues::variable(stringify!(#variable)),
-                )
-            },
-            DeleteManyScalarFilter::Ne { variable } => quote! {
-                ::vitrail_pg::QueryFilter::ne(
-                    stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
-                )
-            },
-            DeleteManyScalarFilter::IsNull => quote! {
-                ::vitrail_pg::QueryFilter::is_null(stringify!(#final_field))
-            },
-            DeleteManyScalarFilter::IsNotNull => quote! {
-                ::vitrail_pg::QueryFilter::is_not_null(stringify!(#final_field))
-            },
-        };
-
-        for segment in self.path[..self.path.len() - 1].iter().rev() {
-            filter = quote! {
-                ::vitrail_pg::QueryFilter::relation(stringify!(#segment), #filter)
-            };
-        }
-
-        filter
-    }
-
-    fn validation_tokens(&self, where_path_assert_ident: &Ident) -> TokenStream2 {
-        let segments = &self.path;
-        quote! {
-            #where_path_assert_ident!(#(#segments).*);
-        }
-    }
-
-    fn variable(&self) -> Option<&Ident> {
-        match &self.filter {
-            DeleteManyScalarFilter::Eq { variable }
-            | DeleteManyScalarFilter::In { variable }
-            | DeleteManyScalarFilter::Ne { variable } => Some(variable),
-            DeleteManyScalarFilter::IsNull | DeleteManyScalarFilter::IsNotNull => None,
-        }
-    }
-}
-
-impl Parse for DeleteManyRootFilter {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut path = vec![input.call(Ident::parse_any)?];
-
-        while input.peek(Token![.]) {
-            input.parse::<Token![.]>()?;
-            path.push(input.call(Ident::parse_any)?);
-        }
-
-        input.parse::<Token![=]>()?;
-        let operator = input.call(Ident::parse_any)?;
-
-        let filter = if operator == "eq" {
-            let operator_args;
-            parenthesized!(operator_args in input);
-            let variable = operator_args.call(Ident::parse_any)?;
-
-            if !operator_args.is_empty() {
-                return Err(Error::new(
-                    operator_args.span(),
-                    "unexpected tokens in `where(... = eq(...))`",
-                ));
-            }
-
-            DeleteManyScalarFilter::Eq { variable }
-        } else if operator == "in" {
-            let operator_args;
-            parenthesized!(operator_args in input);
-            let variable = operator_args.call(Ident::parse_any)?;
-
-            if !operator_args.is_empty() {
-                return Err(Error::new(
-                    operator_args.span(),
-                    "unexpected tokens in `where(... = in(...))`",
-                ));
-            }
-
-            DeleteManyScalarFilter::In { variable }
-        } else if operator == "null" {
-            DeleteManyScalarFilter::IsNull
-        } else if operator == "not" {
-            let operator_args;
-            parenthesized!(operator_args in input);
-            let value = operator_args.call(Ident::parse_any)?;
-
-            if !operator_args.is_empty() {
-                return Err(Error::new(
-                    operator_args.span(),
-                    "unexpected tokens in `where(... = not(...))`",
-                ));
-            }
-
-            if value == "null" {
-                DeleteManyScalarFilter::IsNotNull
-            } else {
-                DeleteManyScalarFilter::Ne { variable: value }
-            }
-        } else {
-            return Err(Error::new(
-                operator.span(),
-                "unsupported `where` operator; only `eq`, `in`, `null`, and `not(...)` are currently supported",
-            ));
-        };
-
-        if !input.is_empty() {
-            return Err(Error::new(
-                input.span(),
-                "unexpected tokens in `where(...)`",
-            ));
-        }
-
-        Ok(Self { path, filter })
-    }
-}
-
-fn parse_delete_many_root_filter(input: ParseStream<'_>) -> Result<DeleteManyRootFilter> {
-    let content;
-    parenthesized!(content in input);
-    content.parse()
 }

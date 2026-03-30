@@ -1,4 +1,4 @@
-error: unknown scalar field `bid` in `where(...)` filter for model `user`
+error: unknown field `bid` in query `where(...)` path for model `user`
   --> tests/ui/fail/unknown_query_filter_field.rs:5:1
    |
  5 | / schema! {
@@ -12,4 +12,4 @@ error: unknown scalar field `bid` in `where(...)` filter for model `user`
 19 |   #[derive(QueryResult)]
    |            ----------- in this derive macro expansion
    |
-   = note: this error originates in the macro `__vitrail_assert_where_query_schema_user` which comes from the expansion of the derive macro `QueryResult` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `__vitrail_assert_query_where_path_query_schema_user` which comes from the expansion of the derive macro `QueryResult` (in Nightly builds, run with -Z macro-backtrace for more info)
