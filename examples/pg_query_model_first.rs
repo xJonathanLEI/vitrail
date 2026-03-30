@@ -106,10 +106,9 @@ struct PublishPostsByAuthorEmail;
 #[vitrail(
     schema = crate::my_schema::Schema,
     model = post,
-    variables = PostsByAuthorEmailVariables,
-    where(author.email = eq(author_email))
+    where(body = null)
 )]
-struct DeletePostsByAuthorEmail;
+struct DeletePostsWithoutBody;
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
@@ -154,6 +153,16 @@ async fn main() {
         .await
         .unwrap();
 
+    client
+        .insert(my_schema::insert::<InsertedPost>(NewPost {
+            title: "Untitled draft".to_owned(),
+            body: None,
+            published: false,
+            author_id: user.id,
+        }))
+        .await
+        .unwrap();
+
     let updated_posts = client
         .update_many(my_schema::update_many_with_variables::<
             PublishPostsByAuthorEmail,
@@ -167,11 +176,7 @@ async fn main() {
         .unwrap();
 
     let deleted_posts = client
-        .delete_many(my_schema::delete_many_with_variables::<
-            DeletePostsByAuthorEmail,
-        >(PostsByAuthorEmailVariables {
-            author_email: "alice@example.com".to_owned(),
-        }))
+        .delete_many(my_schema::delete_many::<DeletePostsWithoutBody>())
         .await
         .unwrap();
 

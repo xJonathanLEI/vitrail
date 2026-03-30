@@ -133,6 +133,28 @@ struct UserWithFilteredPosts {
 }
 
 #[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::statements_schema::Schema, model = post, where(body = null))]
+struct PostWithNullBody {
+    id: i64,
+    title: String,
+    body: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::statements_schema::Schema,
+    model = post,
+    where(body = not(null))
+)]
+struct PostWithNonNullBody {
+    id: i64,
+    title: String,
+    body: Option<String>,
+}
+
+#[allow(dead_code)]
 #[derive(InsertInput)]
 #[vitrail(schema = crate::statements_schema::Schema, model = user)]
 struct NewUser {
@@ -319,6 +341,72 @@ fn ad_hoc_where_generates_expected_sql() {
 }
 
 #[test]
+fn ad_hoc_null_where_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        post {
+            select: {
+                id: true,
+                title: true,
+                body: true,
+            },
+            where: {
+                body: null,
+            },
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title","#,
+            r#""t0"."body" AS "post__body""#,
+            r#"FROM "post" AS "t0""#,
+            r#"WHERE "t0"."body" IS NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn ad_hoc_not_null_where_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        post {
+            select: {
+                id: true,
+                title: true,
+                body: true,
+            },
+            where: {
+                body: {
+                    not: null
+                },
+            },
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title","#,
+            r#""t0"."body" AS "post__body""#,
+            r#"FROM "post" AS "t0""#,
+            r#"WHERE NOT ("t0"."body" IS NULL)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
 fn model_first_where_generates_expected_sql() {
     let sql = crate::statements_schema::query_with_variables::<UserById>(UserByIdVariables {
         user_id: 7,
@@ -334,6 +422,46 @@ fn model_first_where_generates_expected_sql() {
             r#""t0"."email" AS "user__email""#,
             r#"FROM "user" AS "t0""#,
             r#"WHERE ("t0"."id")::bigint = $1"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn model_first_null_where_generates_expected_sql() {
+    let sql = crate::statements_schema::query::<PostWithNullBody>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title","#,
+            r#""t0"."body" AS "post__body""#,
+            r#"FROM "post" AS "t0""#,
+            r#"WHERE "t0"."body" IS NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn model_first_not_null_where_generates_expected_sql() {
+    let sql = crate::statements_schema::query::<PostWithNonNullBody>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title","#,
+            r#""t0"."body" AS "post__body""#,
+            r#"FROM "post" AS "t0""#,
+            r#"WHERE NOT ("t0"."body" IS NULL)"#,
         ]
         .join(" ")
     );

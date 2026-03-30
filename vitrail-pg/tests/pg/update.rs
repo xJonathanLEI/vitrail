@@ -19,6 +19,7 @@ schema! {
     model post {
         id        Int     @id @default(autoincrement())
         title     String
+        body      String?
         published Boolean
         author_id Int
         author    user    @relation(fields: [author_id], references: [id])
@@ -97,6 +98,24 @@ struct DerivedReviewCommentsByPostAuthorAge;
     where(published = eq(was_published))
 )]
 struct DerivedPublishUnpublishedPostsByAuthorAge;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    where(body = null)
+)]
+struct DerivedPublishPostsWithNullBody;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    where(body = not(null))
+)]
+struct DerivedPublishPostsWithNonNullBody;
 
 struct PublishUnpublishedPosts;
 
@@ -192,8 +211,8 @@ async fn setup_database(database_url: &str) {
 
     let alice_post_1: i64 = sqlx::query_scalar(
         r#"
-        INSERT INTO "post" ("title", "published", "author_id")
-        VALUES ('Alice draft 1', false, $1)
+        INSERT INTO "post" ("title", "body", "published", "author_id")
+        VALUES ('Alice draft 1', 'Alice draft body 1', false, $1)
         RETURNING "id"::bigint
         "#,
     )
@@ -204,8 +223,8 @@ async fn setup_database(database_url: &str) {
 
     let alice_post_2: i64 = sqlx::query_scalar(
         r#"
-        INSERT INTO "post" ("title", "published", "author_id")
-        VALUES ('Alice draft 2', false, $1)
+        INSERT INTO "post" ("title", "body", "published", "author_id")
+        VALUES ('Alice draft 2', NULL, false, $1)
         RETURNING "id"::bigint
         "#,
     )
@@ -216,8 +235,8 @@ async fn setup_database(database_url: &str) {
 
     let bob_post: i64 = sqlx::query_scalar(
         r#"
-        INSERT INTO "post" ("title", "published", "author_id")
-        VALUES ('Bob already published', true, $1)
+        INSERT INTO "post" ("title", "body", "published", "author_id")
+        VALUES ('Bob already published', 'Bob published body', true, $1)
         RETURNING "id"::bigint
         "#,
     )
@@ -831,6 +850,185 @@ fn update_many_generates_expected_sql_for_nested_relation_filter() {
             r#"UPDATE "post" AS "t0""#,
             r#"SET "published" = $1"#,
             r#"WHERE EXISTS (SELECT 1 FROM "user" AS "t1" WHERE "t1"."id" = "t0"."author_id" AND ("t1"."age")::bigint = $2)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[tokio::test]
+async fn update_many_updates_rows_matching_null_filter() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let updated = client
+        .update_many(crate::update_schema::update_many::<
+            DerivedPublishPostsWithNullBody,
+        >(PublishPostsData { published: true }))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(updated, 1);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let null_body_published_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "body" IS NULL AND "published" = TRUE
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count published posts with null body");
+
+    let non_null_body_unpublished_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "body" IS NOT NULL AND "published" = FALSE
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count unpublished posts with non-null body");
+
+    assert_eq!(null_body_published_count, 1);
+    assert_eq!(non_null_body_unpublished_count, 1);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn update_many_updates_rows_matching_not_null_filter() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let updated = client
+        .update_many(crate::update_schema::update_many::<
+            DerivedPublishPostsWithNonNullBody,
+        >(PublishPostsData { published: true }))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(updated, 2);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let non_null_body_unpublished_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "body" IS NOT NULL AND "published" = FALSE
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count unpublished posts with non-null body");
+
+    let null_body_unpublished_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "post"
+        WHERE "body" IS NULL AND "published" = FALSE
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count unpublished posts with null body");
+
+    assert_eq!(non_null_body_unpublished_count, 0);
+    assert_eq!(null_body_unpublished_count, 1);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup().await;
+}
+
+#[test]
+fn update_many_generates_expected_sql_for_null_filter() {
+    let sql =
+        crate::update_schema::update_many::<DerivedPublishPostsWithNullBody>(PublishPostsData {
+            published: true,
+        })
+        .to_sql()
+        .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = $1"#,
+            r#"WHERE "t0"."body" IS NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_many_generates_expected_sql_for_not_null_filter() {
+    let sql =
+        crate::update_schema::update_many::<DerivedPublishPostsWithNonNullBody>(PublishPostsData {
+            published: true,
+        })
+        .to_sql()
+        .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = $1"#,
+            r#"WHERE NOT ("t0"."body" IS NULL)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_helper_generates_expected_sql_for_not_null_filter() {
+    let sql = update! {
+        crate::update_schema,
+        post {
+            data: {
+                published: true,
+            },
+            where: {
+                body: {
+                    not: null
+                },
+            },
+        }
+    }
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = $1"#,
+            r#"WHERE NOT ("t0"."body" IS NULL)"#,
         ]
         .join(" ")
     );

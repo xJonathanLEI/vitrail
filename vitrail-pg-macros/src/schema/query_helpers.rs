@@ -27,6 +27,11 @@ impl ParsedSchema {
                 format_ident!("__vitrail_assert_include_{}_{}", module_name, model.name);
             let where_assert_ident =
                 format_ident!("__vitrail_assert_where_{}_{}", module_name, model.name);
+            let where_field_filter_ident = format_ident!(
+                "__vitrail_where_field_filter_{}_{}",
+                module_name,
+                model.name
+            );
             let include_struct_ident =
                 format_ident!("__vitrail_include_struct_{}_{}", module_name, model.name);
             let include_selection_ident =
@@ -50,6 +55,45 @@ impl ParsedSchema {
             let where_assert_arms = scalar_fields.iter().map(|field| {
                 let ident = &field.name;
                 quote! { (#ident) => {}; }
+            });
+
+            let scalar_where_field_arms = scalar_fields.iter().map(|field| {
+                let ident = &field.name;
+
+                quote! {
+                    (#ident : null) => {
+                        ::vitrail_pg::QueryFilter::is_null(stringify!(#ident))
+                    };
+                    (#ident : { eq : $value:expr $(,)? }) => {
+                        ::vitrail_pg::QueryFilter::eq(
+                            stringify!(#ident),
+                            ::vitrail_pg::QueryFilterValue::value($value),
+                        )
+                    };
+                    (#ident : { not : null $(,)? }) => {
+                        ::vitrail_pg::QueryFilter::is_not_null(stringify!(#ident))
+                    };
+                    (#ident : { $operator:ident : $value:tt $(,)? }) => {{
+                        compile_error!(concat!(
+                            "unsupported `where` operator `",
+                            stringify!($operator),
+                            "` for scalar field `",
+                            stringify!(#ident),
+                            "` in query helper for model `",
+                            #model_name,
+                            "`; only `eq`, `null`, and `{ not: null }` are currently supported"
+                        ))
+                    }};
+                    (#ident : $value:tt) => {{
+                        compile_error!(concat!(
+                            "malformed filter for scalar field `",
+                            stringify!(#ident),
+                            "` in query helper for model `",
+                            #model_name,
+                            "`; expected `null`, `{ eq: ... }`, or `{ not: null }`"
+                        ))
+                    }};
+                }
             });
 
             let query_result_traits = scalar_fields
@@ -256,6 +300,21 @@ impl ParsedSchema {
                 }
 
                 #[doc(hidden)]
+                #[macro_export]
+                macro_rules! #where_field_filter_ident {
+                    #(#scalar_where_field_arms)*
+                    ($other:ident : $value:tt) => {{
+                        compile_error!(concat!(
+                            "unknown scalar field `",
+                            stringify!($other),
+                            "` in `where(...)` filter for model `",
+                            #model_name,
+                            "`"
+                        ))
+                    }};
+                }
+
+                #[doc(hidden)]
                 pub mod #trait_module_ident {
                     #(#query_result_traits)*
                 }
@@ -293,7 +352,7 @@ impl ParsedSchema {
                             )?
                             $(,
                                 where: {
-                                    $($where_field:ident : { eq: $where_value:expr }),* $(,)?
+                                    $($where_field:ident : $where_value:tt),* $(,)?
                                 }
                             )?
                             $(,)?
@@ -302,13 +361,13 @@ impl ParsedSchema {
                         #selection_macro_ident! {
                             select { $($select_field : true),* }
                             $(, include { $($include_field : $include_value),* })?
-                            $(, where { $($where_field : { eq: $where_value }),* })?
+                            $(, where { $($where_field : $where_value),* })?
                         }
                     };
                     (
                         select { $($select_field:ident : true),* $(,)? }
                         $(, include { $($include_field:ident : $include_value:tt),* $(,)? })?
-                        $(, where { $($where_field:ident : { eq: $where_value:expr }),* $(,)? })?
+                        $(, where { $($where_field:ident : $where_value:tt),* $(,)? })?
                         $(,)?
                     ) => {{
                         $( #select_assert_ident!($select_field); )*
@@ -332,10 +391,7 @@ impl ParsedSchema {
                                 let __vitrail_filters = vec![
                                     $(
                                         $(
-                                            ::vitrail_pg::QueryFilter::eq(
-                                                stringify!($where_field),
-                                                ::vitrail_pg::QueryFilterValue::value($where_value),
-                                            )
+                                            #where_field_filter_ident!($where_field : $where_value)
                                         ),*
                                     )?
                                 ];
@@ -369,7 +425,7 @@ impl ParsedSchema {
                             )?
                             $(,
                                 where: {
-                                    $($where_field:ident : { eq: $where_value:expr }),* $(,)?
+                                    $($where_field:ident : $where_value:tt),* $(,)?
                                 }
                             )?
                             $(,)?
@@ -379,14 +435,14 @@ impl ParsedSchema {
                             $root_ident;
                             select { $($select_field),* }
                             $(, include { $($include_field : $include_value),* } )?
-                            $(, where { $($where_field : { eq: $where_value }),* } )?
+                            $(, where { $($where_field : $where_value),* } )?
                         }
                     };
                     (
                         $root_ident:ident;
                         select { $($select_field:ident),* $(,)? }
                         $(, include { $($include_field:ident : $include_value:tt),* $(,)? } )?
-                        $(, where { $($where_field:ident : { eq: $where_value:expr }),* $(,)? } )?
+                        $(, where { $($where_field:ident : $where_value:tt),* $(,)? } )?
                     ) => {
                         $( #select_assert_ident!($select_field); )*
                         $( $( #include_assert_ident!($include_field); )* )?

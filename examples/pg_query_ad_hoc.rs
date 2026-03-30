@@ -59,6 +59,21 @@ async fn main() {
         .await
         .unwrap();
 
+    client
+        .insert(insert! {
+            crate::my_schema,
+            post {
+                data: {
+                    title: "Untitled draft".to_owned(),
+                    body: None,
+                    published: false,
+                    author_id: user.id,
+                },
+            }
+        })
+        .await
+        .unwrap();
+
     let updated_posts = client
         .update_many(update! {
             crate::my_schema,
@@ -83,11 +98,7 @@ async fn main() {
             crate::my_schema,
             post {
                 where: {
-                    author: {
-                        email: {
-                            eq: "alice@example.com".to_owned()
-                        }
-                    },
+                    body: null,
                 },
             }
         })

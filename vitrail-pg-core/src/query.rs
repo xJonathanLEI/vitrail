@@ -373,6 +373,17 @@ impl QueryFilter {
         }
     }
 
+    pub fn is_null(field: &'static str) -> Self {
+        Self::Eq {
+            field,
+            value: QueryFilterValue::Value(QueryVariableValue::Null),
+        }
+    }
+
+    pub fn is_not_null(field: &'static str) -> Self {
+        Self::Not(Box::new(Self::is_null(field)))
+    }
+
     pub fn relation(field: &'static str, filter: QueryFilter) -> Self {
         Self::Relation {
             field,

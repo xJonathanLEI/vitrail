@@ -249,13 +249,19 @@ impl ParsedSchema {
                 let ident = &field.name;
 
                 quote! {
+                    (#ident : null) => {
+                        ::vitrail_pg::QueryFilter::is_null(stringify!(#ident))
+                    };
                     (#ident : { eq : $value:expr $(,)? }) => {
                         ::vitrail_pg::QueryFilter::eq(
                             stringify!(#ident),
                             ::vitrail_pg::QueryFilterValue::value($value),
                         )
                     };
-                    (#ident : { $operator:ident : $value:expr $(,)? }) => {{
+                    (#ident : { not : null $(,)? }) => {
+                        ::vitrail_pg::QueryFilter::is_not_null(stringify!(#ident))
+                    };
+                    (#ident : { $operator:ident : $value:tt $(,)? }) => {{
                         compile_error!(concat!(
                             "unsupported `where` operator `",
                             stringify!($operator),
@@ -263,7 +269,7 @@ impl ParsedSchema {
                             stringify!(#ident),
                             "` in update helper for model `",
                             #model_name,
-                            "`; only `eq` is currently supported"
+                            "`; only `eq`, `null`, and `{ not: null }` are currently supported"
                         ))
                     }};
                     (#ident : $value:tt) => {{
@@ -272,7 +278,7 @@ impl ParsedSchema {
                             stringify!(#ident),
                             "` in update helper for model `",
                             #model_name,
-                            "`; expected `{ eq: ... }`"
+                            "`; expected `null`, `{ eq: ... }`, or `{ not: null }`"
                         ))
                     }};
                 }
@@ -306,6 +312,15 @@ impl ParsedSchema {
                                 "` requires a nested filter object"
                             ))
                         }};
+                        (#ident : null) => {{
+                            compile_error!(concat!(
+                                "relation field `",
+                                stringify!(#ident),
+                                "` in update helper for model `",
+                                #model_name,
+                                "` cannot use scalar null filter; provide a nested filter object instead"
+                            ))
+                        }};
                         (#ident : { eq : $value:expr $(,)? }) => {{
                             compile_error!(concat!(
                                 "relation field `",
@@ -313,6 +328,15 @@ impl ParsedSchema {
                                 "` in update helper for model `",
                                 #model_name,
                                 "` cannot use scalar operator `eq`; provide a nested filter object instead"
+                            ))
+                        }};
+                        (#ident : { not : null $(,)? }) => {{
+                            compile_error!(concat!(
+                                "relation field `",
+                                stringify!(#ident),
+                                "` in update helper for model `",
+                                #model_name,
+                                "` cannot use scalar null filter; provide a nested filter object instead"
                             ))
                         }};
                         (#ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
@@ -330,7 +354,7 @@ impl ParsedSchema {
                                 stringify!(#ident),
                                 "` in update helper for model `",
                                 #model_name,
-                                "`; expected a nested object like `{ nested_field: { eq: ... } }`"
+                                "`; expected a nested object like `{ nested_field: null }`, `{ nested_field: { eq: ... } }`, or `{ nested_field: { not: null } }`"
                             ))
                         }};
                     })

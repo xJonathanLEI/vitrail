@@ -145,6 +145,30 @@ struct UserWithFilteredPosts {
     posts: Vec<FilteredPostSummary>,
 }
 
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = post,
+    where(body = null)
+)]
+struct PostWithNullBody {
+    id: i64,
+    title: String,
+    body: Option<String>,
+}
+
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = post,
+    where(body = not(null))
+)]
+struct PostWithNonNullBody {
+    id: i64,
+    title: String,
+    body: Option<String>,
+}
+
 async fn setup_database(database_url: &str) -> i64 {
     apply_schema(
         database_url,
@@ -295,6 +319,124 @@ async fn ad_hoc_where_query_on_postgres() {
     assert_eq!(users[0].id, author_id);
     assert_eq!(users[0].email, "alice@example.com");
     assert_eq!(users[0].name, "Alice");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn ad_hoc_null_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(query! {
+            crate::query_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                    body: true,
+                },
+                where: {
+                    body: null
+                },
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].id, 2);
+    assert_eq!(posts[0].title, "Second post");
+    assert_eq!(posts[0].body, None);
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn ad_hoc_not_null_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(query! {
+            crate::query_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                    body: true,
+                },
+                where: {
+                    body: {
+                        not: null
+                    }
+                },
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].id, 1);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
+    assert_eq!(posts[0].body.as_deref(), Some("This is the post body"));
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_null_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(crate::query_schema::query::<PostWithNullBody>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].id, 2);
+    assert_eq!(posts[0].title, "Second post");
+    assert_eq!(posts[0].body, None);
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_not_null_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(crate::query_schema::query::<PostWithNonNullBody>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].id, 1);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
+    assert_eq!(posts[0].body.as_deref(), Some("This is the post body"));
 
     database.cleanup().await;
 }
