@@ -1,0 +1,53 @@
+error[E0277]: the trait bound `Vec<std::string::String>: __VitrailQueryFilterInType_query_helper_wrong_filter_type_schema_post_id` is not satisfied
+  --> tests/ui/fail/query_helper_wrong_filter_type.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_helper_wrong_filter_type_schema
+ 7 | |
+ 8 | |     model user {
+...  |
+21 | | }
+   | |_^ the trait `__VitrailQueryFilterInType_query_helper_wrong_filter_type_schema_post_id` is not implemented for `Vec<std::string::String>`
+...
+24 |       let _ = query! {
+   |  _____________-
+25 | |         crate::query_helper_wrong_filter_type_schema,
+26 | |         post {
+27 | |             select: {
+...  |
+37 | |     };
+   | |_____- in this macro invocation
+   |
+help: the following other types implement trait `__VitrailQueryFilterInType_query_helper_wrong_filter_type_schema_post_id`
+  --> tests/ui/fail/query_helper_wrong_filter_type.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_helper_wrong_filter_type_schema
+ 7 | |
+ 8 | |     model user {
+...  |
+21 | | }
+   | | ^
+   | | |
+   | |_`&Vec<i64>`
+   |   `Vec<i64>`
+note: required by a bound in `__vitrail_assert_filter_value_type`
+  --> tests/ui/fail/query_helper_wrong_filter_type.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_helper_wrong_filter_type_schema
+ 7 | |
+ 8 | |     model user {
+...  |
+21 | | }
+   | |_^ required by this bound in `__vitrail_assert_filter_value_type`
+...
+24 |       let _ = query! {
+   |  _____________-
+25 | |         crate::query_helper_wrong_filter_type_schema,
+26 | |         post {
+27 | |             select: {
+...  |
+37 | |     };
+   | |_____- in this macro invocation
+   = note: this error originates in the macro `__vitrail_assert_query_filter_value_type_query_helper_wrong_filter_type_schema_post` which comes from the expansion of the macro `query` (in Nightly builds, run with -Z macro-backtrace for more info)

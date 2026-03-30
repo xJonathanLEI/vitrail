@@ -1,0 +1,41 @@
+error[E0277]: the trait bound `&std::string::String: __VitrailQueryFilterEqType_query_variables_wrong_scalar_filter_type_schema_post_id` is not satisfied
+  --> tests/ui/fail/query_variables_wrong_scalar_filter_type.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_variables_wrong_scalar_filter_type_schema
+ 7 | |
+ 8 | |     model post {
+...  |
+13 | | }
+   | |_^ the trait `__VitrailQueryFilterEqType_query_variables_wrong_scalar_filter_type_schema_post_id` is not implemented for `&std::string::String`
+...
+20 |   #[derive(QueryResult)]
+   |            ----------- in this derive macro expansion
+   |
+help: the following other types implement trait `__VitrailQueryFilterEqType_query_variables_wrong_scalar_filter_type_schema_post_id`
+  --> tests/ui/fail/query_variables_wrong_scalar_filter_type.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_variables_wrong_scalar_filter_type_schema
+ 7 | |
+ 8 | |     model post {
+...  |
+13 | | }
+   | | ^
+   | | |
+   | |_`&i64`
+   |   `i64`
+note: required by a bound in `__vitrail_assert_filter_value_type`
+  --> tests/ui/fail/query_variables_wrong_scalar_filter_type.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_variables_wrong_scalar_filter_type_schema
+ 7 | |
+ 8 | |     model post {
+...  |
+13 | | }
+   | |_^ required by this bound in `__vitrail_assert_filter_value_type`
+...
+20 |   #[derive(QueryResult)]
+   |            ----------- in this derive macro expansion
+   = note: this error originates in the macro `__vitrail_assert_query_filter_value_type_query_variables_wrong_scalar_filter_type_schema_post` which comes from the expansion of the derive macro `QueryResult` (in Nightly builds, run with -Z macro-backtrace for more info)

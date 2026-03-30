@@ -291,6 +291,55 @@ impl QueryResultDerive {
                 .collect::<Result<Vec<_>>>()?
         };
 
+        let query_filter_type_validation_tokens = {
+            let schema_module_ident = schema_module_ident(&schema_path, "QueryResult")?;
+            let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
+                Error::new(
+                    model_name.span(),
+                    "`#[vitrail(model = ...)]` must be a valid identifier",
+                )
+            })?;
+            let query_filter_type_assert_ident = format_ident!(
+                "__vitrail_assert_query_filter_value_type_{}_{}",
+                schema_module_ident,
+                model_ident,
+            );
+
+            let mut validations = root_filters
+                .iter()
+                .filter_map(|filter| filter.type_validation_tokens(&query_filter_type_assert_ident))
+                .collect::<Vec<_>>();
+
+            validations.extend(
+                scalar_fields
+                    .iter()
+                    .filter_map(|field| {
+                        let field_ident = match syn::parse_str::<Ident>(&field.query_name.value()) {
+                            Ok(field_ident) => field_ident,
+                            Err(error) => return Some(Err(error)),
+                        };
+                        let filter = field.filter.as_ref()?;
+
+                        Some(Ok(match filter {
+                            QueryResultFieldFilter::Eq { variable } => quote! {
+                                #query_filter_type_assert_ident!(#field_ident, eq, &__vitrail_variables.#variable);
+                            },
+                            QueryResultFieldFilter::In { variable } => quote! {
+                                #query_filter_type_assert_ident!(#field_ident, in, &__vitrail_variables.#variable);
+                            },
+                            QueryResultFieldFilter::Ne { variable } => quote! {
+                                #query_filter_type_assert_ident!(#field_ident, not, &__vitrail_variables.#variable);
+                            },
+                            QueryResultFieldFilter::IsNull
+                            | QueryResultFieldFilter::IsNotNull => quote! {},
+                        }))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            );
+
+            validations
+        };
+
         let variable_validation_tokens = if let Some(variables_ty) = &variables_ty {
             let mut validations = root_filters
                 .iter()
@@ -317,6 +366,7 @@ impl QueryResultDerive {
                         #(#query_type_validation_tokens)*
                         if let Some(__vitrail_variables) = __vitrail_variables {
                             #(let _ = &__vitrail_variables.#validations;)*
+                            #(#query_filter_type_validation_tokens)*
                         }
                     }
                 }

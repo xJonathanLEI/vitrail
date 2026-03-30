@@ -97,7 +97,7 @@ async fn main() {
             post {
                 where: {
                     title: {
-                        not: "Hello Vitrail".to_owned()
+                        not: "Hello Vitrail"
                     },
                 },
             }

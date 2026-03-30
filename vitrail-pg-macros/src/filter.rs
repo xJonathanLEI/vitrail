@@ -64,6 +64,26 @@ impl RootFilter {
         }
     }
 
+    pub(crate) fn type_validation_tokens(
+        &self,
+        where_filter_value_assert_ident: &Ident,
+    ) -> Option<TokenStream2> {
+        let segments = &self.path;
+
+        match &self.filter {
+            ScalarFilter::Eq { variable } => Some(quote! {
+                #where_filter_value_assert_ident!(#(#segments).*, eq, &__vitrail_variables.#variable);
+            }),
+            ScalarFilter::In { variable } => Some(quote! {
+                #where_filter_value_assert_ident!(#(#segments).*, in, &__vitrail_variables.#variable);
+            }),
+            ScalarFilter::Ne { variable } => Some(quote! {
+                #where_filter_value_assert_ident!(#(#segments).*, not, &__vitrail_variables.#variable);
+            }),
+            ScalarFilter::IsNull | ScalarFilter::IsNotNull => None,
+        }
+    }
+
     pub(crate) fn variable(&self) -> Option<&Ident> {
         match &self.filter {
             ScalarFilter::Eq { variable }

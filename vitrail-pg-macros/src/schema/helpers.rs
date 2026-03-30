@@ -19,9 +19,16 @@ impl ParsedSchema {
         let query_trait_reexports = self.models.iter().map(|model| {
             let trait_module_ident =
                 format_ident!("__vitrail_query_traits_{}_{}", module_name, model.name);
+            let filter_trait_module_ident = format_ident!(
+                "__vitrail_query_filter_traits_{}_{}",
+                module_name,
+                model.name
+            );
             quote! {
                 #[doc(hidden)]
                 pub use super::#trait_module_ident;
+                #[doc(hidden)]
+                pub use super::#filter_trait_module_ident;
             }
         });
         let insert_trait_reexports = self.models.iter().map(|model| {
@@ -35,17 +42,31 @@ impl ParsedSchema {
         let delete_trait_reexports = self.models.iter().map(|model| {
             let trait_module_ident =
                 format_ident!("__vitrail_delete_traits_{}_{}", module_name, model.name);
+            let filter_trait_module_ident = format_ident!(
+                "__vitrail_delete_filter_traits_{}_{}",
+                module_name,
+                model.name
+            );
             quote! {
                 #[doc(hidden)]
                 pub use super::#trait_module_ident;
+                #[doc(hidden)]
+                pub use super::#filter_trait_module_ident;
             }
         });
         let update_trait_reexports = self.models.iter().map(|model| {
             let trait_module_ident =
                 format_ident!("__vitrail_update_traits_{}_{}", module_name, model.name);
+            let filter_trait_module_ident = format_ident!(
+                "__vitrail_update_filter_traits_{}_{}",
+                module_name,
+                model.name
+            );
             quote! {
                 #[doc(hidden)]
                 pub use super::#trait_module_ident;
+                #[doc(hidden)]
+                pub use super::#filter_trait_module_ident;
             }
         });
 
