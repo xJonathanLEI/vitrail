@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use rust_decimal::Decimal;
 use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::{Postgres, query::Query as SqlxQuery};
+use uuid::Uuid;
 
 use crate::PgExecutor;
 use crate::query::{
@@ -142,6 +143,7 @@ pub enum InsertValue {
     Decimal(Decimal),
     Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
+    Uuid(Uuid),
 }
 
 impl From<i64> for InsertValue {
@@ -195,6 +197,12 @@ impl From<&[u8]> for InsertValue {
 impl From<chrono::DateTime<chrono::Utc>> for InsertValue {
     fn from(value: chrono::DateTime<chrono::Utc>) -> Self {
         Self::DateTime(value)
+    }
+}
+
+impl From<Uuid> for InsertValue {
+    fn from(value: Uuid) -> Self {
+        Self::Uuid(value)
     }
 }
 
@@ -253,6 +261,12 @@ impl InsertScalar for &[u8] {
 }
 
 impl InsertScalar for chrono::DateTime<chrono::Utc> {
+    fn into_insert_value(self) -> InsertValue {
+        self.into()
+    }
+}
+
+impl InsertScalar for Uuid {
     fn into_insert_value(self) -> InsertValue {
         self.into()
     }
@@ -388,6 +402,9 @@ fn build_insert_sql(
                     {
                         format!("{placeholder}::bytea")
                     }
+                    (FieldType::Scalar(_), InsertValue::Null) if field.has_db_uuid() => {
+                        format!("{placeholder}::uuid")
+                    }
                     _ => placeholder,
                 }
             })
@@ -410,6 +427,9 @@ fn build_insert_sql(
             {
                 BoundInsertValue::NullBytes
             }
+            (FieldType::Scalar(_), InsertValue::Null) if field.has_db_uuid() => {
+                BoundInsertValue::NullUuid
+            }
             (_, value) => value.into(),
         })
         .collect();
@@ -421,6 +441,7 @@ fn build_insert_sql(
 enum BoundInsertValue {
     Null,
     NullBytes,
+    NullUuid,
     Int(i64),
     String(String),
     Bool(bool),
@@ -428,6 +449,7 @@ enum BoundInsertValue {
     Decimal(Decimal),
     Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
+    Uuid(Uuid),
 }
 
 impl From<InsertValue> for BoundInsertValue {
@@ -441,6 +463,7 @@ impl From<InsertValue> for BoundInsertValue {
             InsertValue::Decimal(value) => Self::Decimal(value),
             InsertValue::Bytes(value) => Self::Bytes(value),
             InsertValue::DateTime(value) => Self::DateTime(value),
+            InsertValue::Uuid(value) => Self::Uuid(value),
         }
     }
 }
@@ -609,12 +632,13 @@ fn insert_value_matches_field(value: &InsertValue, field: &Field) -> bool {
     match value {
         InsertValue::Null => scalar.optional(),
         InsertValue::Int(_) => scalar.scalar() == ScalarType::Int,
-        InsertValue::String(_) => scalar.scalar() == ScalarType::String,
+        InsertValue::String(_) => scalar.scalar() == ScalarType::String && !field.has_db_uuid(),
         InsertValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         InsertValue::Float(_) => scalar.scalar() == ScalarType::Float,
         InsertValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
         InsertValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         InsertValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
+        InsertValue::Uuid(_) => scalar.scalar() == ScalarType::String && field.has_db_uuid(),
     }
 }
 
@@ -646,6 +670,7 @@ fn bind_insert<'q>(
         query = match binding {
             BoundInsertValue::Null => query.bind(Option::<i64>::None),
             BoundInsertValue::NullBytes => query.bind(Option::<Vec<u8>>::None),
+            BoundInsertValue::NullUuid => query.bind(Option::<Uuid>::None),
             BoundInsertValue::Int(value) => query.bind(*value),
             BoundInsertValue::String(value) => query.bind(value),
             BoundInsertValue::Bool(value) => query.bind(*value),
@@ -653,6 +678,7 @@ fn bind_insert<'q>(
             BoundInsertValue::Decimal(value) => query.bind(*value),
             BoundInsertValue::Bytes(value) => query.bind(value),
             BoundInsertValue::DateTime(value) => query.bind(*value),
+            BoundInsertValue::Uuid(value) => query.bind(*value),
         };
     }
 

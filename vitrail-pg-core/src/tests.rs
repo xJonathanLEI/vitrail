@@ -675,3 +675,54 @@ fn rejects_duplicate_rust_type_override() {
 
     assert!(error.to_string().contains("duplicate `@rust_ty` attribute"));
 }
+
+#[test]
+fn allows_db_uuid_on_string_field() {
+    let field = Field::builder("uid", FieldType::string())
+        .attributes(vec![Attribute::DbUuid])
+        .build()
+        .expect("field should build");
+
+    assert!(field.has_db_uuid());
+}
+
+#[test]
+fn rejects_duplicate_db_uuid_attribute() {
+    let error = Field::builder("uid", FieldType::string())
+        .attributes(vec![Attribute::DbUuid, Attribute::DbUuid])
+        .build()
+        .expect_err("field should fail");
+
+    assert!(error.to_string().contains("duplicate `@db.Uuid` attribute"));
+}
+
+#[test]
+fn rejects_db_uuid_on_non_string_field() {
+    let error = Field::builder("uid", FieldType::int())
+        .attributes(vec![Attribute::DbUuid])
+        .build()
+        .expect_err("field should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("`@db.Uuid` is only supported on `String` fields")
+    );
+}
+
+#[test]
+fn rejects_combining_db_uuid_with_rust_type_override() {
+    let error = Field::builder("uid", FieldType::string())
+        .attributes(vec![
+            Attribute::DbUuid,
+            Attribute::RustType(RustTypeAttribute::new("UserId")),
+        ])
+        .build()
+        .expect_err("field should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("`@rust_ty` cannot be combined with `@db.Uuid`")
+    );
+}

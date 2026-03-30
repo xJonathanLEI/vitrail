@@ -1,6 +1,7 @@
 -- CreateTable
 CREATE TABLE "user" (
     "id" SERIAL NOT NULL,
+    "external_id" UUID NOT NULL,
     "email" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -11,6 +12,7 @@ CREATE TABLE "user" (
 -- CreateTable
 CREATE TABLE "post" (
     "id" SERIAL NOT NULL,
+    "public_id" UUID NOT NULL,
     "title" TEXT NOT NULL,
     "body" TEXT,
     "published" BOOLEAN NOT NULL,
@@ -26,6 +28,7 @@ CREATE TABLE "post" (
 -- CreateTable
 CREATE TABLE "comment" (
     "id" SERIAL NOT NULL,
+    "public_id" UUID NOT NULL,
     "body" TEXT NOT NULL,
     "post_id" INTEGER NOT NULL,
 
@@ -52,13 +55,22 @@ CREATE TABLE "translation_note" (
 );
 
 -- CreateIndex
+CREATE UNIQUE INDEX "user_external_id_key" ON "user"("external_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "user_email_key" ON "user"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "post_public_id_key" ON "post"("public_id");
 
 -- CreateIndex
 CREATE INDEX "post_author_id_idx" ON "post"("author_id");
 
 -- CreateIndex
 CREATE INDEX "post_published_created_at_idx" ON "post"("published", "created_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "comment_public_id_key" ON "comment"("public_id");
 
 -- CreateIndex
 CREATE INDEX "post_locale_title_locale_idx" ON "post_locale"("title", "locale");

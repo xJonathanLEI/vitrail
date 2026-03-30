@@ -9,15 +9,17 @@ schema! {
     name base_schema
 
     model user {
-        id         Int      @id @default(autoincrement())
-        email      String   @unique
-        name       String
-        created_at DateTime @default(now())
-        posts      post[]
+        id          Int      @id @default(autoincrement())
+        external_id String   @unique @db.Uuid
+        email       String   @unique
+        name        String
+        created_at  DateTime @default(now())
+        posts       post[]
     }
 
     model post {
         id         Int      @id @default(autoincrement())
+        public_id  String   @unique @db.Uuid
         title      String
         body       String?
         published  Boolean
@@ -31,15 +33,17 @@ schema! {
     name expanded_schema
 
     model user {
-        id         Int      @id @default(autoincrement())
-        email      String   @unique
-        name       String
-        created_at DateTime @default(now())
-        posts      post[]
+        id          Int      @id @default(autoincrement())
+        external_id String   @unique @db.Uuid
+        email       String   @unique
+        name        String
+        created_at  DateTime @default(now())
+        posts       post[]
     }
 
     model post {
         id         Int           @id @default(autoincrement())
+        public_id  String        @unique @db.Uuid
         title      String
         body       String?
         published  Boolean
@@ -56,10 +60,11 @@ schema! {
     }
 
     model comment {
-        id      Int    @id @default(autoincrement())
-        body    String
-        post_id Int
-        post    post   @relation(fields: [post_id], references: [id])
+        id        Int    @id @default(autoincrement())
+        public_id String @unique @db.Uuid
+        body      String
+        post_id   Int
+        post      post   @relation(fields: [post_id], references: [id])
     }
 
     model post_locale {

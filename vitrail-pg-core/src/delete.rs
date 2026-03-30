@@ -404,12 +404,15 @@ fn query_value_matches_field(value: &QueryVariableValue, field: &Field) -> bool 
     match value {
         QueryVariableValue::Null => scalar.optional(),
         QueryVariableValue::Int(_) => scalar.scalar() == ScalarType::Int,
-        QueryVariableValue::String(_) => scalar.scalar() == ScalarType::String,
+        QueryVariableValue::String(_) => {
+            scalar.scalar() == ScalarType::String && !field.has_db_uuid()
+        }
         QueryVariableValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         QueryVariableValue::Float(_) => scalar.scalar() == ScalarType::Float,
         QueryVariableValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
         QueryVariableValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         QueryVariableValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
+        QueryVariableValue::Uuid(_) => scalar.scalar() == ScalarType::String && field.has_db_uuid(),
     }
 }
 
@@ -427,6 +430,7 @@ fn bind_delete<'q>(
             QueryVariableValue::Decimal(value) => query.bind(*value),
             QueryVariableValue::Bytes(value) => query.bind(value),
             QueryVariableValue::DateTime(value) => query.bind(*value),
+            QueryVariableValue::Uuid(value) => query.bind(*value),
         };
     }
 

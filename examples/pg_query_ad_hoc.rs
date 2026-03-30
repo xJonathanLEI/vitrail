@@ -1,14 +1,15 @@
-use vitrail_pg::{VitrailClient, delete, insert, query, schema, update};
+use vitrail_pg::{VitrailClient, delete, insert, query, schema, update, uuid::Uuid};
 
 schema! {
     name my_schema
 
     model user {
-        id         Int      @id @default(autoincrement())
-        email      String   @unique
-        name       String
-        created_at DateTime @default(now())
-        posts      post[]
+        id          Int      @id @default(autoincrement())
+        external_id String   @unique @db.Uuid
+        email       String   @unique
+        name        String
+        created_at  DateTime @default(now())
+        posts       post[]
     }
 
     model post {
@@ -27,12 +28,14 @@ async fn main() {
     let client = VitrailClient::new("postgres://postgres:postgres@127.0.0.1:5432/vitrail")
         .await
         .unwrap();
+    let external_id = Uuid::parse_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap();
 
     let user = client
         .insert(insert! {
             crate::my_schema,
             user {
                 data: {
+                    external_id: external_id,
                     email: "alice@example.com".to_owned(),
                     name: "Alice".to_owned(),
                 },
@@ -97,6 +100,7 @@ async fn main() {
             user {
                 select: {
                     id: true,
+                    external_id: true,
                     email: true,
                     name: true,
                 },
@@ -109,8 +113,8 @@ async fn main() {
                     },
                 },
                 where: {
-                    id: {
-                        eq: user.id
+                    external_id: {
+                        eq: external_id
                     },
                 },
             }
@@ -118,7 +122,7 @@ async fn main() {
         .await
         .unwrap();
 
-    println!("inserted user {}", user.email);
+    println!("inserted user {} ({})", user.email, user.external_id);
     println!("updated {} posts", updated_posts);
     println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());

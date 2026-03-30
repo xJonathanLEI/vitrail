@@ -1,0 +1,5 @@
+error: `@rust_ty` cannot be combined with `@db.Uuid`
+  --> tests/ui/fail/db_uuid_with_rust_ty.rs:10:30
+   |
+10 |         uid String @db.Uuid @rust_ty(UserId)
+   |                              ^^^^^^^

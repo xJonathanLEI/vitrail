@@ -742,6 +742,12 @@ impl ParsedField {
             })
     }
 
+    fn has_db_uuid(&self) -> bool {
+        self.attributes
+            .iter()
+            .any(|attribute| matches!(attribute.kind, ParsedAttributeKind::DbUuid))
+    }
+
     fn can_be_omitted_in_insert(&self) -> bool {
         self.ty.optional
             || self.attributes.iter().any(|attribute| {
@@ -1229,15 +1235,19 @@ fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
 fn rust_field_type_tokens(field: &ParsedField) -> Result<TokenStream2> {
     let base = if let Some(rust_ty) = field.rust_type() {
         quote! { #rust_ty }
+    } else if field.has_db_uuid() {
+        quote! { ::vitrail_pg::uuid::Uuid }
     } else {
         rust_type_tokens(&field.ty)?
     };
 
-    Ok(if field.ty.optional && field.rust_type().is_some() {
-        quote! { Option<#base> }
-    } else {
-        base
-    })
+    Ok(
+        if field.ty.optional && (field.rust_type().is_some() || field.has_db_uuid()) {
+            quote! { Option<#base> }
+        } else {
+            base
+        },
+    )
 }
 
 fn to_pascal_case(name: &str) -> String {

@@ -6,6 +6,7 @@ ADD COLUMN     "updated_at" TIMESTAMP(3);
 -- CreateTable
 CREATE TABLE "comment" (
     "id" SERIAL NOT NULL,
+    "public_id" UUID NOT NULL,
     "body" TEXT NOT NULL,
     "post_id" INTEGER NOT NULL,
 
@@ -30,6 +31,9 @@ CREATE TABLE "translation_note" (
 
     CONSTRAINT "translation_note_pkey" PRIMARY KEY ("id")
 );
+
+-- CreateIndex
+CREATE UNIQUE INDEX "comment_public_id_key" ON "comment"("public_id");
 
 -- CreateIndex
 CREATE INDEX "post_locale_title_locale_idx" ON "post_locale"("title", "locale");

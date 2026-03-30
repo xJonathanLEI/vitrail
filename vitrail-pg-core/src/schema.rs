@@ -599,6 +599,12 @@ impl Field {
             })
     }
 
+    pub fn has_db_uuid(&self) -> bool {
+        self.attributes
+            .iter()
+            .any(|attribute| matches!(attribute, Attribute::DbUuid))
+    }
+
     fn validate_attributes(&self, model_name: &str, errors: &mut Vec<ValidationError>) {
         let mut seen_id = false;
         let mut seen_unique = false;
@@ -752,7 +758,13 @@ impl Field {
                             },
                             "`@db.Uuid` can only be used on scalar fields",
                         ));
-                    } else if self.ty != FieldType::string() {
+                    } else if !matches!(
+                        &self.ty,
+                        FieldType::Scalar(ScalarFieldType {
+                            scalar: ScalarType::String,
+                            ..
+                        })
+                    ) {
                         errors.push(ValidationError::new(
                             ValidationLocation::Attribute {
                                 model: model_name.to_owned(),
@@ -760,6 +772,15 @@ impl Field {
                                 attribute: "@db.Uuid".to_owned(),
                             },
                             "`@db.Uuid` is only supported on `String` fields",
+                        ));
+                    } else if seen_rust_type {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::Attribute {
+                                model: model_name.to_owned(),
+                                field: self.name.clone(),
+                                attribute: "@db.Uuid".to_owned(),
+                            },
+                            "`@db.Uuid` cannot be combined with `@rust_ty`",
                         ));
                     }
                 }
@@ -800,6 +821,15 @@ impl Field {
                                 attribute: "@rust_ty".to_owned(),
                             },
                             "`@rust_ty` is only supported on `String` fields",
+                        ));
+                    } else if seen_db_uuid {
+                        errors.push(ValidationError::new(
+                            ValidationLocation::Attribute {
+                                model: model_name.to_owned(),
+                                field: self.name.clone(),
+                                attribute: "@rust_ty".to_owned(),
+                            },
+                            "`@rust_ty` cannot be combined with `@db.Uuid`",
                         ));
                     }
                 }

@@ -17,6 +17,10 @@ pub(crate) use custom_types::pg_custom_types_schema as custom_types_schema;
 mod decimal;
 pub(crate) use decimal::pg_decimal_schema as decimal_schema;
 
+#[path = "pg/uuid.rs"]
+mod uuid;
+pub(crate) use uuid::pg_uuid_schema as uuid_schema;
+
 #[path = "pg/migrations.rs"]
 mod migrations;
 

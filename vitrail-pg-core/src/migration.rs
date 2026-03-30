@@ -20,8 +20,10 @@ impl PostgresSchema {
 
         for model in schema.models() {
             let mut columns = Vec::new();
-            let mut indexes = Vec::new();
-            let mut unique_indexes = Vec::new();
+            let mut field_indexes = Vec::new();
+            let mut field_unique_indexes = Vec::new();
+            let mut model_indexes = Vec::new();
+            let mut model_unique_indexes = Vec::new();
             let mut foreign_keys = Vec::new();
 
             let primary_key = PostgresPrimaryKey {
@@ -42,7 +44,7 @@ impl PostgresSchema {
                         .iter()
                         .any(|attribute| matches!(attribute, Attribute::Unique))
                     {
-                        unique_indexes.push(PostgresIndex {
+                        field_unique_indexes.push(PostgresIndex {
                             name: format!("{}_{}_key", model.name(), field.name()),
                             columns: vec![field.name().to_owned()],
                             unique: true,
@@ -54,7 +56,7 @@ impl PostgresSchema {
                         .iter()
                         .any(|attribute| matches!(attribute, Attribute::Index))
                     {
-                        indexes.push(PostgresIndex {
+                        field_indexes.push(PostgresIndex {
                             name: format!("{}_{}_idx", model.name(), field.name()),
                             columns: vec![field.name().to_owned()],
                             unique: false,
@@ -83,7 +85,7 @@ impl PostgresSchema {
             }
 
             for index_columns in model.index_column_sets() {
-                indexes.push(PostgresIndex {
+                model_indexes.push(PostgresIndex {
                     name: format!("{}_{}_idx", model.name(), index_columns.join("_")),
                     columns: index_columns.into_iter().map(str::to_owned).collect(),
                     unique: false,
@@ -91,14 +93,17 @@ impl PostgresSchema {
             }
 
             for unique_columns in model.unique_column_sets() {
-                unique_indexes.push(PostgresIndex {
+                model_unique_indexes.push(PostgresIndex {
                     name: format!("{}_{}_key", model.name(), unique_columns.join("_")),
                     columns: unique_columns.into_iter().map(str::to_owned).collect(),
                     unique: true,
                 });
             }
 
-            indexes.extend(unique_indexes);
+            let mut indexes = field_unique_indexes;
+            indexes.extend(field_indexes);
+            indexes.extend(model_indexes);
+            indexes.extend(model_unique_indexes);
 
             tables.push(PostgresTable {
                 name: model.name().to_owned(),
@@ -602,12 +607,7 @@ impl PostgresColumn {
 
         let ty = match field.ty() {
             FieldType::Scalar(scalar) => {
-                let has_db_uuid = field
-                    .attributes()
-                    .iter()
-                    .any(|attribute| matches!(attribute, Attribute::DbUuid));
-
-                ColumnType::from_scalar_type(scalar.scalar(), has_db_uuid)
+                ColumnType::from_scalar_type(scalar.scalar(), field.has_db_uuid())
             }
             FieldType::Relation { .. } => {
                 panic!(

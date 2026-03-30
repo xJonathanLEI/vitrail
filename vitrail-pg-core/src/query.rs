@@ -8,6 +8,7 @@ use sqlx::{Postgres, Row as _, ValueRef as _};
 
 pub use futures_util::future::BoxFuture;
 use rust_decimal::Decimal;
+use uuid::Uuid;
 
 use crate::PgExecutor;
 use crate::schema::{FieldType, Model, ScalarType, Schema};
@@ -171,6 +172,7 @@ pub enum QueryVariableValue {
     Decimal(Decimal),
     Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
+    Uuid(Uuid),
 }
 
 impl From<i64> for QueryVariableValue {
@@ -224,6 +226,12 @@ impl From<&[u8]> for QueryVariableValue {
 impl From<chrono::DateTime<chrono::Utc>> for QueryVariableValue {
     fn from(value: chrono::DateTime<chrono::Utc>) -> Self {
         Self::DateTime(value)
+    }
+}
+
+impl From<Uuid> for QueryVariableValue {
+    fn from(value: Uuid) -> Self {
+        Self::Uuid(value)
     }
 }
 
@@ -282,6 +290,12 @@ impl QueryScalar for &[u8] {
 }
 
 impl QueryScalar for chrono::DateTime<chrono::Utc> {
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        self.into()
+    }
+}
+
+impl QueryScalar for Uuid {
     fn into_query_variable_value(self) -> QueryVariableValue {
         self.into()
     }
@@ -797,6 +811,18 @@ impl QueryResultValue for Vec<u8> {
     }
 }
 
+impl QueryResultValue for Uuid {
+    fn from_row(row: &PgRow, alias: &str) -> Result<Self, sqlx::Error> {
+        row.try_get(alias)
+    }
+
+    fn from_json(value: &JsonValue) -> Result<Self, sqlx::Error> {
+        let value = json_as_string(value)?;
+        Uuid::parse_str(&value)
+            .map_err(|error| schema_error(format!("invalid JSON UUID in query result: {error}")))
+    }
+}
+
 impl<T> QueryResultValue for T
 where
     T: StringValueType,
@@ -1134,6 +1160,15 @@ impl<'a> SqlBuilder<'a> {
                 };
 
                 let binding = self.resolve_filter_value(value)?;
+                if !query_value_matches_field(&binding, field) {
+                    return Err(schema_error(format!(
+                        "filter value for field `{}.{}` is incompatible with schema type `{}`",
+                        model.name(),
+                        field.name(),
+                        field.ty().name()
+                    )));
+                }
+
                 if matches!(binding, QueryVariableValue::Null) {
                     Ok(format!(
                         "\"{table_alias}\".{} IS NULL",
@@ -1420,6 +1455,26 @@ pub(crate) fn select_expr(
     format!("{expr} AS \"{alias}\"")
 }
 
+fn query_value_matches_field(value: &QueryVariableValue, field: &crate::schema::Field) -> bool {
+    let FieldType::Scalar(scalar) = field.ty() else {
+        return false;
+    };
+
+    match value {
+        QueryVariableValue::Null => scalar.optional(),
+        QueryVariableValue::Int(_) => scalar.scalar() == ScalarType::Int,
+        QueryVariableValue::String(_) => {
+            scalar.scalar() == ScalarType::String && !field.has_db_uuid()
+        }
+        QueryVariableValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
+        QueryVariableValue::Float(_) => scalar.scalar() == ScalarType::Float,
+        QueryVariableValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
+        QueryVariableValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
+        QueryVariableValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
+        QueryVariableValue::Uuid(_) => scalar.scalar() == ScalarType::String && field.has_db_uuid(),
+    }
+}
+
 fn bind_query<'q>(
     mut query: sqlx::query::Query<'q, Postgres, PgArguments>,
     bindings: &'q [QueryVariableValue],
@@ -1434,6 +1489,7 @@ fn bind_query<'q>(
             QueryVariableValue::Decimal(value) => query.bind(*value),
             QueryVariableValue::Bytes(value) => query.bind(value),
             QueryVariableValue::DateTime(value) => query.bind(*value),
+            QueryVariableValue::Uuid(value) => query.bind(*value),
         };
     }
 

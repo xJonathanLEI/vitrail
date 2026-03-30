@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use rust_decimal::Decimal;
 use sqlx::postgres::PgArguments;
 use sqlx::{Postgres, query::Query as SqlxQuery};
+use uuid::Uuid;
 
 use crate::PgExecutor;
 use crate::query::{
@@ -143,6 +144,7 @@ pub enum UpdateValue {
     Decimal(Decimal),
     Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
+    Uuid(Uuid),
 }
 
 impl From<i64> for UpdateValue {
@@ -196,6 +198,12 @@ impl From<&[u8]> for UpdateValue {
 impl From<chrono::DateTime<chrono::Utc>> for UpdateValue {
     fn from(value: chrono::DateTime<chrono::Utc>) -> Self {
         Self::DateTime(value)
+    }
+}
+
+impl From<Uuid> for UpdateValue {
+    fn from(value: Uuid) -> Self {
+        Self::Uuid(value)
     }
 }
 
@@ -254,6 +262,12 @@ impl UpdateScalar for &[u8] {
 }
 
 impl UpdateScalar for chrono::DateTime<chrono::Utc> {
+    fn into_update_value(self) -> UpdateValue {
+        self.into()
+    }
+}
+
+impl UpdateScalar for Uuid {
     fn into_update_value(self) -> UpdateValue {
         self.into()
     }
@@ -432,7 +446,8 @@ fn build_update_many_sql(
                     )));
                 }
             };
-            let placeholder = builder.push_update_binding((*value).clone(), scalar)?;
+            let placeholder =
+                builder.push_update_binding((*value).clone(), scalar, field.has_db_uuid())?;
             Ok(format!(
                 r#"{} = {}"#,
                 quoted_ident(field.name()),
@@ -718,10 +733,12 @@ impl<'a> UpdateSqlBuilder<'a> {
         &mut self,
         value: UpdateValue,
         scalar: ScalarType,
+        is_db_uuid: bool,
     ) -> Result<String, sqlx::Error> {
-        let binding = match (value, scalar) {
-            (UpdateValue::Null, ScalarType::Bytes) => BoundValue::NullBytes,
-            (value, _) => value.into(),
+        let binding = match (value, scalar, is_db_uuid) {
+            (UpdateValue::Null, ScalarType::Bytes, _) => BoundValue::NullBytes,
+            (UpdateValue::Null, ScalarType::String, true) => BoundValue::NullUuid,
+            (value, _, _) => value.into(),
         };
 
         self.bindings.push(binding);
@@ -765,6 +782,7 @@ impl<'a> UpdateSqlBuilder<'a> {
 enum BoundValue {
     Null,
     NullBytes,
+    NullUuid,
     Int(i64),
     String(String),
     Bool(bool),
@@ -772,6 +790,7 @@ enum BoundValue {
     Decimal(Decimal),
     Bytes(Vec<u8>),
     DateTime(chrono::DateTime<chrono::Utc>),
+    Uuid(Uuid),
 }
 
 impl From<UpdateValue> for BoundValue {
@@ -785,6 +804,7 @@ impl From<UpdateValue> for BoundValue {
             UpdateValue::Decimal(value) => Self::Decimal(value),
             UpdateValue::Bytes(value) => Self::Bytes(value),
             UpdateValue::DateTime(value) => Self::DateTime(value),
+            UpdateValue::Uuid(value) => Self::Uuid(value),
         }
     }
 }
@@ -800,6 +820,7 @@ impl From<QueryVariableValue> for BoundValue {
             QueryVariableValue::Decimal(value) => Self::Decimal(value),
             QueryVariableValue::Bytes(value) => Self::Bytes(value),
             QueryVariableValue::DateTime(value) => Self::DateTime(value),
+            QueryVariableValue::Uuid(value) => Self::Uuid(value),
         }
     }
 }
@@ -812,12 +833,13 @@ fn update_value_matches_field(value: &UpdateValue, field: &Field) -> bool {
     match value {
         UpdateValue::Null => scalar.optional(),
         UpdateValue::Int(_) => scalar.scalar() == ScalarType::Int,
-        UpdateValue::String(_) => scalar.scalar() == ScalarType::String,
+        UpdateValue::String(_) => scalar.scalar() == ScalarType::String && !field.has_db_uuid(),
         UpdateValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         UpdateValue::Float(_) => scalar.scalar() == ScalarType::Float,
         UpdateValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
         UpdateValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         UpdateValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
+        UpdateValue::Uuid(_) => scalar.scalar() == ScalarType::String && field.has_db_uuid(),
     }
 }
 
@@ -829,12 +851,15 @@ fn query_value_matches_field(value: &QueryVariableValue, field: &Field) -> bool 
     match value {
         QueryVariableValue::Null => scalar.optional(),
         QueryVariableValue::Int(_) => scalar.scalar() == ScalarType::Int,
-        QueryVariableValue::String(_) => scalar.scalar() == ScalarType::String,
+        QueryVariableValue::String(_) => {
+            scalar.scalar() == ScalarType::String && !field.has_db_uuid()
+        }
         QueryVariableValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         QueryVariableValue::Float(_) => scalar.scalar() == ScalarType::Float,
         QueryVariableValue::Decimal(_) => scalar.scalar() == ScalarType::Decimal,
         QueryVariableValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
         QueryVariableValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
+        QueryVariableValue::Uuid(_) => scalar.scalar() == ScalarType::String && field.has_db_uuid(),
     }
 }
 
@@ -846,6 +871,7 @@ fn bind_update<'q>(
         query = match binding {
             BoundValue::Null => query.bind(Option::<i64>::None),
             BoundValue::NullBytes => query.bind(Option::<Vec<u8>>::None),
+            BoundValue::NullUuid => query.bind(Option::<Uuid>::None),
             BoundValue::Int(value) => query.bind(*value),
             BoundValue::String(value) => query.bind(value),
             BoundValue::Bool(value) => query.bind(*value),
@@ -853,6 +879,7 @@ fn bind_update<'q>(
             BoundValue::Decimal(value) => query.bind(*value),
             BoundValue::Bytes(value) => query.bind(value),
             BoundValue::DateTime(value) => query.bind(*value),
+            BoundValue::Uuid(value) => query.bind(*value),
         };
     }
 
