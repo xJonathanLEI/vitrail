@@ -154,6 +154,24 @@ struct PostWithNonNullBody {
     body: Option<String>,
 }
 
+#[derive(QueryVariables)]
+struct PostByExcludedTitleVariables {
+    excluded_title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::statements_schema::Schema,
+    model = post,
+    variables = PostByExcludedTitleVariables,
+    where(title = not(excluded_title))
+)]
+struct PostWithDifferentTitle {
+    id: i64,
+    title: String,
+}
+
 #[allow(dead_code)]
 #[derive(InsertInput)]
 #[vitrail(schema = crate::statements_schema::Schema, model = user)]
@@ -400,7 +418,39 @@ fn ad_hoc_not_null_where_generates_expected_sql() {
             r#""t0"."title" AS "post__title","#,
             r#""t0"."body" AS "post__body""#,
             r#"FROM "post" AS "t0""#,
-            r#"WHERE NOT ("t0"."body" IS NULL)"#,
+            r#"WHERE "t0"."body" IS NOT NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn ad_hoc_not_equal_where_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        post {
+            select: {
+                id: true,
+                title: true,
+            },
+            where: {
+                title: {
+                    not: "Draft".to_owned()
+                },
+            },
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"WHERE "t0"."title" <> $1"#,
         ]
         .join(" ")
     );
@@ -461,7 +511,30 @@ fn model_first_not_null_where_generates_expected_sql() {
             r#""t0"."title" AS "post__title","#,
             r#""t0"."body" AS "post__body""#,
             r#"FROM "post" AS "t0""#,
-            r#"WHERE NOT ("t0"."body" IS NULL)"#,
+            r#"WHERE "t0"."body" IS NOT NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn model_first_not_equal_where_generates_expected_sql() {
+    let sql = crate::statements_schema::query_with_variables::<PostWithDifferentTitle>(
+        PostByExcludedTitleVariables {
+            excluded_title: "Draft".to_owned(),
+        },
+    )
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"WHERE "t0"."title" <> $1"#,
         ]
         .join(" ")
     );

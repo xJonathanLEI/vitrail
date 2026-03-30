@@ -169,6 +169,23 @@ struct PostWithNonNullBody {
     body: Option<String>,
 }
 
+#[derive(QueryVariables)]
+struct PostByExcludedTitleVariables {
+    excluded_title: String,
+}
+
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = post,
+    variables = PostByExcludedTitleVariables,
+    where(title = not(excluded_title))
+)]
+struct PostWithDifferentTitle {
+    id: i64,
+    title: String,
+}
+
 async fn setup_database(database_url: &str) -> i64 {
     apply_schema(
         database_url,
@@ -437,6 +454,67 @@ async fn model_first_not_null_where_query_on_postgres() {
     assert_eq!(posts[0].id, 1);
     assert_eq!(posts[0].title, "Hello from Vitrail");
     assert_eq!(posts[0].body.as_deref(), Some("This is the post body"));
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn ad_hoc_not_equal_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(query! {
+            crate::query_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                },
+                where: {
+                    title: {
+                        not: "Second post".to_owned()
+                    }
+                },
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].id, 1);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_not_equal_where_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(crate::query_schema::query_with_variables::<
+            PostWithDifferentTitle,
+        >(PostByExcludedTitleVariables {
+            excluded_title: "Second post".to_owned(),
+        }))
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].id, 1);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
 
     database.cleanup().await;
 }

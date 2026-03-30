@@ -71,6 +71,20 @@ struct DerivedDeletePostsWithNullBody;
 )]
 struct DerivedDeletePostsWithNonNullBody;
 
+#[derive(vitrail_pg::QueryVariables)]
+struct PostBodyVariables {
+    excluded_body: String,
+}
+
+#[derive(DeleteMany)]
+#[vitrail(
+    schema = crate::delete_schema::Schema,
+    model = comment,
+    variables = PostBodyVariables,
+    where(post.body = not(excluded_body))
+)]
+struct DerivedDeleteCommentsByPostBody;
+
 struct DeleteReviewedComments;
 
 impl DeleteManyModel for DeleteReviewedComments {
@@ -232,6 +246,58 @@ async fn delete_many_deletes_multiple_rows_and_returns_count() {
         .expect("should count comments");
 
     assert_eq!(remaining_comments, 0);
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn delete_many_deletes_rows_matching_not_equal_filter() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .delete_many(crate::delete_schema::delete_many_with_variables::<
+            DerivedDeleteCommentsByPostBody,
+        >(PostBodyVariables {
+            excluded_body: "Bob published body".to_owned(),
+        }))
+        .await
+        .expect("delete should succeed");
+
+    assert_eq!(count, 1);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let remaining_comments: i64 = sqlx::query_scalar(r#"SELECT COUNT(*)::bigint FROM "comment""#)
+        .fetch_one(&pool)
+        .await
+        .expect("should count comments");
+
+    assert_eq!(remaining_comments, 2);
+
+    let remaining_bob_comments: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM "comment" AS "c"
+        JOIN "post" AS "p" ON "p"."id" = "c"."post_id"
+        WHERE "p"."body" = 'Bob published body'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob comments");
+
+    assert_eq!(remaining_bob_comments, 1);
 
     pool.close().await;
     database.cleanup().await;
@@ -648,7 +714,54 @@ fn delete_helper_generates_expected_sql_for_not_null_filter() {
         sql,
         [
             r#"DELETE FROM "comment" AS "t0""#,
-            r#"WHERE EXISTS (SELECT 1 FROM "post" AS "t1" WHERE "t1"."id" = "t0"."post_id" AND NOT ("t1"."body" IS NULL))"#,
+            r#"WHERE EXISTS (SELECT 1 FROM "post" AS "t1" WHERE "t1"."id" = "t0"."post_id" AND "t1"."body" IS NOT NULL)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn delete_many_generates_expected_sql_for_not_equal_filter() {
+    let sql = crate::delete_schema::delete_many_with_variables::<DerivedDeleteCommentsByPostBody>(
+        PostBodyVariables {
+            excluded_body: "Bob published body".to_owned(),
+        },
+    )
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"DELETE FROM "comment" AS "t0""#,
+            r#"WHERE EXISTS (SELECT 1 FROM "post" AS "t1" WHERE "t1"."id" = "t0"."post_id" AND "t1"."body" <> $1)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn delete_helper_generates_expected_sql_for_not_equal_filter() {
+    let sql = delete! {
+        crate::delete_schema,
+        comment {
+            where: {
+                post: {
+                    body: {
+                        not: "Bob published body".to_owned()
+                    },
+                },
+            },
+        }
+    }
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"DELETE FROM "comment" AS "t0""#,
+            r#"WHERE EXISTS (SELECT 1 FROM "post" AS "t1" WHERE "t1"."id" = "t0"."post_id" AND "t1"."body" <> $1)"#,
         ]
         .join(" ")
     );

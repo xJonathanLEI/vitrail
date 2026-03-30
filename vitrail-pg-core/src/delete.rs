@@ -257,7 +257,7 @@ impl<'a> DeleteSqlBuilder<'a> {
                 "NOT ({})",
                 self.filter_sql(model, filter, table_alias)?
             )),
-            QueryFilter::Eq { field, value } => {
+            QueryFilter::Eq { field, value } | QueryFilter::Ne { field, value } => {
                 let field = model.field_named(field).ok_or_else(|| {
                     schema_error(format!(
                         "unknown field `{}.{}` in delete filter",
@@ -288,18 +288,38 @@ impl<'a> DeleteSqlBuilder<'a> {
                     )));
                 }
 
-                if matches!(binding, QueryVariableValue::Null) {
-                    Ok(format!(
-                        "\"{table_alias}\".{} IS NULL",
-                        quoted_ident(field.name())
-                    ))
-                } else {
-                    let placeholder = self.push_query_binding(binding, scalar)?;
-                    Ok(format!(
-                        "{} = {}",
-                        column_expr(table_alias, field.name(), scalar),
-                        placeholder
-                    ))
+                match filter {
+                    QueryFilter::Eq { .. } => {
+                        if matches!(binding, QueryVariableValue::Null) {
+                            Ok(format!(
+                                "\"{table_alias}\".{} IS NULL",
+                                quoted_ident(field.name())
+                            ))
+                        } else {
+                            let placeholder = self.push_query_binding(binding, scalar)?;
+                            Ok(format!(
+                                "{} = {}",
+                                column_expr(table_alias, field.name(), scalar),
+                                placeholder
+                            ))
+                        }
+                    }
+                    QueryFilter::Ne { .. } => {
+                        if matches!(binding, QueryVariableValue::Null) {
+                            Ok(format!(
+                                "\"{table_alias}\".{} IS NOT NULL",
+                                quoted_ident(field.name())
+                            ))
+                        } else {
+                            let placeholder = self.push_query_binding(binding, scalar)?;
+                            Ok(format!(
+                                "{} <> {}",
+                                column_expr(table_alias, field.name(), scalar),
+                                placeholder
+                            ))
+                        }
+                    }
+                    _ => unreachable!("handled by outer match"),
                 }
             }
             QueryFilter::Relation { field, filter } => {

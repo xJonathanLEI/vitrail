@@ -83,6 +83,11 @@ struct PostsByAuthorEmailVariables {
     author_email: String,
 }
 
+#[derive(QueryVariables)]
+struct PostByExcludedTitleVariables {
+    excluded_title: String,
+}
+
 #[allow(dead_code)]
 #[derive(UpdateData)]
 #[vitrail(schema = crate::my_schema::Schema, model = post)]
@@ -106,9 +111,10 @@ struct PublishPostsByAuthorEmail;
 #[vitrail(
     schema = crate::my_schema::Schema,
     model = post,
-    where(body = null)
+    variables = PostByExcludedTitleVariables,
+    where(title = not(excluded_title))
 )]
-struct DeletePostsWithoutBody;
+struct DeletePostsByExcludedTitle;
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
@@ -125,6 +131,19 @@ struct UserWithPosts {
     name: String,
     #[vitrail(include)]
     posts: Vec<PostSummary>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::my_schema::Schema,
+    model = post,
+    variables = PostByExcludedTitleVariables,
+    where(title = not(excluded_title))
+)]
+struct PostWithDifferentTitle {
+    id: i64,
+    title: String,
 }
 
 #[tokio::main]
@@ -176,7 +195,11 @@ async fn main() {
         .unwrap();
 
     let deleted_posts = client
-        .delete_many(my_schema::delete_many::<DeletePostsWithoutBody>())
+        .delete_many(my_schema::delete_many_with_variables::<
+            DeletePostsByExcludedTitle,
+        >(PostByExcludedTitleVariables {
+            excluded_title: "Hello Vitrail".to_owned(),
+        }))
         .await
         .unwrap();
 
@@ -187,8 +210,18 @@ async fn main() {
         .await
         .unwrap();
 
+    let posts = client
+        .find_many(my_schema::query_with_variables::<PostWithDifferentTitle>(
+            PostByExcludedTitleVariables {
+                excluded_title: "Untitled draft".to_owned(),
+            },
+        ))
+        .await
+        .unwrap();
+
     println!("inserted user {} ({})", user.email, user.external_id);
     println!("updated {} posts", updated_posts);
     println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
+    println!("fetched {} posts with a not(...) filter", posts.len());
 }

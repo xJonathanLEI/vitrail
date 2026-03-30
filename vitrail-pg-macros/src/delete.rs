@@ -87,7 +87,7 @@ impl DeleteManyDerive {
         {
             return Err(Error::new(
                 ident.span(),
-                "delete filters using `eq(...)` require `#[vitrail(variables = YourVariablesType)]`",
+                "delete filters using `eq(...)` or `not(...)` require `#[vitrail(variables = YourVariablesType)]`",
             ));
         }
 
@@ -260,6 +260,7 @@ struct DeleteManyRootFilter {
 
 enum DeleteManyScalarFilter {
     Eq { variable: Ident },
+    Ne { variable: Ident },
     IsNull,
     IsNotNull,
 }
@@ -274,6 +275,12 @@ impl DeleteManyRootFilter {
         let mut filter = match &self.filter {
             DeleteManyScalarFilter::Eq { variable } => quote! {
                 ::vitrail_pg::QueryFilter::eq(
+                    stringify!(#final_field),
+                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                )
+            },
+            DeleteManyScalarFilter::Ne { variable } => quote! {
+                ::vitrail_pg::QueryFilter::ne(
                     stringify!(#final_field),
                     ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
                 )
@@ -304,7 +311,9 @@ impl DeleteManyRootFilter {
 
     fn variable(&self) -> Option<&Ident> {
         match &self.filter {
-            DeleteManyScalarFilter::Eq { variable } => Some(variable),
+            DeleteManyScalarFilter::Eq { variable } | DeleteManyScalarFilter::Ne { variable } => {
+                Some(variable)
+            }
             DeleteManyScalarFilter::IsNull | DeleteManyScalarFilter::IsNotNull => None,
         }
     }
@@ -342,25 +351,22 @@ impl Parse for DeleteManyRootFilter {
             parenthesized!(operator_args in input);
             let value = operator_args.call(Ident::parse_any)?;
 
-            if value != "null" {
-                return Err(Error::new(
-                    value.span(),
-                    "unsupported `where` operand for `not`; only `not(null)` is currently supported",
-                ));
-            }
-
             if !operator_args.is_empty() {
                 return Err(Error::new(
                     operator_args.span(),
-                    "unexpected tokens in `where(... = not(null))`",
+                    "unexpected tokens in `where(... = not(...))`",
                 ));
             }
 
-            DeleteManyScalarFilter::IsNotNull
+            if value == "null" {
+                DeleteManyScalarFilter::IsNotNull
+            } else {
+                DeleteManyScalarFilter::Ne { variable: value }
+            }
         } else {
             return Err(Error::new(
                 operator.span(),
-                "unsupported `where` operator; only `eq`, `null`, and `not(null)` are currently supported",
+                "unsupported `where` operator; only `eq`, `null`, and `not(...)` are currently supported",
             ));
         };
 

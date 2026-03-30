@@ -226,7 +226,7 @@ impl UpdateManyDerive {
         {
             return Err(Error::new(
                 ident.span(),
-                "update filters using `eq(...)` require `#[vitrail(variables = YourVariablesType)]`",
+                "update filters using `eq(...)` or `not(...)` require `#[vitrail(variables = YourVariablesType)]`",
             ));
         }
 
@@ -521,6 +521,7 @@ struct UpdateManyRootFilter {
 
 enum UpdateManyScalarFilter {
     Eq { variable: Ident },
+    Ne { variable: Ident },
     IsNull,
     IsNotNull,
 }
@@ -535,6 +536,12 @@ impl UpdateManyRootFilter {
         let mut filter = match &self.filter {
             UpdateManyScalarFilter::Eq { variable } => quote! {
                 ::vitrail_pg::QueryFilter::eq(
+                    stringify!(#final_field),
+                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                )
+            },
+            UpdateManyScalarFilter::Ne { variable } => quote! {
+                ::vitrail_pg::QueryFilter::ne(
                     stringify!(#final_field),
                     ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
                 )
@@ -565,7 +572,9 @@ impl UpdateManyRootFilter {
 
     fn variable(&self) -> Option<&Ident> {
         match &self.filter {
-            UpdateManyScalarFilter::Eq { variable } => Some(variable),
+            UpdateManyScalarFilter::Eq { variable } | UpdateManyScalarFilter::Ne { variable } => {
+                Some(variable)
+            }
             UpdateManyScalarFilter::IsNull | UpdateManyScalarFilter::IsNotNull => None,
         }
     }
@@ -603,25 +612,22 @@ impl Parse for UpdateManyRootFilter {
             parenthesized!(operator_args in input);
             let value = operator_args.call(Ident::parse_any)?;
 
-            if value != "null" {
-                return Err(Error::new(
-                    value.span(),
-                    "unsupported `where` operand for `not`; only `not(null)` is currently supported",
-                ));
-            }
-
             if !operator_args.is_empty() {
                 return Err(Error::new(
                     operator_args.span(),
-                    "unexpected tokens in `where(... = not(null))`",
+                    "unexpected tokens in `where(... = not(...))`",
                 ));
             }
 
-            UpdateManyScalarFilter::IsNotNull
+            if value == "null" {
+                UpdateManyScalarFilter::IsNotNull
+            } else {
+                UpdateManyScalarFilter::Ne { variable: value }
+            }
         } else {
             return Err(Error::new(
                 operator.span(),
-                "unsupported `where` operator; only `eq`, `null`, and `not(null)` are currently supported",
+                "unsupported `where` operator; only `eq`, `null`, and `not(...)` are currently supported",
             ));
         };
 

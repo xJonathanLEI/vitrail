@@ -63,18 +63,19 @@ impl QueryResultDerive {
         let relation_fields: Vec<_> = self.fields.iter().filter(|field| field.include).collect();
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-        if (self
-            .fields
+        if (self.fields.iter().any(|field| {
+            matches!(
+                field.filter,
+                Some(QueryResultFieldFilter::Eq { .. } | QueryResultFieldFilter::Ne { .. })
+            )
+        }) || root_filters
             .iter()
-            .any(|field| matches!(field.filter, Some(QueryResultFieldFilter::Eq { .. })))
-            || root_filters
-                .iter()
-                .any(|filter| filter.variable().is_some()))
+            .any(|filter| filter.variable().is_some()))
             && variables_ty.is_none()
         {
             return Err(Error::new(
                 ident.span(),
-                "query filters using `eq(...)` require `#[vitrail(variables = YourVariablesType)]`",
+                "query filters using `eq(...)` or `not(...)` require `#[vitrail(variables = YourVariablesType)]`",
             ));
         }
 
@@ -139,7 +140,7 @@ impl QueryResultDerive {
                 let field_name = &field.query_name;
                 let filter = field.filter.as_ref()?;
                 match filter {
-                    QueryResultFieldFilter::Eq { .. } => None,
+                    QueryResultFieldFilter::Eq { .. } | QueryResultFieldFilter::Ne { .. } => None,
                     QueryResultFieldFilter::IsNull => Some(quote! {
                         ::vitrail_pg::QueryFilter::is_null(#field_name)
                     }),
@@ -172,6 +173,12 @@ impl QueryResultDerive {
                     Some(match filter {
                         QueryResultFieldFilter::Eq { variable } => quote! {
                             ::vitrail_pg::QueryFilter::eq(
+                                #field_name,
+                                ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                            )
+                        },
+                        QueryResultFieldFilter::Ne { variable } => quote! {
+                            ::vitrail_pg::QueryFilter::ne(
                                 #field_name,
                                 ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
                             )
@@ -290,7 +297,8 @@ impl QueryResultDerive {
             validations.extend(scalar_fields.iter().filter_map(|field| {
                 let filter = field.filter.as_ref()?;
                 match filter {
-                    QueryResultFieldFilter::Eq { variable } => Some(variable),
+                    QueryResultFieldFilter::Eq { variable }
+                    | QueryResultFieldFilter::Ne { variable } => Some(variable),
                     QueryResultFieldFilter::IsNull | QueryResultFieldFilter::IsNotNull => None,
                 }
             }));
@@ -426,6 +434,7 @@ struct QueryResultField {
 
 enum QueryResultFieldFilter {
     Eq { variable: Ident },
+    Ne { variable: Ident },
     IsNull,
     IsNotNull,
 }
@@ -486,32 +495,29 @@ impl QueryResultField {
                         parenthesized!(operator_args in content);
                         let value = operator_args.call(Ident::parse_any)?;
 
-                        if value != "null" {
-                            return Err(Error::new(
-                                value.span(),
-                                "unsupported `where` operand for `not`; only `not(null)` is currently supported",
-                            ));
-                        }
-
                         if !operator_args.is_empty() {
                             return Err(Error::new(
                                 operator_args.span(),
-                                "unexpected tokens in `where(not(null))`",
+                                "unexpected tokens in `where(not(...))`",
                             ));
                         }
 
                         if !content.is_empty() {
                             return Err(Error::new(
                                 content.span(),
-                                "unexpected tokens in `where(not(null))`",
+                                "unexpected tokens in `where(not(...))`",
                             ));
                         }
 
-                        Some(QueryResultFieldFilter::IsNotNull)
+                        if value == "null" {
+                            Some(QueryResultFieldFilter::IsNotNull)
+                        } else {
+                            Some(QueryResultFieldFilter::Ne { variable: value })
+                        }
                     } else {
                         return Err(Error::new(
                             operator.span(),
-                            "unsupported `where` operator; only `eq`, `null`, and `not(null)` are currently supported",
+                            "unsupported `where` operator; only `eq`, `null`, and `not(...)` are currently supported",
                         ));
                     };
 
@@ -717,6 +723,12 @@ impl QueryResultRootFilter {
                     ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
                 )
             },
+            QueryResultFieldFilter::Ne { variable } => quote! {
+                ::vitrail_pg::QueryFilter::ne(
+                    #field_name,
+                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                )
+            },
             QueryResultFieldFilter::IsNull => quote! {
                 ::vitrail_pg::QueryFilter::is_null(#field_name)
             },
@@ -743,7 +755,9 @@ impl QueryResultRootFilter {
 
     fn variable(&self) -> Option<&Ident> {
         match &self.filter {
-            QueryResultFieldFilter::Eq { variable } => Some(variable),
+            QueryResultFieldFilter::Eq { variable } | QueryResultFieldFilter::Ne { variable } => {
+                Some(variable)
+            }
             QueryResultFieldFilter::IsNull | QueryResultFieldFilter::IsNotNull => None,
         }
     }
@@ -777,25 +791,22 @@ fn parse_query_result_root_filter(input: ParseStream<'_>) -> Result<QueryResultR
         parenthesized!(operator_args in content);
         let value = operator_args.call(Ident::parse_any)?;
 
-        if value != "null" {
-            return Err(Error::new(
-                value.span(),
-                "unsupported `where` operand for `not`; only `not(null)` is currently supported",
-            ));
-        }
-
         if !operator_args.is_empty() {
             return Err(Error::new(
                 operator_args.span(),
-                "unexpected tokens in `where(... = not(null))`",
+                "unexpected tokens in `where(... = not(...))`",
             ));
         }
 
-        QueryResultFieldFilter::IsNotNull
+        if value == "null" {
+            QueryResultFieldFilter::IsNotNull
+        } else {
+            QueryResultFieldFilter::Ne { variable: value }
+        }
     } else {
         return Err(Error::new(
             operator.span(),
-            "unsupported `where` operator; only `eq`, `null`, and `not(null)` are currently supported",
+            "unsupported `where` operator; only `eq`, `null`, and `not(...)` are currently supported",
         ));
     };
 

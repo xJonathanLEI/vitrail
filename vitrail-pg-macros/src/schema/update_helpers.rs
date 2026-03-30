@@ -261,6 +261,12 @@ impl ParsedSchema {
                     (#ident : { not : null $(,)? }) => {
                         ::vitrail_pg::QueryFilter::is_not_null(stringify!(#ident))
                     };
+                    (#ident : { not : $value:expr $(,)? }) => {
+                        ::vitrail_pg::QueryFilter::ne(
+                            stringify!(#ident),
+                            ::vitrail_pg::QueryFilterValue::value($value),
+                        )
+                    };
                     (#ident : { $operator:ident : $value:tt $(,)? }) => {{
                         compile_error!(concat!(
                             "unsupported `where` operator `",
@@ -269,7 +275,7 @@ impl ParsedSchema {
                             stringify!(#ident),
                             "` in update helper for model `",
                             #model_name,
-                            "`; only `eq`, `null`, and `{ not: null }` are currently supported"
+                            "`; only `eq`, `null`, and `{ not: ... }` are currently supported"
                         ))
                     }};
                     (#ident : $value:tt) => {{
@@ -278,7 +284,7 @@ impl ParsedSchema {
                             stringify!(#ident),
                             "` in update helper for model `",
                             #model_name,
-                            "`; expected `null`, `{ eq: ... }`, or `{ not: null }`"
+                            "`; expected `null`, `{ eq: ... }`, or `{ not: ... }`"
                         ))
                     }};
                 }
@@ -354,7 +360,7 @@ impl ParsedSchema {
                                 stringify!(#ident),
                                 "` in update helper for model `",
                                 #model_name,
-                                "`; expected a nested object like `{ nested_field: null }`, `{ nested_field: { eq: ... } }`, or `{ nested_field: { not: null } }`"
+                                "`; expected a nested object like `{ nested_field: null }`, `{ nested_field: { eq: ... } }`, or `{ nested_field: { not: ... } }`"
                             ))
                         }};
                     })

@@ -82,10 +82,8 @@ async fn main() {
                     published: true,
                 },
                 where: {
-                    author: {
-                        email: {
-                            eq: "alice@example.com".to_owned()
-                        }
+                    body: {
+                        not: null
                     },
                 },
             }
@@ -98,7 +96,9 @@ async fn main() {
             crate::my_schema,
             post {
                 where: {
-                    body: null,
+                    title: {
+                        not: "Hello Vitrail".to_owned()
+                    },
                 },
             }
         })
@@ -133,8 +133,27 @@ async fn main() {
         .await
         .unwrap();
 
+    let posts = client
+        .find_many(query! {
+            crate::my_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                },
+                where: {
+                    title: {
+                        not: "Untitled draft".to_owned()
+                    },
+                },
+            }
+        })
+        .await
+        .unwrap();
+
     println!("inserted user {} ({})", user.email, user.external_id);
     println!("updated {} posts", updated_posts);
     println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
+    println!("fetched {} posts with a not(...) filter", posts.len());
 }

@@ -359,6 +359,10 @@ pub enum QueryFilter {
         field: &'static str,
         value: QueryFilterValue,
     },
+    Ne {
+        field: &'static str,
+        value: QueryFilterValue,
+    },
     Relation {
         field: &'static str,
         filter: Box<QueryFilter>,
@@ -373,6 +377,13 @@ impl QueryFilter {
         }
     }
 
+    pub fn ne(field: &'static str, value: impl Into<QueryFilterValue>) -> Self {
+        Self::Ne {
+            field,
+            value: value.into(),
+        }
+    }
+
     pub fn is_null(field: &'static str) -> Self {
         Self::Eq {
             field,
@@ -381,7 +392,10 @@ impl QueryFilter {
     }
 
     pub fn is_not_null(field: &'static str) -> Self {
-        Self::Not(Box::new(Self::is_null(field)))
+        Self::Ne {
+            field,
+            value: QueryFilterValue::Value(QueryVariableValue::Null),
+        }
     }
 
     pub fn relation(field: &'static str, filter: QueryFilter) -> Self {
@@ -1150,7 +1164,7 @@ impl<'a> SqlBuilder<'a> {
                 "NOT ({})",
                 self.filter_sql(model, filter, table_alias)?
             )),
-            QueryFilter::Eq { field, value } => {
+            QueryFilter::Eq { field, value } | QueryFilter::Ne { field, value } => {
                 let field = model.field_named(field).ok_or_else(|| {
                     schema_error(format!(
                         "unknown field `{}.{}` in query filter",
@@ -1180,18 +1194,38 @@ impl<'a> SqlBuilder<'a> {
                     )));
                 }
 
-                if matches!(binding, QueryVariableValue::Null) {
-                    Ok(format!(
-                        "\"{table_alias}\".{} IS NULL",
-                        quoted_ident(field.name())
-                    ))
-                } else {
-                    let placeholder = self.push_binding(binding, scalar)?;
-                    Ok(format!(
-                        "{} = {}",
-                        column_expr(table_alias, field.name(), scalar),
-                        placeholder
-                    ))
+                match filter {
+                    QueryFilter::Eq { .. } => {
+                        if matches!(binding, QueryVariableValue::Null) {
+                            Ok(format!(
+                                "\"{table_alias}\".{} IS NULL",
+                                quoted_ident(field.name())
+                            ))
+                        } else {
+                            let placeholder = self.push_binding(binding, scalar)?;
+                            Ok(format!(
+                                "{} = {}",
+                                column_expr(table_alias, field.name(), scalar),
+                                placeholder
+                            ))
+                        }
+                    }
+                    QueryFilter::Ne { .. } => {
+                        if matches!(binding, QueryVariableValue::Null) {
+                            Ok(format!(
+                                "\"{table_alias}\".{} IS NOT NULL",
+                                quoted_ident(field.name())
+                            ))
+                        } else {
+                            let placeholder = self.push_binding(binding, scalar)?;
+                            Ok(format!(
+                                "{} <> {}",
+                                column_expr(table_alias, field.name(), scalar),
+                                placeholder
+                            ))
+                        }
+                    }
+                    _ => unreachable!("handled by outer match"),
                 }
             }
             QueryFilter::Relation { field, filter } => {

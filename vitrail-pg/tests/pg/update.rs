@@ -117,6 +117,21 @@ struct DerivedPublishPostsWithNullBody;
 )]
 struct DerivedPublishPostsWithNonNullBody;
 
+#[derive(QueryVariables)]
+struct ExcludedPostBodyVariables {
+    excluded_body: String,
+}
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = ExcludedPostBodyVariables,
+    where(body = not(excluded_body))
+)]
+struct DerivedPublishPostsByExcludedBody;
+
 struct PublishUnpublishedPosts;
 
 impl UpdateManyModel for PublishUnpublishedPosts {
@@ -965,6 +980,78 @@ async fn update_many_updates_rows_matching_not_null_filter() {
     database.cleanup().await;
 }
 
+#[tokio::test]
+async fn update_many_updates_rows_matching_not_equal_filter() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let updated = client
+        .update_many(crate::update_schema::update_many_with_variables::<
+            DerivedPublishPostsByExcludedBody,
+        >(
+            ExcludedPostBodyVariables {
+                excluded_body: "Bob published body".to_owned(),
+            },
+            PublishPostsData { published: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(updated, 1);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let alice_post_1_published: bool = sqlx::query_scalar(
+        r#"
+        SELECT "published"
+        FROM "post"
+        WHERE "body" = 'Alice draft body 1'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch alice post 1");
+
+    let bob_post_published: bool = sqlx::query_scalar(
+        r#"
+        SELECT "published"
+        FROM "post"
+        WHERE "body" = 'Bob published body'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch bob post");
+
+    let null_body_post_published: bool = sqlx::query_scalar(
+        r#"
+        SELECT "published"
+        FROM "post"
+        WHERE "body" IS NULL
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch null body post");
+
+    assert!(alice_post_1_published);
+    assert!(bob_post_published);
+    assert!(!null_body_post_published);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup().await;
+}
+
 #[test]
 fn update_many_generates_expected_sql_for_null_filter() {
     let sql =
@@ -999,7 +1086,30 @@ fn update_many_generates_expected_sql_for_not_null_filter() {
         [
             r#"UPDATE "post" AS "t0""#,
             r#"SET "published" = $1"#,
-            r#"WHERE NOT ("t0"."body" IS NULL)"#,
+            r#"WHERE "t0"."body" IS NOT NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_many_generates_expected_sql_for_not_equal_filter() {
+    let sql =
+        crate::update_schema::update_many_with_variables::<DerivedPublishPostsByExcludedBody>(
+            ExcludedPostBodyVariables {
+                excluded_body: "Bob published body".to_owned(),
+            },
+            PublishPostsData { published: true },
+        )
+        .to_sql()
+        .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = $1"#,
+            r#"WHERE "t0"."body" <> $2"#,
         ]
         .join(" ")
     );
@@ -1028,7 +1138,36 @@ fn update_helper_generates_expected_sql_for_not_null_filter() {
         [
             r#"UPDATE "post" AS "t0""#,
             r#"SET "published" = $1"#,
-            r#"WHERE NOT ("t0"."body" IS NULL)"#,
+            r#"WHERE "t0"."body" IS NOT NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_helper_generates_expected_sql_for_not_equal_filter() {
+    let sql = update! {
+        crate::update_schema,
+        post {
+            data: {
+                published: true,
+            },
+            where: {
+                body: {
+                    not: "Bob published body".to_owned()
+                },
+            },
+        }
+    }
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = $1"#,
+            r#"WHERE "t0"."body" <> $2"#,
         ]
         .join(" ")
     );
