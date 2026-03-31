@@ -201,6 +201,26 @@ impl ParsedSchema {
                 module_name,
                 model.name
             );
+            let where_field_variable_filter_macro_ident = format_ident!(
+                "__vitrail_delete_where_field_variable_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_variable_filter_macro_ident = format_ident!(
+                "__vitrail_delete_where_variable_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_variable_entries_macro_ident = format_ident!(
+                "__vitrail_delete_where_variable_entries_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_variables_macro_ident = format_ident!(
+                "__vitrail_delete_where_variables_{}_{}",
+                module_name,
+                model.name
+            );
 
             quote! {
                 #[doc(hidden)]
@@ -215,6 +235,18 @@ impl ParsedSchema {
                 #[doc(hidden)]
                 #[allow(unused_imports)]
                 pub use #where_field_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_field_variable_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_variable_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_variable_entries_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_variables_macro_ident;
             }
         });
         let update_macro_reexports = self.models.iter().map(|model| {
@@ -248,6 +280,26 @@ impl ParsedSchema {
                 module_name,
                 model.name
             );
+            let where_field_variable_filter_macro_ident = format_ident!(
+                "__vitrail_update_where_field_variable_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_variable_filter_macro_ident = format_ident!(
+                "__vitrail_update_where_variable_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_variable_entries_macro_ident = format_ident!(
+                "__vitrail_update_where_variable_entries_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_variables_macro_ident = format_ident!(
+                "__vitrail_update_where_variables_{}_{}",
+                module_name,
+                model.name
+            );
             let data_struct_macro_ident = format_ident!(
                 "__vitrail_update_data_struct_{}_{}",
                 module_name,
@@ -275,6 +327,18 @@ impl ParsedSchema {
                 #[doc(hidden)]
                 #[allow(unused_imports)]
                 pub use #where_field_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_field_variable_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_variable_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_variable_entries_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_variables_macro_ident;
                 #[doc(hidden)]
                 #[allow(unused_imports)]
                 pub use #data_struct_macro_ident;

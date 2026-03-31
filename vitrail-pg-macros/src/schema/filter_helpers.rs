@@ -31,6 +31,30 @@ pub(super) fn generate_filter_helper_items(
         module_name,
         model.name
     );
+    let where_variable_filter_macro_ident = format_ident!(
+        "__vitrail_{}_where_variable_filter_{}_{}",
+        operation,
+        module_name,
+        model.name
+    );
+    let where_field_variable_filter_macro_ident = format_ident!(
+        "__vitrail_{}_where_field_variable_filter_{}_{}",
+        operation,
+        module_name,
+        model.name
+    );
+    let where_variable_entries_macro_ident = format_ident!(
+        "__vitrail_{}_where_variable_entries_{}_{}",
+        operation,
+        module_name,
+        model.name
+    );
+    let where_variables_macro_ident = format_ident!(
+        "__vitrail_{}_where_variables_{}_{}",
+        operation,
+        module_name,
+        model.name
+    );
 
     let scalar_where_path_arms = scalar_fields.iter().map(|field| {
         let ident = &field.name;
@@ -341,6 +365,18 @@ pub(super) fn generate_filter_helper_items(
                 module_name,
                 target.name
             );
+            let target_where_variable_filter_macro_ident = format_ident!(
+                "__vitrail_{}_where_variable_filter_{}_{}",
+                operation,
+                module_name,
+                target.name
+            );
+            let target_where_variable_entries_macro_ident = format_ident!(
+                "__vitrail_{}_where_variable_entries_{}_{}",
+                operation,
+                module_name,
+                target.name
+            );
 
             Ok(quote! {
                 (#ident : { }) => {{
@@ -418,6 +454,24 @@ pub(super) fn generate_filter_helper_items(
                         .expect("nested relation filter should contain at least one predicate"),
                     )
                 };
+                (@variable_filter [ $($path:tt)* ] #ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
+                    ::vitrail_pg::QueryFilter::relation(
+                        ::core::stringify!(#ident),
+                        #dollar_crate::#module_name::#target_where_variable_filter_macro_ident!(
+                            @filter_block
+                            [ $($path)* #ident . ]
+                            { $($nested_field : $nested_value),+ }
+                        )
+                        .expect("nested relation filter should contain at least one predicate"),
+                    )
+                };
+                (@variable_entries [ $($path:tt)* ] #ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
+                    #dollar_crate::#module_name::#target_where_variable_entries_macro_ident!(
+                        @entries_block
+                        [ $($path)* #ident . ]
+                        { $($nested_field : $nested_value),+ }
+                    )
+                };
                 (#ident : $value:tt) => {{
                     compile_error!(concat!(
                         "malformed filter for relation field `",
@@ -429,9 +483,99 @@ pub(super) fn generate_filter_helper_items(
                         "`; expected a nested object like `{ nested_field: null }`, `{ nested_field: { eq: ... } }`, or `{ nested_field: { not: ... } }`"
                     ))
                 }};
+                (@variable_filter [ $($path:tt)* ] #ident : $value:tt) => {{
+                    #dollar_crate::#module_name::#where_field_filter_macro_ident!(#ident : $value)
+                }};
+                (@variable_entries [ $($path:tt)* ] #ident : $value:tt) => {
+                    #dollar_crate::#module_name::#where_field_filter_macro_ident!(#ident : $value)
+                };
             })
         })
         .collect::<Result<Vec<_>>>()?;
+
+    let scalar_where_field_variable_filter_arms = scalar_fields.iter().map(|field| {
+        let ident = &field.name;
+
+        quote! {
+            (@filter [ $($path:tt)* ] #ident : null) => {
+                ::vitrail_pg::QueryFilter::is_null(::core::stringify!(#ident))
+            };
+            (@filter [ $($path:tt)* ] #ident : { eq : $value:tt $(,)? }) => {{
+                ::vitrail_pg::QueryFilter::eq(
+                    ::core::stringify!(#ident),
+                    ::vitrail_pg::QueryFilterValue::variable(
+                        ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::eq")),
+                    ),
+                )
+            }};
+            (@filter [ $($path:tt)* ] #ident : { in : $value:tt $(,)? }) => {{
+                ::vitrail_pg::QueryFilter::r#in(
+                    ::core::stringify!(#ident),
+                    ::vitrail_pg::QueryFilterValues::variable(
+                        ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::in")),
+                    ),
+                )
+            }};
+            (@filter [ $($path:tt)* ] #ident : { not : null $(,)? }) => {
+                ::vitrail_pg::QueryFilter::is_not_null(::core::stringify!(#ident))
+            };
+            (@filter [ $($path:tt)* ] #ident : { not : $value:tt $(,)? }) => {{
+                ::vitrail_pg::QueryFilter::ne(
+                    ::core::stringify!(#ident),
+                    ::vitrail_pg::QueryFilterValue::variable(
+                        ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::not")),
+                    ),
+                )
+            }};
+            (@filter [ $($path:tt)* ] #ident : $value:tt) => {{
+                #dollar_crate::#module_name::#where_field_filter_macro_ident!(#ident : $value)
+            }};
+        }
+    });
+
+    let scalar_where_variable_entry_arms = scalar_fields.iter().map(|field| {
+        let ident = &field.name;
+
+        quote! {
+            (@entries [ $($path:tt)* ] #ident : null) => {
+                ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
+            };
+            (@entries [ $($path:tt)* ] #ident : { eq : $value:expr $(,)? }) => {
+                ::std::vec![{
+                    #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, eq, $value);
+                    (
+                        ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::eq")),
+                        ::vitrail_pg::QueryScalar::into_query_variable_value($value),
+                    )
+                }]
+            };
+            (@entries [ $($path:tt)* ] #ident : { in : $value:expr $(,)? }) => {
+                ::std::vec![{
+                    #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, in, $value);
+                    (
+                        ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::in")),
+                        ::vitrail_pg::QueryScalar::into_query_variable_value($value),
+                    )
+                }]
+            };
+            (@entries [ $($path:tt)* ] #ident : { not : null $(,)? }) => {
+                ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
+            };
+            (@entries [ $($path:tt)* ] #ident : { not : $value:expr $(,)? }) => {
+                ::std::vec![{
+                    #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, not, $value);
+                    (
+                        ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::not")),
+                        ::vitrail_pg::QueryScalar::into_query_variable_value($value),
+                    )
+                }]
+            };
+            (@entries [ $($path:tt)* ] #ident : $value:tt) => {{
+                #dollar_crate::#module_name::#where_field_filter_macro_ident!(#ident : $value);
+                ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
+            }};
+        }
+    });
 
     Ok(quote! {
         #[doc(hidden)]
@@ -514,6 +658,151 @@ pub(super) fn generate_filter_helper_items(
                 } else {
                     Some(::vitrail_pg::QueryFilter::And(__vitrail_filters))
                 }
+            }};
+        }
+
+        #[doc(hidden)]
+        #[macro_export]
+        macro_rules! #where_field_variable_filter_macro_ident {
+            #(#scalar_where_field_variable_filter_arms)*
+            #(#relation_where_field_arms)*
+            (@filter [ $($path:tt)* ] $other:ident : $value:tt) => {{
+                #dollar_crate::#module_name::#where_field_filter_macro_ident!($other : $value)
+            }};
+            ($other:tt $($rest:tt)*) => {{
+                compile_error!(concat!(
+                    "unsupported ",
+                    #operation_display,
+                    " helper variable filter shape for model `",
+                    #model_name,
+                    "`"
+                ))
+            }};
+        }
+
+        #[doc(hidden)]
+        #[macro_export]
+        macro_rules! #where_variable_filter_macro_ident {
+            (@filter_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt, $($rest:tt)+ }) => {{
+                let mut __vitrail_filters = ::std::vec![
+                    #dollar_crate::#module_name::#where_field_variable_filter_macro_ident!(
+                        @filter
+                        [ $($path)* ]
+                        $where_field : $where_value
+                    )
+                ];
+
+                if let Some(__vitrail_rest_filter) = #dollar_crate::#module_name::#where_variable_filter_macro_ident!(
+                    @filter_block
+                    [ $($path)* ]
+                    { $($rest)+ }
+                ) {
+                    match __vitrail_rest_filter {
+                        ::vitrail_pg::QueryFilter::And(mut __vitrail_rest_filters) => {
+                            __vitrail_filters.append(&mut __vitrail_rest_filters);
+                        }
+                        __vitrail_filter => __vitrail_filters.push(__vitrail_filter),
+                    }
+                }
+
+                Some(if __vitrail_filters.len() == 1 {
+                    __vitrail_filters
+                        .into_iter()
+                        .next()
+                        .expect("single filter should exist")
+                } else {
+                    ::vitrail_pg::QueryFilter::And(__vitrail_filters)
+                })
+            }};
+            (@filter_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt $(,)? }) => {{
+                Some(
+                    #dollar_crate::#module_name::#where_field_variable_filter_macro_ident!(
+                        @filter
+                        [ $($path)* ]
+                        $where_field : $where_value
+                    )
+                )
+            }};
+            ({}) => {{
+                compile_error!(concat!(
+                    "empty `where` blocks are not supported in ",
+                    #operation_display,
+                    " helper for model `",
+                    #model_name,
+                    "`"
+                ))
+            }};
+            ({ $($where_tokens:tt)+ }) => {
+                #dollar_crate::#module_name::#where_variable_filter_macro_ident!(
+                    @filter_block
+                    [ ]
+                    { $($where_tokens)+ }
+                )
+            };
+        }
+
+        #[doc(hidden)]
+        #[macro_export]
+        macro_rules! #where_variable_entries_macro_ident {
+            (@entries_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt, $($rest:tt)+ }) => {{
+                let mut __vitrail_entries = #dollar_crate::#module_name::#where_variable_entries_macro_ident!(
+                    @entries
+                    [ $($path)* ]
+                    $where_field : $where_value
+                );
+                __vitrail_entries.extend(
+                    #dollar_crate::#module_name::#where_variable_entries_macro_ident!(
+                        @entries_block
+                        [ $($path)* ]
+                        { $($rest)+ }
+                    )
+                );
+                __vitrail_entries
+            }};
+            (@entries_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt $(,)? }) => {
+                #dollar_crate::#module_name::#where_variable_entries_macro_ident!(
+                    @entries
+                    [ $($path)* ]
+                    $where_field : $where_value
+                )
+            };
+            #(#scalar_where_variable_entry_arms)*
+            #(#relation_where_field_arms)*
+            (@entries [ $($path:tt)* ] $other:ident : $value:tt) => {{
+                #dollar_crate::#module_name::#where_field_filter_macro_ident!($other : $value);
+                ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
+            }};
+            ($other:tt $($rest:tt)*) => {{
+                compile_error!(concat!(
+                    "unsupported ",
+                    #operation_display,
+                    " helper variable binding shape for model `",
+                    #model_name,
+                    "`"
+                ))
+            }};
+        }
+
+        #[doc(hidden)]
+        #[macro_export]
+        macro_rules! #where_variables_macro_ident {
+            ({}) => {{
+                compile_error!(concat!(
+                    "empty `where` blocks are not supported in ",
+                    #operation_display,
+                    " helper for model `",
+                    #model_name,
+                    "`"
+                ))
+            }};
+            ({ $($where_field:ident : $where_value:tt),+ $(,)? }) => {{
+                ::vitrail_pg::QueryVariables::from_values(
+                    #dollar_crate::#module_name::#where_variable_entries_macro_ident!(
+                        @entries_block
+                        [ ]
+                        { $($where_field : $where_value),+ }
+                    )
+                )
             }};
         }
     })

@@ -128,12 +128,37 @@ fn main() {
         }
     };
 
+    let _ = update! {
+        crate::in_filter_schema,
+        post {
+            data: {
+                published: true,
+            },
+            where: {
+                id: {
+                    in: [1_i64, 2_i64, 3_i64]
+                },
+            },
+        }
+    };
+
     let _ = delete! {
         crate::in_filter_schema,
         comment {
             where: {
                 id: {
                     in: vec![4_i64, 5_i64, 6_i64]
+                },
+            },
+        }
+    };
+
+    let _ = delete! {
+        crate::in_filter_schema,
+        comment {
+            where: {
+                id: {
+                    in: [4_i64, 5_i64, 6_i64]
                 },
             },
         }

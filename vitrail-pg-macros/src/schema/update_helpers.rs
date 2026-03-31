@@ -42,6 +42,16 @@ impl ParsedSchema {
                 module_name,
                 model.name
             );
+            let where_variable_filter_macro_ident = format_ident!(
+                "__vitrail_update_where_variable_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_variables_macro_ident = format_ident!(
+                "__vitrail_update_where_variables_{}_{}",
+                module_name,
+                model.name
+            );
             let data_struct_macro_ident = format_ident!(
                 "__vitrail_update_data_struct_{}_{}",
                 module_name,
@@ -363,23 +373,30 @@ impl ParsedSchema {
                     impl ::vitrail_pg::UpdateManyModel for #root_update_ident {
                         type Schema = #dollar_crate::#module_name::Schema;
                         type Values = #root_data_ident;
-                        type Variables = ();
+                        type Variables = ::vitrail_pg::QueryVariables;
 
                         fn model_name() -> &'static str {
                             #model_name
                         }
 
-                        fn filter() -> Option<::vitrail_pg::QueryFilter> {
-                            #dollar_crate::#module_name::#where_filter_macro_ident!({
+                        fn filter_with_variables(
+                            _: &::vitrail_pg::QueryVariables,
+                        ) -> Option<::vitrail_pg::QueryFilter> {
+                            #dollar_crate::#module_name::#where_variable_filter_macro_ident!({
                                 $($where_field : $where_value),*
                             })
                         }
                     }
 
-                    #dollar_crate::#module_name::update_many::<#root_update_ident>(#dollar_crate::#module_name::#data_value_macro_ident! {
-                        #root_data_ident;
-                        { $($data_field : $data_value),* }
-                    })
+                    #dollar_crate::#module_name::update_many_with_variables::<#root_update_ident>(
+                        #dollar_crate::#module_name::#where_variables_macro_ident!({
+                            $($where_field : $where_value),*
+                        }),
+                        #dollar_crate::#module_name::#data_value_macro_ident! {
+                            #root_data_ident;
+                            { $($data_field : $data_value),* }
+                        }
+                    )
                 }};
 
                 (

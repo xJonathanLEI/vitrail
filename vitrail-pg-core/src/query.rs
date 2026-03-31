@@ -395,6 +395,19 @@ where
     }
 }
 
+impl<T, const N: usize> QueryScalar for [T; N]
+where
+    T: QueryListScalar,
+{
+    fn into_query_variable_value(self) -> QueryVariableValue {
+        QueryVariableValue::List(
+            self.into_iter()
+                .map(QueryListScalar::into_list_query_variable_value)
+                .collect(),
+        )
+    }
+}
+
 impl<T> QueryScalar for Option<T>
 where
     T: QueryScalar,

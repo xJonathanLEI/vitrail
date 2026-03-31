@@ -31,6 +31,16 @@ impl ParsedSchema {
                 module_name,
                 model.name
             );
+            let where_variable_filter_macro_ident = format_ident!(
+                "__vitrail_delete_where_variable_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_variables_macro_ident = format_ident!(
+                "__vitrail_delete_where_variables_{}_{}",
+                module_name,
+                model.name
+            );
             let trait_module_ident =
                 format_ident!("__vitrail_delete_traits_{}_{}", module_name, model.name);
             let root_delete_ident =
@@ -71,20 +81,26 @@ impl ParsedSchema {
 
                     impl ::vitrail_pg::DeleteManyModel for #root_delete_ident {
                         type Schema = #dollar_crate::#module_name::Schema;
-                        type Variables = ();
+                        type Variables = ::vitrail_pg::QueryVariables;
 
                         fn model_name() -> &'static str {
                             #model_name
                         }
 
-                        fn filter() -> Option<::vitrail_pg::QueryFilter> {
-                            #dollar_crate::#module_name::#where_filter_macro_ident!({
+                        fn filter_with_variables(
+                            _: &::vitrail_pg::QueryVariables,
+                        ) -> Option<::vitrail_pg::QueryFilter> {
+                            #dollar_crate::#module_name::#where_variable_filter_macro_ident!({
                                 $($where_field : $where_value),*
                             })
                         }
                     }
 
-                    #dollar_crate::#module_name::delete_many::<#root_delete_ident>()
+                    #dollar_crate::#module_name::delete_many_with_variables::<#root_delete_ident>(
+                        #dollar_crate::#module_name::#where_variables_macro_ident!({
+                            $($where_field : $where_value),*
+                        })
+                    )
                 }};
 
                 (
