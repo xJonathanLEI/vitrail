@@ -1,0 +1,9 @@
+[package]
+name = "example-app"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[dependencies]
+example-db.workspace = true
+vitrail-pg.workspace = true

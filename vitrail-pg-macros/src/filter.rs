@@ -1,5 +1,5 @@
 use proc_macro2::{Ident, TokenStream as TokenStream2};
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::{Error, Result, Token, parenthesized};
@@ -57,28 +57,31 @@ impl RootFilter {
         filter
     }
 
-    pub(crate) fn validation_tokens(&self, where_path_assert_ident: &Ident) -> TokenStream2 {
+    pub(crate) fn validation_tokens(
+        &self,
+        where_path_assert_macro: &impl ToTokens,
+    ) -> TokenStream2 {
         let segments = &self.path;
         quote! {
-            #where_path_assert_ident!(#(#segments).*);
+            #where_path_assert_macro!(#(#segments).*);
         }
     }
 
     pub(crate) fn type_validation_tokens(
         &self,
-        where_filter_value_assert_ident: &Ident,
+        where_filter_value_assert_macro: &impl ToTokens,
     ) -> Option<TokenStream2> {
         let segments = &self.path;
 
         match &self.filter {
             ScalarFilter::Eq { variable } => Some(quote! {
-                #where_filter_value_assert_ident!(#(#segments).*, eq, &__vitrail_variables.#variable);
+                #where_filter_value_assert_macro!(#(#segments).*, eq, &__vitrail_variables.#variable);
             }),
             ScalarFilter::In { variable } => Some(quote! {
-                #where_filter_value_assert_ident!(#(#segments).*, in, &__vitrail_variables.#variable);
+                #where_filter_value_assert_macro!(#(#segments).*, in, &__vitrail_variables.#variable);
             }),
             ScalarFilter::Ne { variable } => Some(quote! {
-                #where_filter_value_assert_ident!(#(#segments).*, not, &__vitrail_variables.#variable);
+                #where_filter_value_assert_macro!(#(#segments).*, not, &__vitrail_variables.#variable);
             }),
             ScalarFilter::IsNull | ScalarFilter::IsNotNull => None,
         }

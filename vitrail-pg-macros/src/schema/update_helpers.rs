@@ -4,13 +4,12 @@ use syn::{LitStr, Result};
 
 use super::{
     ParsedSchema, dollar_crate, filter_helpers::generate_filter_helper_items,
-    rust_field_type_tokens, to_pascal_case,
+    rust_field_type_tokens, schema_owned_rust_field_type_tokens, to_pascal_case,
 };
 
 impl ParsedSchema {
     pub(super) fn generate_update_helper_items(&self, module_name: &Ident) -> Result<TokenStream2> {
         let main_macro_ident = format_ident!("__vitrail_update_{}", module_name);
-        let local_main_macro_ident = format_ident!("__vitrail_update_local_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
         let dollar_crate = dollar_crate();
@@ -156,7 +155,7 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = rust_field_type_tokens(field)?;
+                    let ty = schema_owned_rust_field_type_tokens(module_name, model, field)?;
 
                     Ok(quote! {
                         (
@@ -165,7 +164,7 @@ impl ParsedSchema {
                             [ $($fields:tt)* ]
                             [ #ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                         ) => {
-                            #data_struct_macro_ident! {
+                            #dollar_crate::#module_name::#data_struct_macro_ident! {
                                 @struct
                                 $data_ident
                                 [ $($fields)* pub #ident: #ty, ]
@@ -189,7 +188,7 @@ impl ParsedSchema {
                             [ $($initializers:tt)* ]
                             [ #ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                         ) => {
-                            #data_value_macro_ident! {
+                            #dollar_crate::#module_name::#data_value_macro_ident! {
                                 @value
                                 $data_ident
                                 [
@@ -252,8 +251,8 @@ impl ParsedSchema {
                         [ $($fields:tt)* ]
                         [ $other:ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                     ) => {
-                        #data_assert_ident!($other);
-                        #data_struct_macro_ident! {
+                        #dollar_crate::#module_name::#data_assert_ident!($other);
+                        #dollar_crate::#module_name::#data_struct_macro_ident! {
                             @struct
                             $data_ident
                             [ $($fields)* ]
@@ -264,7 +263,7 @@ impl ParsedSchema {
                         $data_ident:ident;
                         { $($data_field:ident : $data_value:expr),* $(,)? }
                     ) => {
-                        #data_struct_macro_ident! {
+                        #dollar_crate::#module_name::#data_struct_macro_ident! {
                             @struct
                             $data_ident
                             [ ]
@@ -297,7 +296,7 @@ impl ParsedSchema {
                         [ $($initializers:tt)* ]
                         [ $other:ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                     ) => {
-                        #data_value_macro_ident! {
+                        #dollar_crate::#module_name::#data_value_macro_ident! {
                             @value
                             $data_ident
                             [ $($bindings)* ]
@@ -321,7 +320,7 @@ impl ParsedSchema {
                         $data_ident:ident;
                         { $($data_field:ident : $data_value:expr),* $(,)? }
                     ) => {{
-                        #data_value_macro_ident! {
+                        #dollar_crate::#module_name::#data_value_macro_ident! {
                             @value
                             $data_ident
                             [ ]
@@ -353,7 +352,7 @@ impl ParsedSchema {
                         $(,)?
                     }
                 ) => {{
-                    #data_struct_macro_ident! {
+                    #dollar_crate::#module_name::#data_struct_macro_ident! {
                         #root_data_ident;
                         { $($data_field : $data_value),* }
                     }
@@ -371,13 +370,13 @@ impl ParsedSchema {
                         }
 
                         fn filter() -> Option<::vitrail_pg::QueryFilter> {
-                            #where_filter_macro_ident!({
+                            #dollar_crate::#module_name::#where_filter_macro_ident!({
                                 $($where_field : $where_value),*
                             })
                         }
                     }
 
-                    #dollar_crate::#module_name::update_many::<#root_update_ident>(#data_value_macro_ident! {
+                    #dollar_crate::#module_name::update_many::<#root_update_ident>(#dollar_crate::#module_name::#data_value_macro_ident! {
                         #root_data_ident;
                         { $($data_field : $data_value),* }
                     })
@@ -391,7 +390,7 @@ impl ParsedSchema {
                         $(,)?
                     }
                 ) => {{
-                    #data_struct_macro_ident! {
+                    #dollar_crate::#module_name::#data_struct_macro_ident! {
                         #root_data_ident;
                         { $($data_field : $data_value),* }
                     }
@@ -409,7 +408,7 @@ impl ParsedSchema {
                         }
                     }
 
-                    #dollar_crate::#module_name::update_many::<#root_update_ident>(#data_value_macro_ident! {
+                    #dollar_crate::#module_name::update_many::<#root_update_ident>(#dollar_crate::#module_name::#data_value_macro_ident! {
                         #root_data_ident;
                         { $($data_field : $data_value),* }
                     })
@@ -419,15 +418,7 @@ impl ParsedSchema {
 
         helpers.extend(quote! {
             #[doc(hidden)]
-            macro_rules! #local_main_macro_ident {
-                #(#main_arms)*
-                ($($tokens:tt)*) => {
-                    compile_error!("unsupported update shape");
-                };
-            }
-
-            #[doc(hidden)]
-            #[macro_export(local_inner_macros)]
+            #[macro_export]
             macro_rules! #main_macro_ident {
                 #(#main_arms)*
                 ($($tokens:tt)*) => {

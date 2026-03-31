@@ -18,4 +18,4 @@ error: unsupported `where` operator `gt` for scalar field `published` in update 
 37 | |     };
    | |_____- in this macro invocation
    |
-   = note: this error originates in the macro `__vitrail_update_where_field_filter_update_helper_schema_post` which comes from the expansion of the macro `update` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `$crate::update_helper_schema::__vitrail_update_where_field_filter_update_helper_schema_post` which comes from the expansion of the macro `update` (in Nightly builds, run with -Z macro-backtrace for more info)

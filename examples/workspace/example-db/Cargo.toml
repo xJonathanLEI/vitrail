@@ -1,0 +1,9 @@
+[package]
+name = "example-db"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[dependencies]
+chrono.workspace = true
+vitrail-pg.workspace = true

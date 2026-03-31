@@ -2,7 +2,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{Error, Result};
 
-use super::{ParsedField, ParsedModel, ParsedSchema};
+use super::{ParsedField, ParsedModel, ParsedSchema, rust_type_alias_items};
 
 impl ParsedSchema {
     pub(super) fn generate_named_schema(&self) -> Result<TokenStream2> {
@@ -12,10 +12,277 @@ impl ParsedSchema {
         let insert_helper_items = self.generate_insert_helper_items(module_name)?;
         let delete_helper_items = self.generate_delete_helper_items(module_name)?;
         let update_helper_items = self.generate_update_helper_items(module_name)?;
-        let local_query_macro_ident = format_ident!("__vitrail_query_local_{}", module_name);
-        let local_insert_macro_ident = format_ident!("__vitrail_insert_local_{}", module_name);
-        let local_delete_macro_ident = format_ident!("__vitrail_delete_local_{}", module_name);
-        let local_update_macro_ident = format_ident!("__vitrail_update_local_{}", module_name);
+        let exported_query_macro_ident = format_ident!("__vitrail_query_{}", module_name);
+        let exported_insert_macro_ident = format_ident!("__vitrail_insert_{}", module_name);
+        let exported_delete_macro_ident = format_ident!("__vitrail_delete_{}", module_name);
+        let exported_update_macro_ident = format_ident!("__vitrail_update_{}", module_name);
+        let rust_type_alias_modules = self
+            .models
+            .iter()
+            .map(|model| rust_type_alias_items(module_name, model));
+        let top_level_macro_reexports = quote! {
+            #[doc(hidden)]
+            #[allow(unused_imports)]
+            pub use #exported_query_macro_ident;
+            #[doc(hidden)]
+            #[allow(unused_imports)]
+            pub use #exported_insert_macro_ident;
+            #[doc(hidden)]
+            #[allow(unused_imports)]
+            pub use #exported_delete_macro_ident;
+            #[doc(hidden)]
+            #[allow(unused_imports)]
+            pub use #exported_update_macro_ident;
+        };
+        let query_macro_reexports = self.models.iter().map(|model| {
+            let select_assert_ident =
+                format_ident!("__vitrail_assert_select_{}_{}", module_name, model.name);
+            let include_assert_ident =
+                format_ident!("__vitrail_assert_include_{}_{}", module_name, model.name);
+            let where_path_assert_ident = format_ident!(
+                "__vitrail_assert_query_where_path_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_filter_value_assert_ident = format_ident!(
+                "__vitrail_assert_query_filter_value_type_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_filter_macro_ident = format_ident!(
+                "__vitrail_query_where_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_field_filter_ident = format_ident!(
+                "__vitrail_query_where_field_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let include_struct_ident =
+                format_ident!("__vitrail_include_struct_{}_{}", module_name, model.name);
+            let include_selection_ident =
+                format_ident!("__vitrail_include_selection_{}_{}", module_name, model.name);
+            let root_struct_macro_ident =
+                format_ident!("__vitrail_root_struct_{}_{}", module_name, model.name);
+            let selection_macro_ident =
+                format_ident!("__vitrail_selection_{}_{}", module_name, model.name);
+
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #select_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #include_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_path_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_filter_value_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_field_filter_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #include_struct_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #include_selection_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #root_struct_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #selection_macro_ident;
+            }
+        });
+        let insert_macro_reexports = self.models.iter().map(|model| {
+            let input_assert_ident = format_ident!(
+                "__vitrail_assert_insert_input_field_{}_{}",
+                module_name,
+                model.name
+            );
+            let input_type_assert_ident = format_ident!(
+                "__vitrail_assert_insert_input_type_{}_{}",
+                module_name,
+                model.name
+            );
+            let input_complete_assert_ident = format_ident!(
+                "__vitrail_assert_insert_input_complete_{}_{}",
+                module_name,
+                model.name
+            );
+            let result_assert_ident = format_ident!(
+                "__vitrail_assert_insert_result_field_{}_{}",
+                module_name,
+                model.name
+            );
+            let result_type_assert_ident = format_ident!(
+                "__vitrail_assert_insert_result_type_{}_{}",
+                module_name,
+                model.name
+            );
+            let input_struct_macro_ident = format_ident!(
+                "__vitrail_insert_input_struct_{}_{}",
+                module_name,
+                model.name
+            );
+            let result_struct_macro_ident = format_ident!(
+                "__vitrail_insert_result_struct_{}_{}",
+                module_name,
+                model.name
+            );
+            let required_input_scanner_idents = model
+                .scalar_fields()
+                .iter()
+                .filter(|field| !field.can_be_omitted_in_insert())
+                .map(|field| {
+                    format_ident!(
+                        "__vitrail_scan_insert_input_field_{}_{}_{}",
+                        module_name,
+                        model.name,
+                        field.name
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #input_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #input_type_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #input_complete_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #result_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #result_type_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #input_struct_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #result_struct_macro_ident;
+                #(
+                    #[doc(hidden)]
+                    #[allow(unused_imports)]
+                    pub use #required_input_scanner_idents;
+                )*
+            }
+        });
+        let delete_macro_reexports = self.models.iter().map(|model| {
+            let where_path_assert_ident = format_ident!(
+                "__vitrail_assert_delete_where_path_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_filter_value_assert_ident = format_ident!(
+                "__vitrail_assert_delete_filter_value_type_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_filter_macro_ident = format_ident!(
+                "__vitrail_delete_where_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_field_filter_macro_ident = format_ident!(
+                "__vitrail_delete_where_field_filter_{}_{}",
+                module_name,
+                model.name
+            );
+
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_path_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_filter_value_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_field_filter_macro_ident;
+            }
+        });
+        let update_macro_reexports = self.models.iter().map(|model| {
+            let data_assert_ident = format_ident!(
+                "__vitrail_assert_update_data_field_{}_{}",
+                module_name,
+                model.name
+            );
+            let data_type_assert_ident = format_ident!(
+                "__vitrail_assert_update_data_type_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_path_assert_ident = format_ident!(
+                "__vitrail_assert_update_where_path_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_filter_value_assert_ident = format_ident!(
+                "__vitrail_assert_update_filter_value_type_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_filter_macro_ident = format_ident!(
+                "__vitrail_update_where_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let where_field_filter_macro_ident = format_ident!(
+                "__vitrail_update_where_field_filter_{}_{}",
+                module_name,
+                model.name
+            );
+            let data_struct_macro_ident = format_ident!(
+                "__vitrail_update_data_struct_{}_{}",
+                module_name,
+                model.name
+            );
+            let data_value_macro_ident =
+                format_ident!("__vitrail_update_data_value_{}_{}", module_name, model.name);
+
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #data_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #data_type_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_path_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_filter_value_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #where_field_filter_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #data_struct_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #data_value_macro_ident;
+            }
+        });
         let query_trait_reexports = self.models.iter().map(|model| {
             let trait_module_ident =
                 format_ident!("__vitrail_query_traits_{}_{}", module_name, model.name);
@@ -145,15 +412,17 @@ impl ParsedSchema {
                     ::vitrail_pg::UpdateMany::<Schema, T, ()>::new_with_variables(variables, values)
                 }
 
+                #(#rust_type_alias_modules)*
+                #top_level_macro_reexports
+                #(#query_macro_reexports)*
+                #(#insert_macro_reexports)*
+                #(#delete_macro_reexports)*
+                #(#update_macro_reexports)*
                 #(#query_trait_reexports)*
                 #(#insert_trait_reexports)*
                 #(#delete_trait_reexports)*
                 #(#update_trait_reexports)*
 
-                pub(crate) use #local_query_macro_ident as __query;
-                pub(crate) use #local_insert_macro_ident as __insert;
-                pub(crate) use #local_delete_macro_ident as __delete;
-                pub(crate) use #local_update_macro_ident as __update;
             }
         })
     }

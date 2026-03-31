@@ -434,6 +434,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-app"
+version = "0.0.2"
+dependencies = [
+ "example-db",
+ "vitrail-pg",
+]
+
+[[package]]
+name = "example-db"
+version = "0.0.2"
+dependencies = [
+ "chrono",
+ "vitrail-pg",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

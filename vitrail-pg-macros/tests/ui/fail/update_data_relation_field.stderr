@@ -12,4 +12,4 @@ error: relation field `author` cannot be used in update data for model `post`
 22 |   #[derive(UpdateData)]
    |            ---------- in this derive macro expansion
    |
-   = note: this error originates in the macro `__vitrail_assert_update_data_type_update_schema_post` which comes from the expansion of the derive macro `UpdateData` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `crate::update_schema::__vitrail_assert_update_data_type_update_schema_post` which comes from the expansion of the derive macro `UpdateData` (in Nightly builds, run with -Z macro-backtrace for more info)

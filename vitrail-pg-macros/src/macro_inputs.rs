@@ -49,24 +49,14 @@ fn expand_helper_macro(schema_path: Path, body: TokenStream2, macro_prefix: &str
             .first()
             .is_some_and(|segment| segment.ident == "self")
     {
-        let schema_macro_ident = format_ident!("__{}", macro_prefix);
-
         quote! {
-            #schema_path::#schema_macro_ident! {
+            #macro_ident! {
                 #body
             }
         }
     } else {
-        let root_path = Path {
-            leading_colon: schema_path.leading_colon,
-            segments: segments[..segments.len() - 1]
-                .iter()
-                .map(|segment| (*segment).clone())
-                .collect(),
-        };
-
         quote! {
-            #root_path::#macro_ident! {
+            #schema_path::#macro_ident! {
                 #body
             }
         }

@@ -90,9 +90,12 @@ impl DeleteManyDerive {
             ));
         }
 
+        let where_path_assert_macro = quote! {
+            #schema_module_path::#where_path_assert_ident
+        };
         let root_filter_validation_tokens = root_filters
             .iter()
-            .map(|filter| filter.validation_tokens(&where_path_assert_ident))
+            .map(|filter| filter.validation_tokens(&where_path_assert_macro))
             .collect::<Vec<_>>();
 
         let typed_validation_fn = if let Some(variables_ty) = &variables_ty {

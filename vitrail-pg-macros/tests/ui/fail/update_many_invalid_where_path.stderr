@@ -12,4 +12,4 @@ error: scalar field `email` cannot be traversed in update `where(...)` for model
 34 |   #[derive(UpdateMany)]
    |            ---------- in this derive macro expansion
    |
-   = note: this error originates in the macro `__vitrail_assert_update_where_path_update_schema_user` which comes from the expansion of the derive macro `UpdateMany` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `$crate::update_schema::__vitrail_assert_update_where_path_update_schema_user` which comes from the expansion of the derive macro `UpdateMany` (in Nightly builds, run with -Z macro-backtrace for more info)

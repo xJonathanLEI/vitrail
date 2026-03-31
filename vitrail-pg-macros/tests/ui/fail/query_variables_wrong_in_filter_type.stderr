@@ -39,4 +39,4 @@ note: required by a bound in `__vitrail_assert_filter_value_type`
 ...
 28 |   #[derive(QueryResult)]
    |            ----------- in this derive macro expansion
-   = note: this error originates in the macro `__vitrail_assert_query_filter_value_type_query_variables_wrong_in_filter_type_schema_post` which comes from the expansion of the derive macro `QueryResult` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `crate::query_variables_wrong_in_filter_type_schema::__vitrail_assert_query_filter_value_type_query_variables_wrong_in_filter_type_schema_post` which comes from the expansion of the derive macro `QueryResult` (in Nightly builds, run with -Z macro-backtrace for more info)

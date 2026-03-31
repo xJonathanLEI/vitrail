@@ -15,7 +15,7 @@ help: the trait `vitrail_pg_core::QueryModel` is not implemented for `UserByExcl
    |
 20 | struct UserByExcludedEmail {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `query`
+note: required by a bound in `query_schema::query`
   --> tests/ui/fail/query_not_without_variables.rs:5:1
    |
  5 | / schema! {

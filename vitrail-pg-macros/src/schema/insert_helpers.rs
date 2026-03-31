@@ -2,12 +2,14 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedSchema, dollar_crate, rust_field_type_tokens, to_pascal_case};
+use super::{
+    ParsedSchema, dollar_crate, rust_field_type_tokens, schema_owned_rust_field_type_tokens,
+    to_pascal_case,
+};
 
 impl ParsedSchema {
     pub(super) fn generate_insert_helper_items(&self, module_name: &Ident) -> Result<TokenStream2> {
         let main_macro_ident = format_ident!("__vitrail_insert_{}", module_name);
-        let local_main_macro_ident = format_ident!("__vitrail_insert_local_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
         let dollar_crate = dollar_crate();
@@ -203,7 +205,7 @@ impl ParsedSchema {
                         macro_rules! #scanner_ident {
                             (#ident $(, $rest:ident)*) => {};
                             ($other:ident $(, $rest:ident)*) => {
-                                #scanner_ident!($($rest),*);
+                                #dollar_crate::#module_name::#scanner_ident!($($rest),*);
                             };
                             () => {
                                 compile_error!(concat!(
@@ -271,7 +273,7 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = rust_field_type_tokens(field)?;
+                    let ty = schema_owned_rust_field_type_tokens(module_name, model, field)?;
 
                     Ok(quote! {
                         (
@@ -280,7 +282,7 @@ impl ParsedSchema {
                             [ $($fields:tt)* ]
                             [ #ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                         ) => {
-                            #input_struct_macro_ident! {
+                            #dollar_crate::#module_name::#input_struct_macro_ident! {
                                 @struct
                                 $input_ident
                                 [ $($fields)* pub #ident: #ty, ]
@@ -295,7 +297,7 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = rust_field_type_tokens(field)?;
+                    let ty = schema_owned_rust_field_type_tokens(module_name, model, field)?;
 
                     Ok(quote! {
                         (
@@ -305,7 +307,7 @@ impl ParsedSchema {
                             [ #ident, $($rest_field:ident,)* ]
                             [ $input_ident:ident ]
                         ) => {
-                            #result_struct_macro_ident! {
+                            #dollar_crate::#module_name::#result_struct_macro_ident! {
                                 @struct
                                 $result_ident
                                 [ $($fields)* pub #ident: #ty, ]
@@ -388,7 +390,7 @@ impl ParsedSchema {
                 #[macro_export]
                 macro_rules! #input_complete_assert_ident {
                     ( $($provided:ident),* $(,)? ) => {
-                        #( #required_input_scanner_idents!($($provided),*); )*
+                        #( #dollar_crate::#module_name::#required_input_scanner_idents!($($provided),*); )*
                     };
                 }
 
@@ -410,10 +412,10 @@ impl ParsedSchema {
                         $input_ident:ident;
                         { $($data_field:ident : $data_value:expr),* $(,)? }
                     ) => {
-                        $( #input_assert_ident!($data_field); )*
-                        #input_complete_assert_ident!($($data_field),*);
+                        $( #dollar_crate::#module_name::#input_assert_ident!($data_field); )*
+                        #dollar_crate::#module_name::#input_complete_assert_ident!($($data_field),*);
 
-                        #input_struct_macro_ident! {
+                        #dollar_crate::#module_name::#input_struct_macro_ident! {
                             @struct
                             $input_ident
                             [ ]
@@ -444,9 +446,9 @@ impl ParsedSchema {
                         $input_ident:ident;
                         { $($select_field:ident : true),* $(,)? }
                     ) => {
-                        $( #result_assert_ident!($select_field); )*
+                        $( #dollar_crate::#module_name::#result_assert_ident!($select_field); )*
 
-                        #result_struct_macro_ident! {
+                        #dollar_crate::#module_name::#result_struct_macro_ident! {
                             @struct
                             $result_ident
                             [ ]
@@ -487,12 +489,12 @@ impl ParsedSchema {
                         $(,)?
                     }
                 ) => {{
-                    #input_struct_macro_ident! {
+                    #dollar_crate::#module_name::#input_struct_macro_ident! {
                         #root_input_ident;
                         { $($data_field : $data_value),* }
                     }
 
-                    #result_struct_macro_ident! {
+                    #dollar_crate::#module_name::#result_struct_macro_ident! {
                         #root_result_ident;
                         #root_input_ident;
                         { $($select_field : true),* }
@@ -511,12 +513,12 @@ impl ParsedSchema {
                         $(,)?
                     }
                 ) => {{
-                    #input_struct_macro_ident! {
+                    #dollar_crate::#module_name::#input_struct_macro_ident! {
                         #root_input_ident;
                         { $($data_field : $data_value),* }
                     }
 
-                    #result_struct_macro_ident! {
+                    #dollar_crate::#module_name::#result_struct_macro_ident! {
                         #root_result_ident;
                         #root_input_ident;
                         { #( #all_scalar_field_idents : true ),* }
@@ -531,15 +533,7 @@ impl ParsedSchema {
 
         helpers.extend(quote! {
             #[doc(hidden)]
-            macro_rules! #local_main_macro_ident {
-                #(#main_arms)*
-                ($($tokens:tt)*) => {
-                    compile_error!("unsupported insert shape");
-                };
-            }
-
-            #[doc(hidden)]
-            #[macro_export(local_inner_macros)]
+            #[macro_export]
             macro_rules! #main_macro_ident {
                 #(#main_arms)*
                 ($($tokens:tt)*) => {

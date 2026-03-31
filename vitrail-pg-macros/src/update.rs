@@ -70,6 +70,9 @@ impl UpdateDataDerive {
             schema_module_ident,
             model_ident
         );
+        let field_type_assert_macro = quote! {
+            #schema_module_path::#field_type_assert_ident
+        };
         let model_trait_module_ident = format_ident!(
             "__vitrail_update_traits_{}_{}",
             schema_module_ident,
@@ -93,7 +96,7 @@ impl UpdateDataDerive {
                 let field_ty = &field.ty;
 
                 Ok(quote! {
-                    #field_type_assert_ident!(#field_ty, #field_ident);
+                    #field_type_assert_macro!(#field_ty, #field_ident);
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -227,9 +230,12 @@ impl UpdateManyDerive {
             ));
         }
 
+        let where_path_assert_macro = quote! {
+            #schema_module_path::#where_path_assert_ident
+        };
         let root_filter_validation_tokens = root_filters
             .iter()
-            .map(|filter| filter.validation_tokens(&where_path_assert_ident))
+            .map(|filter| filter.validation_tokens(&where_path_assert_macro))
             .collect::<Vec<_>>();
 
         let typed_validation_fn = if let Some(variables_ty) = &variables_ty {

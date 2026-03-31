@@ -1,5 +1,5 @@
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream as TokenStream2, TokenTree};
-use quote::{ToTokens, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -1288,6 +1288,74 @@ fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
     } else {
         base
     })
+}
+
+fn rust_type_alias_module_ident(module_name: &Ident, model_name: &Ident) -> Ident {
+    format_ident!("__vitrail_rust_types_{}_{}", module_name, model_name,)
+}
+
+fn rust_type_alias_ident(module_name: &Ident, model_name: &Ident, field_name: &Ident) -> Ident {
+    format_ident!(
+        "__VitrailRustType_{}_{}_{}",
+        module_name,
+        model_name,
+        field_name,
+    )
+}
+
+fn rust_type_alias_items(module_name: &Ident, model: &ParsedModel) -> TokenStream2 {
+    let module_ident = rust_type_alias_module_ident(module_name, &model.name);
+    let aliases = model
+        .scalar_fields()
+        .iter()
+        .filter_map(|field| {
+            let rust_ty = field.rust_type()?;
+            let alias_ident = rust_type_alias_ident(module_name, &model.name, &field.name);
+
+            Some(quote! {
+                #[allow(non_camel_case_types)]
+                #[doc(hidden)]
+                pub type #alias_ident = #rust_ty;
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if aliases.is_empty() {
+        TokenStream2::new()
+    } else {
+        quote! {
+            #[doc(hidden)]
+            pub mod #module_ident {
+                #(#aliases)*
+            }
+        }
+    }
+}
+
+fn schema_owned_rust_field_type_tokens(
+    module_name: &Ident,
+    model: &ParsedModel,
+    field: &ParsedField,
+) -> Result<TokenStream2> {
+    let dollar_crate = dollar_crate();
+    let base = if field.rust_type().is_some() {
+        let alias_module_ident = rust_type_alias_module_ident(module_name, &model.name);
+        let alias_ident = rust_type_alias_ident(module_name, &model.name, &field.name);
+
+        quote! { #dollar_crate::#module_name::#alias_module_ident::#alias_ident }
+    } else if field.has_db_uuid() {
+        quote! { ::vitrail_pg::uuid::Uuid }
+    } else {
+        rust_type_tokens(&field.ty)?
+    };
+
+    Ok(
+        if field.ty.optional && (field.rust_type().is_some() || field.has_db_uuid()) {
+            quote! { Option<#base> }
+        } else {
+            base
+        },
+    )
 }
 
 fn rust_field_type_tokens(field: &ParsedField) -> Result<TokenStream2> {

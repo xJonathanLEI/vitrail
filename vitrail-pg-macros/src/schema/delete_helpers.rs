@@ -9,7 +9,6 @@ use super::{
 impl ParsedSchema {
     pub(super) fn generate_delete_helper_items(&self, module_name: &Ident) -> Result<TokenStream2> {
         let main_macro_ident = format_ident!("__vitrail_delete_{}", module_name);
-        let local_main_macro_ident = format_ident!("__vitrail_delete_local_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
         let dollar_crate = dollar_crate();
@@ -79,7 +78,7 @@ impl ParsedSchema {
                         }
 
                         fn filter() -> Option<::vitrail_pg::QueryFilter> {
-                            #where_filter_macro_ident!({
+                            #dollar_crate::#module_name::#where_filter_macro_ident!({
                                 $($where_field : $where_value),*
                             })
                         }
@@ -110,15 +109,7 @@ impl ParsedSchema {
 
         helpers.extend(quote! {
             #[doc(hidden)]
-            macro_rules! #local_main_macro_ident {
-                #(#main_arms)*
-                ($($tokens:tt)*) => {
-                    compile_error!("unsupported delete shape");
-                };
-            }
-
-            #[doc(hidden)]
-            #[macro_export(local_inner_macros)]
+            #[macro_export]
             macro_rules! #main_macro_ident {
                 #(#main_arms)*
                 ($($tokens:tt)*) => {

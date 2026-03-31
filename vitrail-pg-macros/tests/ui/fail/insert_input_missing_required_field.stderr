@@ -12,4 +12,4 @@ error: missing required field `email` in insert input for model `user`
 15 |   #[derive(InsertInput)]
    |            ----------- in this derive macro expansion
    |
-   = note: this error originates in the macro `__vitrail_scan_insert_input_field_insert_schema_user_email` which comes from the expansion of the derive macro `InsertInput` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `$crate::insert_schema::__vitrail_scan_insert_input_field_insert_schema_user_email` which comes from the expansion of the derive macro `InsertInput` (in Nightly builds, run with -Z macro-backtrace for more info)

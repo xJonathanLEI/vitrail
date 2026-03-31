@@ -70,6 +70,12 @@ impl InsertInputDerive {
             model_ident
         );
         let schema_module_path = schema_module_path(&schema_path, "InsertInput")?;
+        let input_type_assert_macro = quote! {
+            #schema_module_path::#field_type_assert_ident
+        };
+        let input_complete_assert_macro = quote! {
+            #schema_module_path::#input_complete_assert_ident
+        };
         let model_trait_module_ident = format_ident!(
             "__vitrail_insert_traits_{}_{}",
             schema_module_ident,
@@ -98,7 +104,7 @@ impl InsertInputDerive {
                 let field_ty = &field.ty;
 
                 Ok(quote! {
-                    #field_type_assert_ident!(#field_ty, #field_ident);
+                    #input_type_assert_macro!(#field_ty, #field_ident);
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -121,7 +127,7 @@ impl InsertInputDerive {
                 fn __vitrail_validate_insert_input() {
                     let _ = stringify!(#model_name);
                     #(#validation_tokens)*
-                    #input_complete_assert_ident!(#(#field_idents),*);
+                    #input_complete_assert_macro!(#(#field_idents),*);
                 }
             }
 
@@ -211,6 +217,9 @@ impl InsertResultDerive {
             model_ident
         );
         let schema_module_path = schema_module_path(&schema_path, "InsertResult")?;
+        let result_type_assert_macro = quote! {
+            #schema_module_path::#field_type_assert_ident
+        };
         let model_trait_module_ident = format_ident!(
             "__vitrail_insert_traits_{}_{}",
             schema_module_ident,
@@ -225,7 +234,7 @@ impl InsertResultDerive {
                 let field_ty = &field.ty;
 
                 Ok(quote! {
-                    #field_type_assert_ident!(#field_ty, #field_ident);
+                    #result_type_assert_macro!(#field_ty, #field_ident);
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -280,10 +289,10 @@ impl InsertResultDerive {
                 }
 
                 fn from_row(
-                    row: &::sqlx::postgres::PgRow,
+                    row: &::vitrail_pg::sqlx::postgres::PgRow,
                     prefix: &str,
-                ) -> Result<Self, ::sqlx::Error> {
-                    use ::sqlx::Row as _;
+                ) -> Result<Self, ::vitrail_pg::sqlx::Error> {
+                    use ::vitrail_pg::sqlx::Row as _;
 
                     Self::__vitrail_validate_insert_result();
 

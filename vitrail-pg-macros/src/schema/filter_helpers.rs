@@ -39,7 +39,7 @@ pub(super) fn generate_filter_helper_items(
             (#ident . $($rest:ident).+) => {
                 compile_error!(concat!(
                     "scalar field `",
-                    stringify!(#ident),
+                    ::core::stringify!(#ident),
                     "` cannot be traversed in ",
                     #operation_display,
                     " `where(...)` for model `",
@@ -73,7 +73,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident) => {
                     compile_error!(concat!(
                         "relation field `",
-                        stringify!(#ident),
+                        ::core::stringify!(#ident),
                         "` cannot terminate a ",
                         #operation_display,
                         " `where(...)` path for model `",
@@ -82,7 +82,7 @@ pub(super) fn generate_filter_helper_items(
                     ));
                 };
                 (#ident . $($rest:ident).+) => {
-                    #target_where_path_assert_ident!($($rest).+);
+                    #dollar_crate::#module_name::#target_where_path_assert_ident!($($rest).+);
                 };
             })
         })
@@ -259,7 +259,7 @@ pub(super) fn generate_filter_helper_items(
 
             Ok(quote! {
                 (#ident . $next:ident $(. $rest:ident)*, $operator:ident, $value:expr) => {
-                    #target_where_filter_value_assert_ident!($next $(. $rest)*, $operator, $value)
+                    #dollar_crate::#module_name::#target_where_filter_value_assert_ident!($next $(. $rest)*, $operator, $value)
                 };
             })
         })
@@ -270,38 +270,38 @@ pub(super) fn generate_filter_helper_items(
 
         quote! {
             (#ident : null) => {
-                ::vitrail_pg::QueryFilter::is_null(stringify!(#ident))
+                ::vitrail_pg::QueryFilter::is_null(::core::stringify!(#ident))
             };
             (#ident : { eq : $value:expr $(,)? }) => {{
-                #where_filter_value_assert_ident!(#ident, eq, $value);
+                #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, eq, $value);
                 ::vitrail_pg::QueryFilter::eq(
-                    stringify!(#ident),
+                    ::core::stringify!(#ident),
                     ::vitrail_pg::QueryFilterValue::value($value),
                 )
             }};
             (#ident : { in : $value:expr $(,)? }) => {{
-                #where_filter_value_assert_ident!(#ident, in, $value);
+                #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, in, $value);
                 ::vitrail_pg::QueryFilter::r#in(
-                    stringify!(#ident),
+                    ::core::stringify!(#ident),
                     ::vitrail_pg::QueryFilterValues::from($value),
                 )
             }};
             (#ident : { not : null $(,)? }) => {
-                ::vitrail_pg::QueryFilter::is_not_null(stringify!(#ident))
+                ::vitrail_pg::QueryFilter::is_not_null(::core::stringify!(#ident))
             };
             (#ident : { not : $value:expr $(,)? }) => {{
-                #where_filter_value_assert_ident!(#ident, not, $value);
+                #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, not, $value);
                 ::vitrail_pg::QueryFilter::ne(
-                    stringify!(#ident),
+                    ::core::stringify!(#ident),
                     ::vitrail_pg::QueryFilterValue::value($value),
                 )
             }};
             (#ident : { $operator:ident : $value:tt $(,)? }) => {{
                 compile_error!(concat!(
                     "unsupported `where` operator `",
-                    stringify!($operator),
+                    ::core::stringify!($operator),
                     "` for scalar field `",
-                    stringify!(#ident),
+                    ::core::stringify!(#ident),
                     "` in ",
                     #operation_display,
                     " helper for model `",
@@ -312,7 +312,7 @@ pub(super) fn generate_filter_helper_items(
             (#ident : $value:tt) => {{
                 compile_error!(concat!(
                     "malformed filter for scalar field `",
-                    stringify!(#ident),
+                    ::core::stringify!(#ident),
                     "` in ",
                     #operation_display,
                     " helper for model `",
@@ -346,7 +346,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident : { }) => {{
                     compile_error!(concat!(
                         "relation field `",
-                        stringify!(#ident),
+                        ::core::stringify!(#ident),
                         "` in ",
                         #operation_display,
                         " helper for model `",
@@ -357,7 +357,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident : null) => {{
                     compile_error!(concat!(
                         "relation field `",
-                        stringify!(#ident),
+                        ::core::stringify!(#ident),
                         "` in ",
                         #operation_display,
                         " helper for model `",
@@ -368,7 +368,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident : { eq : $value:expr $(,)? }) => {{
                     compile_error!(concat!(
                         "relation field `",
-                        stringify!(#ident),
+                        ::core::stringify!(#ident),
                         "` in ",
                         #operation_display,
                         " helper for model `",
@@ -379,7 +379,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident : { in : $value:expr $(,)? }) => {{
                     compile_error!(concat!(
                         "relation field `",
-                        stringify!(#ident),
+                        ::core::stringify!(#ident),
                         "` in ",
                         #operation_display,
                         " helper for model `",
@@ -390,7 +390,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident : { not : null $(,)? }) => {{
                     compile_error!(concat!(
                         "relation field `",
-                        stringify!(#ident),
+                        ::core::stringify!(#ident),
                         "` in ",
                         #operation_display,
                         " helper for model `",
@@ -401,7 +401,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident : { not : $value:expr $(,)? }) => {{
                     compile_error!(concat!(
                         "relation field `",
-                        stringify!(#ident),
+                        ::core::stringify!(#ident),
                         "` in ",
                         #operation_display,
                         " helper for model `",
@@ -411,8 +411,8 @@ pub(super) fn generate_filter_helper_items(
                 }};
                 (#ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
                     ::vitrail_pg::QueryFilter::relation(
-                        stringify!(#ident),
-                        #target_where_filter_macro_ident!({
+                        ::core::stringify!(#ident),
+                        #dollar_crate::#module_name::#target_where_filter_macro_ident!({
                             $($nested_field : $nested_value),+
                         })
                         .expect("nested relation filter should contain at least one predicate"),
@@ -421,7 +421,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident : $value:tt) => {{
                     compile_error!(concat!(
                         "malformed filter for relation field `",
-                        stringify!(#ident),
+                        ::core::stringify!(#ident),
                         "` in ",
                         #operation_display,
                         " helper for model `",
@@ -457,7 +457,7 @@ pub(super) fn generate_filter_helper_items(
             ($other:ident $(. $rest:ident)*) => {
                 compile_error!(concat!(
                     "unknown field `",
-                    stringify!($other),
+                    ::core::stringify!($other),
                     "` in ",
                     #operation_display,
                     " `where(...)` path for model `",
@@ -475,7 +475,7 @@ pub(super) fn generate_filter_helper_items(
             ($other:ident : $value:tt) => {{
                 compile_error!(concat!(
                     "unknown field `",
-                    stringify!($other),
+                    ::core::stringify!($other),
                     "` in ",
                     #operation_display,
                     " helper `where` for model `",
@@ -498,9 +498,9 @@ pub(super) fn generate_filter_helper_items(
                 ))
             }};
             ({ $($where_field:ident : $where_value:tt),+ $(,)? }) => {{
-                let __vitrail_filters = vec![
+                let __vitrail_filters = ::std::vec![
                     $(
-                        #where_field_filter_macro_ident!($where_field : $where_value)
+                        #dollar_crate::#module_name::#where_field_filter_macro_ident!($where_field : $where_value)
                     ),+
                 ];
 

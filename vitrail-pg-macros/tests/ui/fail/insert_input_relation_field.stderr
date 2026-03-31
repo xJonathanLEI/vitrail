@@ -12,4 +12,4 @@ error: relation field `posts` cannot be used in insert input for model `user`
 22 |   #[derive(InsertInput)]
    |            ----------- in this derive macro expansion
    |
-   = note: this error originates in the macro `__vitrail_assert_insert_input_type_insert_schema_user` which comes from the expansion of the derive macro `InsertInput` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `crate::insert_schema::__vitrail_assert_insert_input_type_insert_schema_user` which comes from the expansion of the derive macro `InsertInput` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -232,6 +232,7 @@ impl QueryResultDerive {
 
         let root_filter_validation_tokens = {
             let schema_module_ident = schema_module_ident(&schema_path, "QueryResult")?;
+            let schema_module_path = schema_module_path(&schema_path, "QueryResult")?;
             let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
                 Error::new(
                     model_name.span(),
@@ -243,9 +244,12 @@ impl QueryResultDerive {
                 schema_module_ident,
                 model_ident,
             );
+            let where_path_assert_macro = quote! {
+                #schema_module_path::#where_path_assert_ident
+            };
             let validations = root_filters
                 .iter()
-                .map(|filter| filter.validation_tokens(&where_path_assert_ident))
+                .map(|filter| filter.validation_tokens(&where_path_assert_macro))
                 .collect::<Vec<_>>();
 
             quote! {
@@ -293,6 +297,7 @@ impl QueryResultDerive {
 
         let query_filter_type_validation_tokens = {
             let schema_module_ident = schema_module_ident(&schema_path, "QueryResult")?;
+            let schema_module_path = schema_module_path(&schema_path, "QueryResult")?;
             let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
                 Error::new(
                     model_name.span(),
@@ -304,10 +309,13 @@ impl QueryResultDerive {
                 schema_module_ident,
                 model_ident,
             );
+            let query_filter_type_assert_macro = quote! {
+                #schema_module_path::#query_filter_type_assert_ident
+            };
 
             let mut validations = root_filters
                 .iter()
-                .filter_map(|filter| filter.type_validation_tokens(&query_filter_type_assert_ident))
+                .filter_map(|filter| filter.type_validation_tokens(&query_filter_type_assert_macro))
                 .collect::<Vec<_>>();
 
             validations.extend(
@@ -322,13 +330,13 @@ impl QueryResultDerive {
 
                         Some(Ok(match filter {
                             QueryResultFieldFilter::Eq { variable } => quote! {
-                                #query_filter_type_assert_ident!(#field_ident, eq, &__vitrail_variables.#variable);
+                                #query_filter_type_assert_macro!(#field_ident, eq, &__vitrail_variables.#variable);
                             },
                             QueryResultFieldFilter::In { variable } => quote! {
-                                #query_filter_type_assert_ident!(#field_ident, in, &__vitrail_variables.#variable);
+                                #query_filter_type_assert_macro!(#field_ident, in, &__vitrail_variables.#variable);
                             },
                             QueryResultFieldFilter::Ne { variable } => quote! {
-                                #query_filter_type_assert_ident!(#field_ident, not, &__vitrail_variables.#variable);
+                                #query_filter_type_assert_macro!(#field_ident, not, &__vitrail_variables.#variable);
                             },
                             QueryResultFieldFilter::IsNull
                             | QueryResultFieldFilter::IsNotNull => quote! {},
@@ -429,7 +437,9 @@ impl QueryResultDerive {
             impl #impl_generics ::vitrail_pg::QueryValue for #ident #ty_generics
             #where_clause
             {
-                fn from_json(value: &::vitrail_pg::serde_json::Value) -> Result<Self, ::sqlx::Error> {
+                fn from_json(
+                    value: &::vitrail_pg::serde_json::Value,
+                ) -> Result<Self, ::vitrail_pg::sqlx::Error> {
                     Ok(Self {
                         #(#json_decode_fields),*
                     })
@@ -464,10 +474,10 @@ impl QueryResultDerive {
                 }
 
                 fn from_row(
-                    row: &::sqlx::postgres::PgRow,
+                    row: &::vitrail_pg::sqlx::postgres::PgRow,
                     prefix: &str,
-                ) -> Result<Self, ::sqlx::Error> {
-                    use ::sqlx::Row as _;
+                ) -> Result<Self, ::vitrail_pg::sqlx::Error> {
+                    use ::vitrail_pg::sqlx::Row as _;
 
                     Ok(Self {
                         #(#decode_fields),*
