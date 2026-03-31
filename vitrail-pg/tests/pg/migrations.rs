@@ -1,9 +1,41 @@
 use crate::support::{TestDatabase, apply_sql_script};
+use sqlx::Row as _;
+use sqlx::postgres::PgPoolOptions;
 use vitrail_pg::{PostgresSchema, schema};
 
 const EMPTY_TO_BASE_SQL: &str = include_str!("../fixtures/pg_migrations/empty_to_base.sql");
 const BASE_TO_EXPANDED_SQL: &str = include_str!("../fixtures/pg_migrations/base_to_expanded.sql");
 const EMPTY_TO_EXPANDED_SQL: &str = include_str!("../fixtures/pg_migrations/empty_to_expanded.sql");
+const EXTERNAL_ONLY_TO_BASE_SQL: &str =
+    include_str!("../fixtures/pg_migrations/external_only_to_base.sql");
+
+schema! {
+    name base_schema_with_external_table
+
+    tables {
+        external: ["public.external_audit_log"]
+    }
+
+    model user {
+        id          Int      @id @default(autoincrement())
+        external_id String   @unique @db.Uuid
+        email       String   @unique
+        name        String
+        created_at  DateTime @default(now())
+        posts       post[]
+    }
+
+    model post {
+        id         Int      @id @default(autoincrement())
+        public_id  String   @unique @db.Uuid
+        title      String
+        body       String?
+        published  Boolean
+        author_id  Int
+        created_at DateTime @default(now())
+        author     user     @relation(fields: [author_id], references: [id])
+    }
+}
 
 schema! {
     name base_schema
@@ -188,6 +220,72 @@ async fn assert_generated_migration_roundtrips(
         "migration should be empty after applying generated SQL, got:\n{}",
         second_pass.to_sql()
     );
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn generated_migration_ignores_external_tables() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    apply_sql_script(
+        &database_url,
+        r#"
+CREATE TABLE "external_audit_log" (
+    "id" SERIAL PRIMARY KEY,
+    "payload" TEXT NOT NULL
+);
+"#,
+    )
+    .await;
+
+    let current = PostgresSchema::introspect_ignoring_external_tables::<
+        base_schema_with_external_table::Schema,
+    >(&database_url)
+    .await
+    .expect("should introspect current postgres schema while ignoring external tables");
+    let target = PostgresSchema::from_schema_access::<base_schema_with_external_table::Schema>();
+    let migration = target.migrate_from(&current);
+    let migration_sql = migration.to_sql();
+
+    assert_eq!(
+        normalize_sql(&migration_sql),
+        normalize_sql(EXTERNAL_ONLY_TO_BASE_SQL)
+    );
+
+    apply_sql_script(&database_url, &migration_sql).await;
+
+    let updated = PostgresSchema::introspect_ignoring_external_tables::<
+        base_schema_with_external_table::Schema,
+    >(&database_url)
+    .await
+    .expect("should introspect migrated postgres schema while ignoring external tables");
+    let second_pass = target.migrate_from(&updated);
+
+    assert!(
+        second_pass.is_empty(),
+        "migration should be empty after applying generated SQL, got:
+{}",
+        second_pass.to_sql()
+    );
+
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres to verify external table");
+    let row = sqlx::query(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'external_audit_log') AS exists",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should check whether external table still exists");
+    assert!(
+        row.get::<bool, _>("exists"),
+        "external table should still exist after migration"
+    );
+    pool.close().await;
 
     database.cleanup().await;
 }

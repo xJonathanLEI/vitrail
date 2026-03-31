@@ -8,6 +8,7 @@ use crate::validation::{ValidationError, ValidationErrors, ValidationLocation};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Schema {
     models: Vec<Model>,
+    external_tables: Vec<String>,
 }
 
 impl Schema {
@@ -17,6 +18,10 @@ impl Schema {
 
     pub fn models(&self) -> &[Model] {
         &self.models
+    }
+
+    pub fn external_tables(&self) -> &[String] {
+        &self.external_tables
     }
 
     pub fn model(&self, name: &str) -> Option<&Model> {
@@ -65,6 +70,43 @@ impl Schema {
             model.validate_relations(self, &mut errors);
         }
 
+        let mut seen_external_tables = HashSet::new();
+        for table in &self.external_tables {
+            let normalized = match normalize_external_table_name(table) {
+                Ok(normalized) => normalized,
+                Err(message) => {
+                    errors.push(ValidationError::new(
+                        ValidationLocation::ExternalTable {
+                            table: table.clone(),
+                        },
+                        message,
+                    ));
+                    continue;
+                }
+            };
+
+            if !seen_external_tables.insert(normalized.clone()) {
+                errors.push(ValidationError::new(
+                    ValidationLocation::ExternalTable {
+                        table: table.clone(),
+                    },
+                    format!("duplicate external table `{}`", table),
+                ));
+            }
+
+            if self.model(&normalized).is_some() {
+                errors.push(ValidationError::new(
+                    ValidationLocation::ExternalTable {
+                        table: table.clone(),
+                    },
+                    format!(
+                        "external table `{}` conflicts with managed model `{}`",
+                        table, normalized
+                    ),
+                ));
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -92,6 +134,7 @@ impl Schema {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SchemaBuilder {
     models: Vec<Model>,
+    external_tables: Vec<String>,
 }
 
 impl SchemaBuilder {
@@ -109,13 +152,50 @@ impl SchemaBuilder {
         self
     }
 
+    pub fn external_table(mut self, table: impl Into<String>) -> Self {
+        self.external_tables.push(table.into());
+        self
+    }
+
+    pub fn external_tables(mut self, tables: Vec<String>) -> Self {
+        self.external_tables = tables;
+        self
+    }
+
     pub fn build(self) -> Result<Schema, ValidationErrors> {
         let schema = Schema {
             models: self.models,
+            external_tables: self.external_tables,
         };
         schema.validate()?;
         Ok(schema)
     }
+}
+
+fn normalize_external_table_name(table: &str) -> Result<String, String> {
+    if table.is_empty() {
+        return Err("external table name must not be empty".to_owned());
+    }
+
+    if let Some((schema, table_name)) = table.split_once('.') {
+        if schema != "public" {
+            return Err(format!(
+                "external table `{}` must target the `public` schema",
+                table
+            ));
+        }
+
+        if table_name.is_empty() {
+            return Err(format!(
+                "external table `{}` must include a table name",
+                table
+            ));
+        }
+
+        return Ok(table_name.to_owned());
+    }
+
+    Ok(table.to_owned())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

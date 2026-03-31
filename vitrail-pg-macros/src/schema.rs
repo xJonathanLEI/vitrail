@@ -11,6 +11,8 @@ mod kw {
     syn::custom_keyword!(model);
     syn::custom_keyword!(schema);
     syn::custom_keyword!(name);
+    syn::custom_keyword!(tables);
+    syn::custom_keyword!(external);
     syn::custom_keyword!(include);
     syn::custom_keyword!(field);
     syn::custom_keyword!(relation);
@@ -28,6 +30,7 @@ mod update_helpers;
 #[derive(Debug)]
 pub(crate) struct ParsedSchema {
     module_name: Ident,
+    external_tables: Vec<syn::LitStr>,
     models: Vec<ParsedModel>,
 }
 
@@ -36,15 +39,52 @@ impl Parse for ParsedSchema {
         input.parse::<kw::name>()?;
         let module_name = input.call(Ident::parse_any)?;
 
+        let mut external_tables = Vec::new();
         let mut models = Vec::new();
         while !input.is_empty() {
-            models.push(input.parse()?);
+            if input.peek(kw::tables) {
+                external_tables.extend(input.parse::<ParsedTablesBlock>()?.external_tables);
+            } else if input.peek(kw::model) {
+                models.push(input.parse()?);
+            } else {
+                return Err(input.error("expected `model` or `tables`"));
+            }
         }
 
         Ok(Self {
             module_name,
+            external_tables,
             models,
         })
+    }
+}
+
+#[derive(Debug)]
+struct ParsedTablesBlock {
+    external_tables: Vec<syn::LitStr>,
+}
+
+impl Parse for ParsedTablesBlock {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        input.parse::<kw::tables>()?;
+
+        let content;
+        syn::braced!(content in input);
+
+        content.parse::<kw::external>()?;
+        content.parse::<Token![:]>()?;
+
+        let items;
+        bracketed!(items in content);
+        let external_tables = Punctuated::<syn::LitStr, Token![,]>::parse_terminated(&items)?
+            .into_iter()
+            .collect();
+
+        if !content.is_empty() {
+            return Err(content.error("unexpected tokens in `tables` block"));
+        }
+
+        Ok(Self { external_tables })
     }
 }
 
@@ -82,7 +122,15 @@ impl ParsedSchema {
             models.push(model.to_core()?);
         }
 
-        core::Schema::builder().models(models).build()
+        core::Schema::builder()
+            .models(models)
+            .external_tables(
+                self.external_tables
+                    .iter()
+                    .map(syn::LitStr::value)
+                    .collect(),
+            )
+            .build()
     }
 
     fn span_for_validation_error(&self, error: &core::ValidationError) -> Span {
@@ -90,6 +138,7 @@ impl ParsedSchema {
 
         match &error.location {
             core::ValidationLocation::Schema => Span::call_site(),
+            core::ValidationLocation::ExternalTable { table } => self.external_table_span(table),
             core::ValidationLocation::Model { model } => {
                 let prefer_first = message == "first declaration of this model";
                 self.model_span(model, prefer_first)
@@ -164,6 +213,14 @@ impl ParsedSchema {
         } else {
             self.models.iter().rev().find(|model| model.name == name)
         }
+    }
+
+    fn external_table_span(&self, table: &str) -> Span {
+        self.external_tables
+            .iter()
+            .find(|candidate| candidate.value() == table)
+            .map(syn::LitStr::span)
+            .unwrap_or_else(Span::call_site)
     }
 
     fn model_span(&self, name: &str, prefer_first: bool) -> Span {

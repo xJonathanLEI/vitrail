@@ -4,6 +4,9 @@ use std::fmt;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ValidationLocation {
     Schema,
+    ExternalTable {
+        table: String,
+    },
     Model {
         model: String,
     },
@@ -58,6 +61,9 @@ impl fmt::Display for ValidationLocation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ValidationLocation::Schema => write!(f, "schema"),
+            ValidationLocation::ExternalTable { table } => {
+                write!(f, "external table `{}`", table)
+            }
             ValidationLocation::Model { model } => write!(f, "model `{}`", model),
             ValidationLocation::ModelAttribute { model, attribute } => {
                 write!(f, "attribute `{}` on model `{}`", attribute, model)

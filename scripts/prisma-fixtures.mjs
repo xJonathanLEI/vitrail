@@ -18,11 +18,13 @@ const fixturesDir = resolve(
 
 const paths = {
 	prismaConfig: resolve(fixturesDir, "prisma.config.ts"),
+	externalPrismaConfig: resolve(fixturesDir, "prisma.external.config.ts"),
 	baseSchema: resolve(fixturesDir, "base.prisma"),
 	expandedSchema: resolve(fixturesDir, "expanded.prisma"),
 	emptyToBaseSql: resolve(fixturesDir, "empty_to_base.sql"),
 	baseToExpandedSql: resolve(fixturesDir, "base_to_expanded.sql"),
 	emptyToExpandedSql: resolve(fixturesDir, "empty_to_expanded.sql"),
+	externalOnlyToBaseSql: resolve(fixturesDir, "external_only_to_base.sql"),
 };
 
 const baseDatabaseUrl =
@@ -39,6 +41,7 @@ async function main() {
 	const emptyToBaseDatabase = createTemporaryDatabase(baseDatabaseUrl);
 	const baseToExpandedDatabase = createTemporaryDatabase(baseDatabaseUrl);
 	const emptyToExpandedDatabase = createTemporaryDatabase(baseDatabaseUrl);
+	const externalOnlyToBaseDatabase = createTemporaryDatabase(baseDatabaseUrl);
 
 	try {
 		const generated = {
@@ -73,6 +76,7 @@ async function main() {
 					emptyToExpandedDatabase.databaseUrl,
 				),
 			),
+			externalOnlyToBaseSql: "",
 		};
 
 		runPrisma(
@@ -85,6 +89,33 @@ async function main() {
 				paths.baseSchema,
 			],
 			baseToExpandedDatabase.databaseUrl,
+		);
+
+		runPrismaDbExecute(
+			externalOnlyToBaseDatabase.databaseUrl,
+			`
+CREATE TABLE public.external_audit_log (
+  id SERIAL PRIMARY KEY,
+  payload TEXT NOT NULL
+);
+`,
+			baseDatabaseUrl,
+		);
+
+		generated.externalOnlyToBaseSql = normalizeSql(
+			runPrisma(
+				[
+					"migrate",
+					"diff",
+					"--config",
+					paths.externalPrismaConfig,
+					"--from-config-datasource",
+					"--to-schema",
+					paths.baseSchema,
+					"--script",
+				],
+				externalOnlyToBaseDatabase.databaseUrl,
+			),
 		);
 
 		generated.baseToExpandedSql = normalizeSql(
@@ -106,6 +137,7 @@ async function main() {
 		writeFileSync(paths.emptyToBaseSql, generated.emptyToBaseSql);
 		writeFileSync(paths.baseToExpandedSql, generated.baseToExpandedSql);
 		writeFileSync(paths.emptyToExpandedSql, generated.emptyToExpandedSql);
+		writeFileSync(paths.externalOnlyToBaseSql, generated.externalOnlyToBaseSql);
 
 		console.log("Prisma fixtures regenerated.");
 	} finally {
@@ -113,6 +145,7 @@ async function main() {
 			emptyToBaseDatabase.cleanup(),
 			baseToExpandedDatabase.cleanup(),
 			emptyToExpandedDatabase.cleanup(),
+			externalOnlyToBaseDatabase.cleanup(),
 		]);
 	}
 }

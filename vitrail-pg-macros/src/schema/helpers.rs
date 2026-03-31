@@ -160,6 +160,11 @@ impl ParsedSchema {
 
     fn generate_schema(&self) -> Result<TokenStream2> {
         let mut models = Vec::with_capacity(self.models.len());
+        let external_tables = self
+            .external_tables
+            .iter()
+            .map(|table| syn::LitStr::new(&table.value(), table.span()))
+            .collect::<Vec<_>>();
 
         for model in &self.models {
             models.push(model.generate_schema_model(self)?);
@@ -168,6 +173,7 @@ impl ParsedSchema {
         Ok(quote! {
             ::vitrail_pg::Schema::builder()
                 .models(vec![#(#models),*])
+                .external_tables(vec![#(::std::string::String::from(#external_tables)),*])
                 .build()
                 .expect("schema was validated during macro expansion")
         })

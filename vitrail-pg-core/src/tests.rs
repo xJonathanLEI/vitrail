@@ -726,3 +726,48 @@ fn rejects_combining_db_uuid_with_rust_type_override() {
             .contains("`@rust_ty` cannot be combined with `@db.Uuid`")
     );
 }
+
+#[test]
+fn accepts_public_qualified_external_tables() {
+    let schema = Schema::builder()
+        .external_table("public.external_audit_log")
+        .model(
+            Model::builder("user")
+                .fields(vec![
+                    Field::builder("id", FieldType::int())
+                        .attributes(vec![Attribute::Id])
+                        .build()
+                        .expect("field should build"),
+                ])
+                .build()
+                .expect("model should build"),
+        )
+        .build();
+
+    assert!(schema.is_ok());
+}
+
+#[test]
+fn rejects_external_tables_outside_public_schema() {
+    let error = Schema::builder()
+        .external_table("auth.users")
+        .model(
+            Model::builder("user")
+                .fields(vec![
+                    Field::builder("id", FieldType::int())
+                        .attributes(vec![Attribute::Id])
+                        .build()
+                        .expect("field should build"),
+                ])
+                .build()
+                .expect("model should build"),
+        )
+        .build()
+        .expect_err("schema should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("must target the `public` schema")
+    );
+}

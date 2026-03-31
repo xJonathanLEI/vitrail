@@ -1,0 +1,5 @@
+error: external table `auth.users` must target the `public` schema
+ --> tests/ui/fail/external_table_outside_public_schema.rs:9:20
+  |
+9 |         external: ["auth.users"]
+  |                    ^^^^^^^^^^^^

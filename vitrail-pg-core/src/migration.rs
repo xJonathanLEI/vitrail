@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sqlx::Row as _;
 use sqlx::postgres::PgPoolOptions;
@@ -8,6 +8,14 @@ use crate::{Attribute, DefaultFunction, Field, FieldType, ScalarType, Schema, Sc
 #[derive(Clone, Debug, Default)]
 pub struct PostgresSchema {
     tables: Vec<PostgresTable>,
+}
+
+fn normalize_ignored_table_name(table: &str) -> Option<&str> {
+    if let Some((schema, table_name)) = table.split_once('.') {
+        return (schema == "public").then_some(table_name);
+    }
+
+    Some(table)
 }
 
 impl PostgresSchema {
@@ -125,16 +133,31 @@ impl PostgresSchema {
     }
 
     pub async fn introspect(database_url: &str) -> Result<Self, sqlx::Error> {
+        Self::introspect_ignoring(database_url, &[]).await
+    }
+
+    pub async fn introspect_ignoring(
+        database_url: &str,
+        ignored_tables: &[String],
+    ) -> Result<Self, sqlx::Error> {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(database_url)
             .await?;
-        let schema = Self::introspect_from_pool(&pool).await?;
+        let schema = Self::introspect_from_pool(&pool, ignored_tables).await?;
         pool.close().await;
         Ok(schema)
     }
 
-    async fn introspect_from_pool(pool: &sqlx::postgres::PgPool) -> Result<Self, sqlx::Error> {
+    async fn introspect_from_pool(
+        pool: &sqlx::postgres::PgPool,
+        ignored_tables: &[String],
+    ) -> Result<Self, sqlx::Error> {
+        let ignored_tables = ignored_tables
+            .iter()
+            .filter_map(|table| normalize_ignored_table_name(table))
+            .collect::<HashSet<_>>();
+
         let table_rows = sqlx::query(
             r#"
             SELECT table_name
@@ -150,6 +173,10 @@ impl PostgresSchema {
 
         let mut tables = table_rows
             .into_iter()
+            .filter(|row| {
+                let table_name = row.get::<String, _>("table_name");
+                !ignored_tables.contains(table_name.as_str())
+            })
             .map(|row| PostgresTable {
                 name: row.get::<String, _>("table_name"),
                 columns: Vec::new(),
@@ -187,6 +214,9 @@ impl PostgresSchema {
 
         for row in column_rows {
             let table_name = row.get::<String, _>("table_name");
+            if ignored_tables.contains(table_name.as_str()) {
+                continue;
+            }
             let table_index = table_indexes[&table_name];
             let column_name = row.get::<String, _>("column_name");
             let is_nullable = row.get::<String, _>("is_nullable") == "YES";
@@ -223,6 +253,9 @@ impl PostgresSchema {
 
         for row in primary_key_rows {
             let table_name = row.get::<String, _>("table_name");
+            if ignored_tables.contains(table_name.as_str()) {
+                continue;
+            }
             let table_index = table_indexes[&table_name];
             let constraint_name = row.get::<String, _>("constraint_name");
             let column_name = row.get::<String, _>("column_name");
@@ -264,6 +297,9 @@ impl PostgresSchema {
 
         for row in index_rows {
             let table_name = row.get::<String, _>("table_name");
+            if ignored_tables.contains(table_name.as_str()) {
+                continue;
+            }
             let table_index = table_indexes[&table_name];
             tables[table_index].indexes.push(PostgresIndex {
                 name: row.get::<String, _>("index_name"),
@@ -310,6 +346,9 @@ impl PostgresSchema {
 
         for row in foreign_key_rows {
             let table_name = row.get::<String, _>("table_name");
+            if ignored_tables.contains(table_name.as_str()) {
+                continue;
+            }
             let table_index = table_indexes[&table_name];
             let on_delete = row.get::<String, _>("on_delete");
             let on_update = row.get::<String, _>("on_update");
@@ -329,6 +368,15 @@ impl PostgresSchema {
 
     pub fn tables(&self) -> &[PostgresTable] {
         &self.tables
+    }
+
+    pub async fn introspect_ignoring_external_tables<S>(
+        database_url: &str,
+    ) -> Result<Self, sqlx::Error>
+    where
+        S: SchemaAccess,
+    {
+        Self::introspect_ignoring(database_url, S::schema().external_tables()).await
     }
 
     pub fn migrate_from(&self, current: &Self) -> PostgresMigration {

@@ -325,7 +325,9 @@ impl PostgresMigrator {
                 execute_sql_script_url(shadow_database.url(), migration.sql()).await?;
             }
 
-            let current_schema = PostgresSchema::introspect(shadow_database.url()).await?;
+            let current_schema =
+                PostgresSchema::introspect_ignoring_external_tables::<S>(shadow_database.url())
+                    .await?;
             let migration = target_schema.migrate_from(&current_schema);
 
             if migration.is_empty() {
@@ -364,7 +366,9 @@ impl PostgresMigrator {
                 execute_sql_script_url(shadow_database.url(), migration.sql()).await?;
             }
 
-            let current_schema = PostgresSchema::introspect(shadow_database.url()).await?;
+            let current_schema =
+                PostgresSchema::introspect_ignoring_external_tables::<S>(shadow_database.url())
+                    .await?;
             Ok(target_schema.migrate_from(&current_schema))
         }
         .await;
