@@ -54,12 +54,41 @@ pub struct QuerySelection {
     pub scalar_fields: Vec<&'static str>,
     pub relations: Vec<QueryRelationSelection>,
     pub filter: Option<QueryFilter>,
+    pub order_by: Vec<QueryOrder>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct QueryRelationSelection {
     pub field: &'static str,
     pub selection: QuerySelection,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueryOrderDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QueryOrder {
+    Scalar {
+        field: &'static str,
+        direction: QueryOrderDirection,
+    },
+    Relation {
+        field: &'static str,
+        orders: Vec<QueryOrder>,
+    },
+}
+
+impl QueryOrder {
+    pub fn scalar(field: &'static str, direction: QueryOrderDirection) -> Self {
+        Self::Scalar { field, direction }
+    }
+
+    pub fn relation(field: &'static str, orders: Vec<QueryOrder>) -> Self {
+        Self::Relation { field, orders }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1055,8 +1084,13 @@ fn build_query_sql(
         .map(|filter| builder.filter_sql(root_model, filter, "t0"))
         .transpose()?;
 
+    let mut order_joins = Vec::new();
+    let order_by_clause =
+        builder.order_by_sql(root_model, &selection.order_by, "t0", &mut order_joins)?;
+    builder.joins.extend(order_joins);
+
     let sql = format!(
-        "SELECT {} FROM {} AS \"t0\"{}{}",
+        "SELECT {} FROM {} AS \"t0\"{}{}{}",
         selects.join(", "),
         quoted_ident(root_model.name()),
         if builder.joins.is_empty() {
@@ -1066,6 +1100,9 @@ fn build_query_sql(
         },
         where_clause
             .map(|where_clause| format!(" WHERE {where_clause}"))
+            .unwrap_or_default(),
+        order_by_clause
+            .map(|order_by_clause| format!(" ORDER BY {order_by_clause}"))
             .unwrap_or_default(),
     );
 
@@ -1249,6 +1286,12 @@ impl<'a> SqlBuilder<'a> {
             &relation.nested_alias,
             &mut joins,
         )?;
+        let order_by_clause = self.order_by_sql(
+            relation.target_model,
+            &relation.selection.order_by,
+            &relation.nested_alias,
+            &mut joins,
+        )?;
         let joins_sql = if joins.is_empty() {
             String::new()
         } else {
@@ -1264,18 +1307,25 @@ impl<'a> SqlBuilder<'a> {
         }
 
         let where_clause = where_clauses.join(" AND ");
+        let aggregate_order_by_clause = if let Some(order_by_clause) = order_by_clause.as_ref() {
+            format!(" ORDER BY {order_by_clause}")
+        } else {
+            aggregate_order_by(relation.target_model, &relation.nested_alias)
+        };
+        let select_order_by_clause = order_by_clause
+            .map(|order_by_clause| format!(" ORDER BY {order_by_clause}"))
+            .unwrap_or_default();
 
         if relation.many {
             Ok(format!(
-                "SELECT COALESCE(json_agg({row_expr}{}), '[]'::json) AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}",
-                aggregate_order_by(relation.target_model, &relation.nested_alias),
+                "SELECT COALESCE(json_agg({row_expr}{aggregate_order_by_clause}), '[]'::json) AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}",
                 quoted_ident(relation.target_model.name()),
                 relation.nested_alias,
                 joins_sql,
             ))
         } else {
             Ok(format!(
-                "SELECT {row_expr} AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause} LIMIT 1",
+                "SELECT {row_expr} AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}{select_order_by_clause} LIMIT 1",
                 quoted_ident(relation.target_model.name()),
                 relation.nested_alias,
                 joins_sql,
@@ -1290,6 +1340,161 @@ impl<'a> SqlBuilder<'a> {
         table_alias: &str,
     ) -> Result<String, sqlx::Error> {
         compile_filter_sql(self, model, filter, table_alias)
+    }
+
+    fn order_by_sql(
+        &mut self,
+        model: &'a Model,
+        orders: &[QueryOrder],
+        table_alias: &str,
+        joins: &mut Vec<String>,
+    ) -> Result<Option<String>, sqlx::Error> {
+        if orders.is_empty() {
+            return Ok(None);
+        }
+
+        let mut items = Vec::new();
+        let mut relation_join_aliases = HashMap::new();
+
+        for order in orders {
+            self.push_order_sql(
+                model,
+                order,
+                table_alias,
+                joins,
+                &mut relation_join_aliases,
+                &mut items,
+            )?;
+        }
+
+        Ok(Some(items.join(", ")))
+    }
+
+    fn push_order_sql(
+        &mut self,
+        model: &'a Model,
+        order: &QueryOrder,
+        table_alias: &str,
+        joins: &mut Vec<String>,
+        relation_join_aliases: &mut HashMap<String, String>,
+        items: &mut Vec<String>,
+    ) -> Result<(), sqlx::Error> {
+        match order {
+            QueryOrder::Scalar { field, direction } => {
+                let field = model.field_named(field).ok_or_else(|| {
+                    schema_error(format!(
+                        "unknown field `{}.{}` in query ordering",
+                        model.name(),
+                        field
+                    ))
+                })?;
+
+                let scalar = match field.ty() {
+                    FieldType::Scalar(scalar) => scalar.scalar(),
+                    FieldType::Relation { .. } => {
+                        return Err(schema_error(format!(
+                            "field `{}.{}` is not scalar and cannot terminate `order_by`",
+                            model.name(),
+                            field.name()
+                        )));
+                    }
+                };
+
+                items.push(format!(
+                    "{} {}",
+                    column_expr(table_alias, field.name(), scalar),
+                    match direction {
+                        QueryOrderDirection::Asc => "ASC",
+                        QueryOrderDirection::Desc => "DESC",
+                    }
+                ));
+                Ok(())
+            }
+            QueryOrder::Relation { field, orders } => {
+                let field = model.field_named(field).ok_or_else(|| {
+                    schema_error(format!(
+                        "unknown relation `{}.{}` in query ordering",
+                        model.name(),
+                        field
+                    ))
+                })?;
+
+                if field.kind().is_scalar() {
+                    return Err(schema_error(format!(
+                        "field `{}.{}` is not a relation and cannot be traversed in `order_by`",
+                        model.name(),
+                        field.name()
+                    )));
+                }
+
+                if field.ty().is_many() {
+                    return Err(schema_error(format!(
+                        "relation `{}.{}` is to-many and cannot be used in `order_by`",
+                        model.name(),
+                        field.name()
+                    )));
+                }
+
+                if orders.is_empty() {
+                    return Err(schema_error(format!(
+                        "relation `{}.{}` must contain at least one nested `order_by` entry",
+                        model.name(),
+                        field.name()
+                    )));
+                }
+
+                let target_model = resolve_schema_model(self.schema, field.ty().name(), "query")
+                    .map_err(|_| {
+                        schema_error(format!(
+                            "relation `{}.{}` points at unknown model `{}`",
+                            model.name(),
+                            field.name(),
+                            field.ty().name()
+                        ))
+                    })?;
+
+                let (nested_fields, parent_fields) =
+                    self.relation_fields(model, field, target_model)?;
+                let predicate_template = relation_predicates(
+                    "__vitrail_order_join__",
+                    &nested_fields,
+                    table_alias,
+                    &parent_fields,
+                );
+                let join_key = format!("{}::{predicate_template}", target_model.name());
+                let join_alias = if let Some(join_alias) = relation_join_aliases.get(&join_key) {
+                    join_alias.clone()
+                } else {
+                    let join_alias = format!("t{}", self.next_alias);
+                    self.next_alias += 1;
+                    joins.push(format!(
+                        "LEFT JOIN {} AS \"{join_alias}\" ON {}",
+                        quoted_ident(target_model.name()),
+                        relation_predicates(
+                            &join_alias,
+                            &nested_fields,
+                            table_alias,
+                            &parent_fields,
+                        ),
+                    ));
+                    relation_join_aliases.insert(join_key, join_alias.clone());
+                    join_alias
+                };
+
+                for nested_order in orders {
+                    self.push_order_sql(
+                        target_model,
+                        nested_order,
+                        &join_alias,
+                        joins,
+                        relation_join_aliases,
+                        items,
+                    )?;
+                }
+
+                Ok(())
+            }
+        }
     }
 
     fn push_binding(

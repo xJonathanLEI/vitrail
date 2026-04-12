@@ -59,6 +59,21 @@ impl ParsedSchema {
                 module_name,
                 model.name
             );
+            let order_path_assert_ident = format_ident!(
+                "__vitrail_assert_query_order_path_{}_{}",
+                module_name,
+                model.name
+            );
+            let order_entries_macro_ident = format_ident!(
+                "__vitrail_query_order_entries_{}_{}",
+                module_name,
+                model.name
+            );
+            let order_field_entry_macro_ident = format_ident!(
+                "__vitrail_query_order_field_entry_{}_{}",
+                module_name,
+                model.name
+            );
             let include_struct_ident =
                 format_ident!("__vitrail_include_struct_{}_{}", module_name, model.name);
             let include_selection_ident =
@@ -87,6 +102,15 @@ impl ParsedSchema {
                 #[doc(hidden)]
                 #[allow(unused_imports)]
                 pub use #where_field_filter_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #order_path_assert_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #order_entries_macro_ident;
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #order_field_entry_macro_ident;
                 #[doc(hidden)]
                 #[allow(unused_imports)]
                 pub use #include_struct_ident;

@@ -191,6 +191,52 @@ struct PostByIds {
 }
 
 #[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::statements_schema::Schema, model = post, order_by(title = desc))]
+struct PostOrderedByTitleDesc {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::statements_schema::Schema, model = comment, order_by(body = desc))]
+struct CommentOrderedByBodyDesc {
+    id: i64,
+    body: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::statements_schema::Schema, model = user)]
+struct UserWithPostsOrderedByTitleDesc {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostOrderedByTitleDesc>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::statements_schema::Schema, model = post, order_by(title = desc))]
+struct PostWithCommentsOrderedDesc {
+    id: i64,
+    title: String,
+    #[vitrail(include)]
+    comments: Vec<CommentOrderedByBodyDesc>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::statements_schema::Schema, model = user)]
+struct UserWithPostsAndCommentsOrderedDesc {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostWithCommentsOrderedDesc>,
+}
+
+#[allow(dead_code)]
 #[derive(InsertInput)]
 #[vitrail(schema = crate::statements_schema::Schema, model = user)]
 struct NewUser {
@@ -344,6 +390,75 @@ fn to_one_include_generates_expected_sql() {
     );
 }
 
+#[test]
+fn nested_ad_hoc_order_by_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        user {
+            select: {
+                id: true,
+                email: true,
+            },
+            include: {
+                posts: {
+                    select: {
+                        id: true,
+                        title: true,
+                    },
+                    include: {
+                        comments: {
+                            select: {
+                                id: true,
+                                body: true,
+                            },
+                            order_by: [
+                                { body: desc },
+                            ],
+                        },
+                    },
+                    order_by: [
+                        { title: desc },
+                    ],
+                },
+            },
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t2"."id")::bigint, "t2"."title", "t3"."data") ORDER BY "t2"."title" DESC), '[]'::json) AS "data" FROM "post" AS "t2" LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t4"."id")::bigint, "t4"."body") ORDER BY "t4"."body" DESC), '[]'::json) AS "data" FROM "comment" AS "t4" WHERE "t4"."post_id" = "t2"."id") AS "t3" ON TRUE WHERE "t2"."author_id" = "t0"."id") AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn nested_model_first_order_by_generates_expected_sql() {
+    let sql = crate::statements_schema::query::<UserWithPostsAndCommentsOrderedDesc>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t2"."id")::bigint, "t2"."title", "t3"."data") ORDER BY "t2"."title" DESC), '[]'::json) AS "data" FROM "post" AS "t2" LEFT JOIN LATERAL (SELECT COALESCE(json_agg(json_build_array(("t4"."id")::bigint, "t4"."body") ORDER BY "t4"."body" DESC), '[]'::json) AS "data" FROM "comment" AS "t4" WHERE "t4"."post_id" = "t2"."id") AS "t3" ON TRUE WHERE "t2"."author_id" = "t0"."id") AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
 #[test]
 fn ad_hoc_where_generates_expected_sql() {
     let sql = query! {
@@ -506,6 +621,118 @@ fn ad_hoc_in_where_generates_expected_sql() {
     );
 }
 
+#[test]
+fn ad_hoc_order_by_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        post {
+            select: {
+                id: true,
+                title: true,
+            },
+            order_by: [
+                { title: desc },
+            ],
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"ORDER BY "t0"."title" DESC"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn ad_hoc_relation_order_by_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        post {
+            select: {
+                id: true,
+                title: true,
+            },
+            order_by: [
+                { author: { email: asc } },
+                { created_at: desc },
+            ],
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"LEFT JOIN "user" AS "t1" ON "t1"."id" = "t0"."author_id""#,
+            r#"ORDER BY "t1"."email" ASC, ("t0"."created_at" AT TIME ZONE 'UTC') DESC"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn repeated_relation_order_by_reuses_single_join() {
+    let sql = query! {
+        crate::statements_schema,
+        post {
+            select: {
+                id: true,
+                title: true,
+            },
+            order_by: [
+                { author: { email: asc } },
+                { author: { id: desc } },
+            ],
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"LEFT JOIN "user" AS "t1" ON "t1"."id" = "t0"."author_id""#,
+            r#"ORDER BY "t1"."email" ASC, ("t1"."id")::bigint DESC"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn model_first_order_by_generates_expected_sql() {
+    let sql = crate::statements_schema::query::<PostOrderedByTitleDesc>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"ORDER BY "t0"."title" DESC"#,
+        ]
+        .join(" ")
+    );
+}
 #[test]
 fn model_first_where_generates_expected_sql() {
     let sql = crate::statements_schema::query_with_variables::<UserById>(UserByIdVariables {

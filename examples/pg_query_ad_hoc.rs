@@ -121,6 +121,9 @@ async fn main() {
                             id: true,
                             title: true,
                         },
+                        order_by: [
+                            { title: desc },
+                        ],
                     },
                 },
                 where: {
@@ -128,6 +131,9 @@ async fn main() {
                         eq: external_id
                     },
                 },
+                order_by: [
+                    { created_at: desc },
+                ],
             }
         })
         .await
@@ -146,6 +152,9 @@ async fn main() {
                         in: vec![hello_post.id, draft_post.id]
                     },
                 },
+                order_by: [
+                    { title: desc },
+                ],
             }
         })
         .await
@@ -155,5 +164,7 @@ async fn main() {
     println!("updated {} posts", updated_posts);
     println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
+    println!("latest user post: {}", users[0].posts[0].title);
     println!("fetched {} posts with an in(...) filter", posts.len());
+    println!("first ordered post: {}", posts[0].title);
 }

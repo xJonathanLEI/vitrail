@@ -22,6 +22,7 @@ mod delete_helpers;
 mod filter_helpers;
 mod helpers;
 mod insert_helpers;
+mod order_helpers;
 mod query_helpers;
 mod update_helpers;
 

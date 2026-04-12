@@ -7,6 +7,9 @@ use syn::{
 };
 
 use crate::filter::{RootFilter, parse_root_filter};
+use crate::order::{RootOrder, parse_root_orders};
+
+type QueryResultContainerAttrs = (Path, LitStr, Option<Type>, Vec<RootFilter>, Vec<RootOrder>);
 
 pub(crate) struct QueryResultDerive {
     ident: Ident,
@@ -16,13 +19,14 @@ pub(crate) struct QueryResultDerive {
     model_name: LitStr,
     variables_ty: Option<Type>,
     root_filters: Vec<RootFilter>,
+    root_orders: Vec<RootOrder>,
 }
 
 impl QueryResultDerive {
     pub(crate) fn parse(input: syn::DeriveInput) -> Result<Self> {
         let ident = input.ident;
         let generics = input.generics;
-        let (schema_path, model_name, variables_ty, root_filters) =
+        let (schema_path, model_name, variables_ty, root_filters, root_orders) =
             parse_container_attrs(&input.attrs)?;
 
         let Data::Struct(DataStruct {
@@ -50,6 +54,7 @@ impl QueryResultDerive {
             model_name,
             variables_ty,
             root_filters,
+            root_orders,
         })
     }
 
@@ -60,6 +65,7 @@ impl QueryResultDerive {
         let model_name = self.model_name;
         let variables_ty = self.variables_ty;
         let root_filters = self.root_filters;
+        let root_orders = self.root_orders;
         let scalar_fields: Vec<_> = self.fields.iter().filter(|field| !field.include).collect();
         let relation_fields: Vec<_> = self.fields.iter().filter(|field| field.include).collect();
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -130,6 +136,16 @@ impl QueryResultDerive {
                 }
             })
             .collect::<Vec<_>>();
+        let order_exprs = root_orders
+            .iter()
+            .map(RootOrder::expand)
+            .collect::<Vec<_>>();
+        let order_tokens = if order_exprs.is_empty() {
+            quote! { ::std::vec![] }
+        } else {
+            quote! { ::std::vec![#(#order_exprs),*] }
+        };
+
         let static_filter_exprs = {
             let mut filters = root_filters
                 .iter()
@@ -221,6 +237,7 @@ impl QueryResultDerive {
                     scalar_fields: vec![#(#selection_scalars),*],
                     relations: vec![#(#selection_relations_with_variables),*],
                     filter: #filter_tokens,
+                    order_by: #order_tokens,
                 }
             }
         } else {
@@ -244,13 +261,26 @@ impl QueryResultDerive {
                 schema_module_ident,
                 model_ident,
             );
+            let order_path_assert_ident = format_ident!(
+                "__vitrail_assert_query_order_path_{}_{}",
+                schema_module_ident,
+                model_ident,
+            );
             let where_path_assert_macro = quote! {
                 #schema_module_path::#where_path_assert_ident
             };
-            let validations = root_filters
+            let order_path_assert_macro = quote! {
+                #schema_module_path::#order_path_assert_ident
+            };
+            let mut validations = root_filters
                 .iter()
                 .map(|filter| filter.validation_tokens(&where_path_assert_macro))
                 .collect::<Vec<_>>();
+            validations.extend(
+                root_orders
+                    .iter()
+                    .map(|order| order.validation_tokens(&order_path_assert_macro)),
+            );
 
             quote! {
                 #(#validations)*
@@ -464,6 +494,7 @@ impl QueryResultDerive {
                         scalar_fields: vec![#(#selection_scalars),*],
                         relations: vec![#(#selection_relations),*],
                         filter: #static_filter_tokens,
+                        order_by: #order_tokens,
                     }
                 }
 
@@ -728,13 +759,12 @@ impl QueryResultField {
     }
 }
 
-fn parse_container_attrs(
-    attrs: &[Attribute],
-) -> Result<(Path, LitStr, Option<Type>, Vec<RootFilter>)> {
+fn parse_container_attrs(attrs: &[Attribute]) -> Result<QueryResultContainerAttrs> {
     let mut schema_path = None;
     let mut model_name = None;
     let mut variables_ty = None;
     let mut root_filters = Vec::new();
+    let mut root_orders = Vec::new();
 
     for attribute in attrs {
         if !attribute.path().is_ident("vitrail") {
@@ -764,6 +794,10 @@ fn parse_container_attrs(
                 root_filters.push(parse_root_filter(meta.input)?);
                 return Ok(());
             }
+            if meta.path.is_ident("order_by") {
+                root_orders.extend(parse_root_orders(meta.input)?);
+                return Ok(());
+            }
             Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
         })?;
     }
@@ -781,7 +815,13 @@ fn parse_container_attrs(
         )
     })?;
 
-    Ok((schema_path, model_name, variables_ty, root_filters))
+    Ok((
+        schema_path,
+        model_name,
+        variables_ty,
+        root_filters,
+        root_orders,
+    ))
 }
 
 pub(crate) struct QueryVariablesDerive {

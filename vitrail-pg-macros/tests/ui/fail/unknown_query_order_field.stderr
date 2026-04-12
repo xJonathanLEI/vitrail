@@ -1,0 +1,15 @@
+error: unknown field `slug` in query `order_by` for model `post`
+  --> tests/ui/fail/unknown_query_order_field.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_order_schema
+ 7 | |
+ 8 | |     model post {
+...  |
+12 | | }
+   | |_^
+13 |
+14 |   #[derive(QueryResult)]
+   |            ----------- in this derive macro expansion
+   |
+   = note: this error originates in the macro `crate::query_order_schema::__vitrail_assert_query_order_path_query_order_schema_post` which comes from the expansion of the derive macro `QueryResult` (in Nightly builds, run with -Z macro-backtrace for more info)

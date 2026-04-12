@@ -1,0 +1,21 @@
+error: to-many relation field `posts` cannot be traversed in query `order_by` for model `user`
+  --> tests/ui/fail/query_helper_order_by_to_many_relation.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name query_order_schema
+ 7 | |
+ 8 | |     model user {
+...  |
+20 | | }
+   | |_^
+...
+23 |       let _ = query! {
+   |  _____________-
+24 | |         crate::query_order_schema,
+25 | |         user {
+26 | |             select: {
+...  |
+33 | |     };
+   | |_____- in this macro invocation
+   |
+   = note: this error originates in the macro `$crate::query_order_schema::__vitrail_query_order_field_entry_query_order_schema_user` which comes from the expansion of the macro `query` (in Nightly builds, run with -Z macro-backtrace for more info)

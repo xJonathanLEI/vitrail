@@ -4,6 +4,7 @@ mod delete;
 mod filter;
 mod insert;
 mod macro_inputs;
+mod order;
 mod query;
 mod schema;
 mod update;

@@ -4,7 +4,8 @@ use syn::{LitStr, Result};
 
 use super::{
     ParsedSchema, dollar_crate, filter_helpers::generate_filter_helper_items,
-    rust_field_type_tokens, schema_owned_rust_field_type_tokens, to_pascal_case,
+    order_helpers::generate_order_helper_items, rust_field_type_tokens,
+    schema_owned_rust_field_type_tokens, to_pascal_case,
 };
 
 impl ParsedSchema {
@@ -42,6 +43,21 @@ impl ParsedSchema {
                 module_name,
                 model.name
             );
+            let order_path_assert_ident = format_ident!(
+                "__vitrail_assert_query_order_path_{}_{}",
+                module_name,
+                model.name
+            );
+            let order_entries_macro_ident = format_ident!(
+                "__vitrail_query_order_entries_{}_{}",
+                module_name,
+                model.name
+            );
+            let order_field_entry_macro_ident = format_ident!(
+                "__vitrail_query_order_field_entry_{}_{}",
+                module_name,
+                model.name
+            );
             let include_struct_ident =
                 format_ident!("__vitrail_include_struct_{}_{}", module_name, model.name);
             let include_selection_ident =
@@ -70,6 +86,14 @@ impl ParsedSchema {
                 &where_path_assert_ident,
                 &where_filter_macro_ident,
                 &where_field_filter_ident,
+            )?;
+            let order_helper_items = generate_order_helper_items(
+                self,
+                module_name,
+                model,
+                &order_path_assert_ident,
+                &order_entries_macro_ident,
+                &order_field_entry_macro_ident,
             )?;
 
             let query_result_traits = scalar_fields
@@ -265,6 +289,7 @@ impl ParsedSchema {
                 }
 
                 #filter_helper_items
+                #order_helper_items
 
                 #[doc(hidden)]
                 pub mod #trait_module_ident {
@@ -307,6 +332,9 @@ impl ParsedSchema {
                                     $($where_field:ident : $where_value:tt),* $(,)?
                                 }
                             )?
+                            $(,
+                                order_by: $order_by:tt
+                            )?
                             $(,)?
                         }
                     ) => {
@@ -314,12 +342,14 @@ impl ParsedSchema {
                             select { $($select_field : true),* }
                             $(, include { $($include_field : $include_value),* })?
                             $(, where { $($where_field : $where_value),* })?
+                            $(, order_by $order_by)?
                         }
                     };
                     (
                         select { $($select_field:ident : true),* $(,)? }
                         $(, include { $($include_field:ident : $include_value:tt),* $(,)? })?
                         $(, where { $($where_field:ident : $where_value:tt),* $(,)? })?
+                        $(, order_by $order_by:tt)?
                         $(,)?
                     ) => {{
                         $( #dollar_crate::#module_name::#select_assert_ident!($select_field); )*
@@ -342,6 +372,11 @@ impl ParsedSchema {
                                     $($where_field : $where_value),*
                                 })
                             }))?,
+                            order_by: ::std::vec![] $(
+                                .into_iter()
+                                .chain(#dollar_crate::#module_name::#order_entries_macro_ident!($order_by))
+                                .collect()
+                            )?,
                         }
                     }};
                 }
@@ -366,6 +401,9 @@ impl ParsedSchema {
                                     $($where_field:ident : $where_value:tt),* $(,)?
                                 }
                             )?
+                            $(,
+                                order_by: $order_by:tt
+                            )?
                             $(,)?
                         }
                     ) => {
@@ -374,6 +412,7 @@ impl ParsedSchema {
                             select { $($select_field),* }
                             $(, include { $($include_field : $include_value),* } )?
                             $(, where { $($where_field : $where_value),* } )?
+                            $(, order_by $order_by )?
                         }
                     };
                     (
@@ -381,6 +420,7 @@ impl ParsedSchema {
                         select { $($select_field:ident),* $(,)? }
                         $(, include { $($include_field:ident : $include_value:tt),* $(,)? } )?
                         $(, where { $($where_field:ident : $where_value:tt),* $(,)? } )?
+                        $(, order_by $order_by:tt )?
                     ) => {
                         $( #dollar_crate::#module_name::#select_assert_ident!($select_field); )*
                         $( $( #dollar_crate::#module_name::#include_assert_ident!($include_field); )* )?

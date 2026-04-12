@@ -203,6 +203,51 @@ struct PostByIds {
     title: String,
 }
 
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query_schema::Schema, model = post, order_by(title = desc))]
+struct PostOrderedByTitleDesc {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query_schema::Schema, model = comment, order_by(body = desc))]
+struct CommentOrderedByBodyDesc {
+    id: i64,
+    body: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query_schema::Schema, model = user)]
+struct UserWithPostsOrderedByTitleDesc {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostOrderedByTitleDesc>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query_schema::Schema, model = post, order_by(title = desc))]
+struct PostWithCommentsOrderedDesc {
+    id: i64,
+    title: String,
+    #[vitrail(include)]
+    comments: Vec<CommentOrderedByBodyDesc>,
+}
+
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query_schema::Schema, model = user)]
+struct UserWithPostsAndCommentsOrderedDesc {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostWithCommentsOrderedDesc>,
+}
+
 async fn setup_database(database_url: &str) -> i64 {
     apply_schema(
         database_url,
@@ -320,6 +365,102 @@ async fn simple_query_on_postgres() {
     database.cleanup().await;
 }
 
+#[tokio::test]
+async fn ad_hoc_order_by_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(query! {
+            crate::query_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                },
+                order_by: [
+                    { title: desc },
+                ],
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 2);
+    assert_eq!(posts[0].title, "Second post");
+    assert_eq!(posts[1].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn nested_ad_hoc_order_by_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(query! {
+            crate::query_schema,
+            user {
+                select: {
+                    id: true,
+                    email: true,
+                },
+                include: {
+                    posts: {
+                        select: {
+                            id: true,
+                            title: true,
+                        },
+                        include: {
+                            comments: {
+                                select: {
+                                    id: true,
+                                    body: true,
+                                },
+                                order_by: [
+                                    { body: desc },
+                                ],
+                            },
+                        },
+                        order_by: [
+                            { title: desc },
+                        ],
+                    },
+                },
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+    let user = &users[0];
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.posts.len(), 2);
+    assert_eq!(user.posts[0].title, "Second post");
+    assert_eq!(user.posts[1].title, "Hello from Vitrail");
+    assert_eq!(user.posts[1].comments.len(), 2);
+    assert_eq!(
+        user.posts[1].comments[0].body,
+        "Second comment on first post"
+    );
+    assert_eq!(
+        user.posts[1].comments[1].body,
+        "First comment on first post"
+    );
+
+    database.cleanup().await;
+}
 #[tokio::test]
 async fn ad_hoc_where_query_on_postgres() {
     let database = TestDatabase::new().await;
@@ -674,6 +815,65 @@ async fn model_first_named_query_on_postgres() {
     database.cleanup().await;
 }
 
+#[tokio::test]
+async fn model_first_order_by_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(crate::query_schema::query::<UserWithPostsOrderedByTitleDesc>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].posts.len(), 2);
+    assert_eq!(users[0].posts[0].title, "Second post");
+    assert_eq!(users[0].posts[1].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn nested_model_first_order_by_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(crate::query_schema::query::<
+            UserWithPostsAndCommentsOrderedDesc,
+        >())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+    let user = &users[0];
+    assert_eq!(user.id, author_id);
+    assert_eq!(user.email, "alice@example.com");
+    assert_eq!(user.posts.len(), 2);
+    assert_eq!(user.posts[0].title, "Second post");
+    assert_eq!(user.posts[1].title, "Hello from Vitrail");
+    assert_eq!(user.posts[1].comments.len(), 2);
+    assert_eq!(
+        user.posts[1].comments[0].body,
+        "Second comment on first post"
+    );
+    assert_eq!(
+        user.posts[1].comments[1].body,
+        "First comment on first post"
+    );
+
+    database.cleanup().await;
+}
 #[tokio::test]
 async fn model_first_where_query_on_postgres() {
     let database = TestDatabase::new().await;
