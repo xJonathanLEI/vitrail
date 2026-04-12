@@ -236,6 +236,266 @@ struct UserWithPostsAndCommentsOrderedDesc {
     posts: Vec<PostWithCommentsOrderedDesc>,
 }
 
+#[derive(QueryVariables)]
+struct PaginationVariables {
+    skip: i64,
+    limit: i64,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::statements_schema::Schema,
+    model = post,
+    order_by(title = desc),
+    skip = 1,
+    limit = 1
+)]
+struct PostPageStatic {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::statements_schema::Schema,
+    model = post,
+    variables = PaginationVariables,
+    order_by(title = desc),
+    skip = skip,
+    limit = limit
+)]
+struct PostPageWithVariables {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::statements_schema::Schema, model = user)]
+struct UserWithPaginatedPosts {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostPageStatic>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::statements_schema::Schema,
+    model = user,
+    variables = PaginationVariables
+)]
+struct UserWithPaginatedPostsVariables {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostPageWithVariables>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::statements_schema::Schema,
+    model = post,
+    skip = 1,
+    limit = 1
+)]
+struct PostPageStaticWithoutOrder {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::statements_schema::Schema, model = user)]
+struct UserWithPaginatedPostsWithoutOrder {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostPageStaticWithoutOrder>,
+}
+
+#[test]
+fn ad_hoc_skip_and_limit_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        post {
+            select: {
+                id: true,
+                title: true,
+            },
+            order_by: [
+                { title: desc },
+            ],
+            skip: 1_i64,
+            limit: 1_i64,
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"ORDER BY "t0"."title" DESC"#,
+            r#"LIMIT $1 OFFSET $2"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn nested_ad_hoc_skip_and_limit_generates_expected_sql() {
+    let sql = query! {
+        crate::statements_schema,
+        user {
+            select: {
+                id: true,
+                email: true,
+            },
+            include: {
+                posts: {
+                    select: {
+                        id: true,
+                        title: true,
+                    },
+                    order_by: [
+                        { title: desc },
+                    ],
+                    skip: 1_i64,
+                    limit: 1_i64,
+                },
+            },
+        }
+    }
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg("__vitrail_nested_rows"."data" ORDER BY "__vitrail_nested_rows"."__vitrail_nested_order"), '[]'::json) AS "data" FROM (SELECT json_build_array(("t2"."id")::bigint, "t2"."title") AS "data", row_number() OVER ( ORDER BY "t2"."title" DESC) AS "__vitrail_nested_order" FROM "post" AS "t2" WHERE "t2"."author_id" = "t0"."id" ORDER BY "t2"."title" DESC LIMIT $1 OFFSET $2) AS "__vitrail_nested_rows") AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn model_first_skip_and_limit_generates_expected_sql() {
+    let sql = crate::statements_schema::query::<PostPageStatic>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"ORDER BY "t0"."title" DESC"#,
+            r#"LIMIT $1 OFFSET $2"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn model_first_skip_and_limit_with_variables_generates_expected_sql() {
+    let sql = crate::statements_schema::query_with_variables::<PostPageWithVariables>(
+        PaginationVariables { skip: 1, limit: 1 },
+    )
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "post__id","#,
+            r#""t0"."title" AS "post__title""#,
+            r#"FROM "post" AS "t0""#,
+            r#"ORDER BY "t0"."title" DESC"#,
+            r#"LIMIT $1 OFFSET $2"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn nested_model_first_skip_and_limit_generates_expected_sql() {
+    let sql = crate::statements_schema::query::<UserWithPaginatedPosts>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg("__vitrail_nested_rows"."data" ORDER BY "__vitrail_nested_rows"."__vitrail_nested_order"), '[]'::json) AS "data" FROM (SELECT json_build_array(("t2"."id")::bigint, "t2"."title") AS "data", row_number() OVER ( ORDER BY "t2"."title" DESC) AS "__vitrail_nested_order" FROM "post" AS "t2" WHERE "t2"."author_id" = "t0"."id" ORDER BY "t2"."title" DESC LIMIT $1 OFFSET $2) AS "__vitrail_nested_rows") AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn nested_model_first_skip_and_limit_with_variables_generates_expected_sql() {
+    let sql = crate::statements_schema::query_with_variables::<UserWithPaginatedPostsVariables>(
+        PaginationVariables { skip: 1, limit: 1 },
+    )
+    .to_sql()
+    .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg("__vitrail_nested_rows"."data" ORDER BY "__vitrail_nested_rows"."__vitrail_nested_order"), '[]'::json) AS "data" FROM (SELECT json_build_array(("t2"."id")::bigint, "t2"."title") AS "data", row_number() OVER ( ORDER BY "t2"."title" DESC) AS "__vitrail_nested_order" FROM "post" AS "t2" WHERE "t2"."author_id" = "t0"."id" ORDER BY "t2"."title" DESC LIMIT $1 OFFSET $2) AS "__vitrail_nested_rows") AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn nested_model_first_skip_and_limit_without_explicit_order_generates_expected_sql() {
+    let sql = crate::statements_schema::query::<UserWithPaginatedPostsWithoutOrder>()
+        .to_sql()
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        [
+            r#"SELECT"#,
+            r#"("t0"."id")::bigint AS "user__id","#,
+            r#""t0"."email" AS "user__email","#,
+            r#""t1"."data" AS "user__posts""#,
+            r#"FROM "user" AS "t0""#,
+            r#"LEFT JOIN LATERAL (SELECT COALESCE(json_agg("__vitrail_nested_rows"."data" ORDER BY "__vitrail_nested_rows"."__vitrail_nested_order"), '[]'::json) AS "data" FROM (SELECT json_build_array(("t2"."id")::bigint, "t2"."title") AS "data", row_number() OVER ( ORDER BY "t2"."id") AS "__vitrail_nested_order" FROM "post" AS "t2" WHERE "t2"."author_id" = "t0"."id" ORDER BY "t2"."id" LIMIT $1 OFFSET $2) AS "__vitrail_nested_rows") AS "t1" ON TRUE"#,
+        ]
+        .join(" ")
+    );
+}
+
 #[allow(dead_code)]
 #[derive(InsertInput)]
 #[vitrail(schema = crate::statements_schema::Schema, model = user)]

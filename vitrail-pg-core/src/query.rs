@@ -55,6 +55,8 @@ pub struct QuerySelection {
     pub relations: Vec<QueryRelationSelection>,
     pub filter: Option<QueryFilter>,
     pub order_by: Vec<QueryOrder>,
+    pub skip: Option<QueryPagination>,
+    pub limit: Option<QueryPagination>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,6 +90,22 @@ impl QueryOrder {
 
     pub fn relation(field: &'static str, orders: Vec<QueryOrder>) -> Self {
         Self::Relation { field, orders }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QueryPagination {
+    Value(i64),
+    Variable(&'static str),
+}
+
+impl QueryPagination {
+    pub fn value(value: i64) -> Self {
+        Self::Value(value)
+    }
+
+    pub fn variable(name: &'static str) -> Self {
+        Self::Variable(name)
     }
 }
 
@@ -726,9 +744,10 @@ where
         executor: &'a dyn PgExecutor,
     ) -> BoxFuture<'a, Result<Option<Self::Output>, sqlx::Error>> {
         Box::pin(async move {
-            let selection = self.selection();
+            let mut selection = self.selection();
+            selection.limit = Some(QueryPagination::value(1));
+
             let (sql, bindings) = build_query_sql(S::schema(), &selection, &self.variables)?;
-            let sql = format!("{sql} LIMIT 1");
             let row = executor
                 .fetch_optional(bind_query(sqlx::query(&sql), &bindings))
                 .await?;
@@ -1089,8 +1108,11 @@ fn build_query_sql(
         builder.order_by_sql(root_model, &selection.order_by, "t0", &mut order_joins)?;
     builder.joins.extend(order_joins);
 
+    let pagination_clause =
+        builder.pagination_clause(selection.skip.as_ref(), selection.limit.as_ref())?;
+
     let sql = format!(
-        "SELECT {} FROM {} AS \"t0\"{}{}{}",
+        "SELECT {} FROM {} AS \"t0\"{}{}{}{}",
         selects.join(", "),
         quoted_ident(root_model.name()),
         if builder.joins.is_empty() {
@@ -1104,6 +1126,7 @@ fn build_query_sql(
         order_by_clause
             .map(|order_by_clause| format!(" ORDER BY {order_by_clause}"))
             .unwrap_or_default(),
+        pagination_clause,
     );
 
     Ok((sql, builder.bindings))
@@ -1160,6 +1183,8 @@ struct SqlBuilder<'a> {
 
 struct RelationSql<'a> {
     many: bool,
+    source_model_name: &'a str,
+    relation_field_name: &'a str,
     target_model: &'a Model,
     selection: QuerySelection,
     parent_table_alias: String,
@@ -1256,6 +1281,8 @@ impl<'a> SqlBuilder<'a> {
 
         let subquery = self.relation_subquery_sql(RelationSql {
             many: field.ty().is_many(),
+            source_model_name: model.name(),
+            relation_field_name: relation.field,
             target_model,
             selection: relation.selection.clone(),
             parent_table_alias: table_alias.to_owned(),
@@ -1307,23 +1334,54 @@ impl<'a> SqlBuilder<'a> {
         }
 
         let where_clause = where_clauses.join(" AND ");
-        let aggregate_order_by_clause = if let Some(order_by_clause) = order_by_clause.as_ref() {
-            format!(" ORDER BY {order_by_clause}")
-        } else {
-            aggregate_order_by(relation.target_model, &relation.nested_alias)
-        };
         let select_order_by_clause = order_by_clause
+            .clone()
             .map(|order_by_clause| format!(" ORDER BY {order_by_clause}"))
             .unwrap_or_default();
 
         if relation.many {
-            Ok(format!(
-                "SELECT COALESCE(json_agg({row_expr}{aggregate_order_by_clause}), '[]'::json) AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}",
-                quoted_ident(relation.target_model.name()),
-                relation.nested_alias,
-                joins_sql,
-            ))
+            if relation.selection.skip.is_some() || relation.selection.limit.is_some() {
+                let pagination_clause = self.pagination_clause(
+                    relation.selection.skip.as_ref(),
+                    relation.selection.limit.as_ref(),
+                )?;
+                let aggregate_table_alias = "__vitrail_nested_rows";
+                let aggregate_order_column = "__vitrail_nested_order";
+                let select_order_by_clause = if select_order_by_clause.is_empty() {
+                    aggregate_order_by(relation.target_model, &relation.nested_alias)
+                } else {
+                    select_order_by_clause
+                };
+
+                Ok(format!(
+                    "SELECT COALESCE(json_agg(\"{aggregate_table_alias}\".\"data\" ORDER BY \"{aggregate_table_alias}\".\"{aggregate_order_column}\"), '[]'::json) AS \"data\" FROM (SELECT {row_expr} AS \"data\", row_number() OVER ({select_order_by_clause}) AS \"{aggregate_order_column}\" FROM {} AS \"{}\"{} WHERE {where_clause}{select_order_by_clause}{pagination_clause}) AS \"{aggregate_table_alias}\"",
+                    quoted_ident(relation.target_model.name()),
+                    relation.nested_alias,
+                    joins_sql,
+                ))
+            } else {
+                let aggregate_order_by_clause =
+                    if let Some(order_by_clause) = order_by_clause.as_ref() {
+                        format!(" ORDER BY {order_by_clause}")
+                    } else {
+                        aggregate_order_by(relation.target_model, &relation.nested_alias)
+                    };
+
+                Ok(format!(
+                    "SELECT COALESCE(json_agg({row_expr}{aggregate_order_by_clause}), '[]'::json) AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}",
+                    quoted_ident(relation.target_model.name()),
+                    relation.nested_alias,
+                    joins_sql,
+                ))
+            }
         } else {
+            if relation.selection.skip.is_some() || relation.selection.limit.is_some() {
+                return Err(schema_error(format!(
+                    "relation `{}.{}` is to-one and cannot use `skip` or `limit`",
+                    relation.source_model_name, relation.relation_field_name
+                )));
+            }
+
             Ok(format!(
                 "SELECT {row_expr} AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}{select_order_by_clause} LIMIT 1",
                 quoted_ident(relation.target_model.name()),
@@ -1340,6 +1398,62 @@ impl<'a> SqlBuilder<'a> {
         table_alias: &str,
     ) -> Result<String, sqlx::Error> {
         compile_filter_sql(self, model, filter, table_alias)
+    }
+
+    fn pagination_clause(
+        &mut self,
+        skip: Option<&QueryPagination>,
+        limit: Option<&QueryPagination>,
+    ) -> Result<String, sqlx::Error> {
+        let mut clause = String::new();
+
+        if let Some(limit) = limit {
+            let limit = self.pagination_placeholder(limit, "limit")?;
+            clause.push_str(&format!(" LIMIT {limit}"));
+        }
+
+        if let Some(skip) = skip {
+            let skip = self.pagination_placeholder(skip, "skip")?;
+            clause.push_str(&format!(" OFFSET {skip}"));
+        }
+
+        Ok(clause)
+    }
+
+    fn pagination_placeholder(
+        &mut self,
+        pagination: &QueryPagination,
+        kind: &str,
+    ) -> Result<String, sqlx::Error> {
+        let value = match pagination {
+            QueryPagination::Value(value) => QueryVariableValue::Int(*value),
+            QueryPagination::Variable(name) => {
+                let value = self.variables.get(name).ok_or_else(|| {
+                    schema_error(format!("missing query variable `{name}` for `{kind}`"))
+                })?;
+
+                match value {
+                    QueryVariableValue::Int(value) => QueryVariableValue::Int(*value),
+                    other => {
+                        return Err(schema_error(format!(
+                            "query `{kind}` variable `{name}` must be an integer, got {other:?}"
+                        )));
+                    }
+                }
+            }
+        };
+
+        let QueryVariableValue::Int(value) = value else {
+            unreachable!("pagination values must be integers")
+        };
+
+        if value < 0 {
+            return Err(schema_error(format!(
+                "query `{kind}` must be greater than or equal to 0"
+            )));
+        }
+
+        self.push_binding(QueryVariableValue::Int(value), ScalarType::Int)
     }
 
     fn order_by_sql(
@@ -1588,6 +1702,8 @@ impl<'a> SqlBuilder<'a> {
 
         let subquery = self.relation_subquery_sql(RelationSql {
             many: field.ty().is_many(),
+            source_model_name: model.name(),
+            relation_field_name: relation.field,
             target_model,
             selection: relation.selection.clone(),
             parent_table_alias: table_alias.to_owned(),

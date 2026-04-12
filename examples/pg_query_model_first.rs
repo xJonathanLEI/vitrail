@@ -28,7 +28,13 @@ schema! {
 
 #[allow(dead_code)]
 #[derive(QueryResult)]
-#[vitrail(schema = crate::my_schema::Schema, model = post, order_by(title = desc))]
+#[vitrail(
+    schema = crate::my_schema::Schema,
+    model = post,
+    order_by(title = desc),
+    skip = 0,
+    limit = 1
+)]
 struct PostSummary {
     id: i64,
     title: String,
@@ -145,7 +151,9 @@ struct UserWithPosts {
     model = post,
     variables = PostByIdsVariables,
     where(id = in(post_ids)),
-    order_by(title = desc)
+    order_by(title = desc),
+    skip = 0,
+    limit = 1
 )]
 struct PostByIds {
     id: i64,
@@ -229,7 +237,10 @@ async fn main() {
     println!("updated {} posts", updated_posts);
     println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
-    println!("latest user post: {}", users[0].posts[0].title);
-    println!("fetched {} posts with an in(...) filter", posts.len());
-    println!("first ordered post: {}", posts[0].title);
+    println!("latest paginated user post: {}", users[0].posts[0].title);
+    println!(
+        "fetched {} paginated posts with an in(...) filter",
+        posts.len()
+    );
+    println!("first paginated ordered post: {}", posts[0].title);
 }

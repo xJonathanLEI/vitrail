@@ -124,6 +124,8 @@ async fn main() {
                         order_by: [
                             { title: desc },
                         ],
+                        skip: 0,
+                        limit: 1,
                     },
                 },
                 where: {
@@ -155,6 +157,8 @@ async fn main() {
                 order_by: [
                     { title: desc },
                 ],
+                skip: 0,
+                limit: 1,
             }
         })
         .await
@@ -164,7 +168,10 @@ async fn main() {
     println!("updated {} posts", updated_posts);
     println!("deleted {} posts", deleted_posts);
     println!("fetched {} users", users.len());
-    println!("latest user post: {}", users[0].posts[0].title);
-    println!("fetched {} posts with an in(...) filter", posts.len());
-    println!("first ordered post: {}", posts[0].title);
+    println!("latest paginated user post: {}", users[0].posts[0].title);
+    println!(
+        "fetched {} paginated posts with an in(...) filter",
+        posts.len()
+    );
+    println!("first paginated ordered post: {}", posts[0].title);
 }

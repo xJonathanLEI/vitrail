@@ -248,6 +248,83 @@ struct UserWithPostsAndCommentsOrderedDesc {
     posts: Vec<PostWithCommentsOrderedDesc>,
 }
 
+#[derive(QueryVariables)]
+struct PaginationVariables {
+    skip: i64,
+    limit: i64,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = post,
+    order_by(title = desc),
+    skip = 1,
+    limit = 1
+)]
+struct PostPageStatic {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query_schema::Schema, model = user)]
+struct UserWithPaginatedPosts {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostPageStatic>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query_schema::Schema, model = post, skip = 1, limit = 1)]
+struct PostPageStaticWithoutOrder {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(schema = crate::query_schema::Schema, model = user)]
+struct UserWithPaginatedPostsWithoutOrder {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostPageStaticWithoutOrder>,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = post,
+    variables = PaginationVariables,
+    order_by(title = desc),
+    skip = skip,
+    limit = limit
+)]
+struct PostPageWithVariables {
+    id: i64,
+    title: String,
+}
+
+#[allow(dead_code)]
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::query_schema::Schema,
+    model = user,
+    variables = PaginationVariables
+)]
+struct UserWithPaginatedPostsVariables {
+    id: i64,
+    email: String,
+    #[vitrail(include)]
+    posts: Vec<PostPageWithVariables>,
+}
+
 async fn setup_database(database_url: &str) -> i64 {
     apply_schema(
         database_url,
@@ -461,6 +538,85 @@ async fn nested_ad_hoc_order_by_query_on_postgres() {
 
     database.cleanup().await;
 }
+
+#[tokio::test]
+async fn ad_hoc_skip_and_limit_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(query! {
+            crate::query_schema,
+            post {
+                select: {
+                    id: true,
+                    title: true,
+                },
+                order_by: [
+                    { title: desc },
+                ],
+                skip: 1_i64,
+                limit: 1_i64,
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn nested_ad_hoc_skip_and_limit_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(query! {
+            crate::query_schema,
+            user {
+                select: {
+                    id: true,
+                    email: true,
+                },
+                include: {
+                    posts: {
+                        select: {
+                            id: true,
+                            title: true,
+                        },
+                        order_by: [
+                            { title: desc },
+                        ],
+                        skip: 1_i64,
+                        limit: 1_i64,
+                    },
+                },
+            }
+        })
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].id, author_id);
+    assert_eq!(users[0].posts.len(), 1);
+    assert_eq!(users[0].posts[0].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
 #[tokio::test]
 async fn ad_hoc_where_query_on_postgres() {
     let database = TestDatabase::new().await;
@@ -834,6 +990,123 @@ async fn model_first_order_by_query_on_postgres() {
     assert_eq!(users[0].posts.len(), 2);
     assert_eq!(users[0].posts[0].title, "Second post");
     assert_eq!(users[0].posts[1].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_skip_and_limit_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(crate::query_schema::query::<PostPageStatic>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn model_first_skip_and_limit_query_with_variables_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let posts = client
+        .find_many(crate::query_schema::query_with_variables::<
+            PostPageWithVariables,
+        >(PaginationVariables { skip: 1, limit: 1 }))
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn nested_model_first_skip_and_limit_query_with_variables_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(crate::query_schema::query_with_variables::<
+            UserWithPaginatedPostsVariables,
+        >(PaginationVariables { skip: 1, limit: 1 }))
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].id, author_id);
+    assert_eq!(users[0].posts.len(), 1);
+    assert_eq!(users[0].posts[0].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn nested_model_first_skip_and_limit_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(crate::query_schema::query::<UserWithPaginatedPosts>())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].id, author_id);
+    assert_eq!(users[0].posts.len(), 1);
+    assert_eq!(users[0].posts[0].title, "Hello from Vitrail");
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn nested_model_first_skip_and_limit_without_explicit_order_query_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    let author_id = setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let users = client
+        .find_many(crate::query_schema::query::<
+            UserWithPaginatedPostsWithoutOrder,
+        >())
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].id, author_id);
+    assert_eq!(users[0].posts.len(), 1);
+    assert_eq!(users[0].posts[0].title, "Second post");
 
     database.cleanup().await;
 }

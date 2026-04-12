@@ -1,6 +1,7 @@
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::ext::IdentExt;
+use syn::parse::ParseStream;
 use syn::spanned::Spanned;
 use syn::{
     Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Token, Type, parenthesized,
@@ -9,7 +10,15 @@ use syn::{
 use crate::filter::{RootFilter, parse_root_filter};
 use crate::order::{RootOrder, parse_root_orders};
 
-type QueryResultContainerAttrs = (Path, LitStr, Option<Type>, Vec<RootFilter>, Vec<RootOrder>);
+type QueryResultContainerAttrs = (
+    Path,
+    LitStr,
+    Option<Type>,
+    Vec<RootFilter>,
+    Vec<RootOrder>,
+    Option<QueryPaginationAttr>,
+    Option<QueryPaginationAttr>,
+);
 
 pub(crate) struct QueryResultDerive {
     ident: Ident,
@@ -20,14 +29,23 @@ pub(crate) struct QueryResultDerive {
     variables_ty: Option<Type>,
     root_filters: Vec<RootFilter>,
     root_orders: Vec<RootOrder>,
+    root_skip: Option<QueryPaginationAttr>,
+    root_limit: Option<QueryPaginationAttr>,
 }
 
 impl QueryResultDerive {
     pub(crate) fn parse(input: syn::DeriveInput) -> Result<Self> {
         let ident = input.ident;
         let generics = input.generics;
-        let (schema_path, model_name, variables_ty, root_filters, root_orders) =
-            parse_container_attrs(&input.attrs)?;
+        let (
+            schema_path,
+            model_name,
+            variables_ty,
+            root_filters,
+            root_orders,
+            root_skip,
+            root_limit,
+        ) = parse_container_attrs(&input.attrs)?;
 
         let Data::Struct(DataStruct {
             fields: Fields::Named(fields),
@@ -55,6 +73,8 @@ impl QueryResultDerive {
             variables_ty,
             root_filters,
             root_orders,
+            root_skip,
+            root_limit,
         })
     }
 
@@ -66,6 +86,8 @@ impl QueryResultDerive {
         let variables_ty = self.variables_ty;
         let root_filters = self.root_filters;
         let root_orders = self.root_orders;
+        let root_skip = self.root_skip;
+        let root_limit = self.root_limit;
         let scalar_fields: Vec<_> = self.fields.iter().filter(|field| !field.include).collect();
         let relation_fields: Vec<_> = self.fields.iter().filter(|field| field.include).collect();
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -77,12 +99,18 @@ impl QueryResultDerive {
             )
         }) || root_filters
             .iter()
-            .any(|filter| filter.variable().is_some()))
+            .any(|filter| filter.variable().is_some())
+            || root_skip
+                .as_ref()
+                .is_some_and(QueryPaginationAttr::is_variable)
+            || root_limit
+                .as_ref()
+                .is_some_and(QueryPaginationAttr::is_variable))
             && variables_ty.is_none()
         {
             return Err(Error::new(
                 ident.span(),
-                "query filters using `eq(...)`, `in(...)`, or `not(...)` require `#[vitrail(variables = YourVariablesType)]`",
+                "query filters using `eq(...)`, `in(...)`, `not(...)`, `skip = ...`, or `limit = ...` require `#[vitrail(variables = YourVariablesType)]`",
             ));
         }
 
@@ -179,6 +207,16 @@ impl QueryResultDerive {
         } else {
             quote! { Some(::vitrail_pg::QueryFilter::And(vec![#(#static_filter_exprs),*])) }
         };
+        let static_skip_tokens = root_skip
+            .as_ref()
+            .and_then(QueryPaginationAttr::expand_static_tokens)
+            .map(|tokens| quote! { Some(#tokens) })
+            .unwrap_or_else(|| quote! { None });
+        let static_limit_tokens = root_limit
+            .as_ref()
+            .and_then(QueryPaginationAttr::expand_static_tokens)
+            .map(|tokens| quote! { Some(#tokens) })
+            .unwrap_or_else(|| quote! { None });
         let selection_with_variables_tokens = if variables_ty.is_some() {
             let filter_exprs = {
                 let mut filters = root_filters
@@ -228,6 +266,16 @@ impl QueryResultDerive {
             } else {
                 quote! { Some(::vitrail_pg::QueryFilter::And(vec![#(#filter_exprs),*])) }
             };
+            let skip_tokens = root_skip
+                .as_ref()
+                .map(|pagination| pagination.expand_dynamic_tokens())
+                .map(|tokens| quote! { Some(#tokens) })
+                .unwrap_or_else(|| quote! { None });
+            let limit_tokens = root_limit
+                .as_ref()
+                .map(|pagination| pagination.expand_dynamic_tokens())
+                .map(|tokens| quote! { Some(#tokens) })
+                .unwrap_or_else(|| quote! { None });
 
             quote! {
                 let _ = variables;
@@ -238,6 +286,8 @@ impl QueryResultDerive {
                     relations: vec![#(#selection_relations_with_variables),*],
                     filter: #filter_tokens,
                     order_by: #order_tokens,
+                    skip: #skip_tokens,
+                    limit: #limit_tokens,
                 }
             }
         } else {
@@ -394,6 +444,20 @@ impl QueryResultDerive {
                 }
             }));
 
+            let pagination_validations = [root_skip.as_ref(), root_limit.as_ref()]
+                .into_iter()
+                .flatten()
+                .filter_map(QueryPaginationAttr::variable)
+                .collect::<Vec<_>>();
+            let pagination_type_validations = pagination_validations.iter().map(|variable| {
+                quote! {
+                    {
+                        fn __vitrail_assert_query_pagination_value_type(_: &i64) {}
+                        __vitrail_assert_query_pagination_value_type(&__vitrail_variables.#variable);
+                    }
+                }
+            });
+
             quote! {
                 impl #impl_generics #ident #ty_generics
                 #where_clause
@@ -405,6 +469,7 @@ impl QueryResultDerive {
                         if let Some(__vitrail_variables) = __vitrail_variables {
                             #(let _ = &__vitrail_variables.#validations;)*
                             #(#query_filter_type_validation_tokens)*
+                            #(#pagination_type_validations)*
                         }
                     }
                 }
@@ -495,6 +560,8 @@ impl QueryResultDerive {
                         relations: vec![#(#selection_relations),*],
                         filter: #static_filter_tokens,
                         order_by: #order_tokens,
+                        skip: #static_skip_tokens,
+                        limit: #static_limit_tokens,
                     }
                 }
 
@@ -765,6 +832,8 @@ fn parse_container_attrs(attrs: &[Attribute]) -> Result<QueryResultContainerAttr
     let mut variables_ty = None;
     let mut root_filters = Vec::new();
     let mut root_orders = Vec::new();
+    let mut root_skip = None;
+    let mut root_limit = None;
 
     for attribute in attrs {
         if !attribute.path().is_ident("vitrail") {
@@ -798,6 +867,14 @@ fn parse_container_attrs(attrs: &[Attribute]) -> Result<QueryResultContainerAttr
                 root_orders.extend(parse_root_orders(meta.input)?);
                 return Ok(());
             }
+            if meta.path.is_ident("skip") {
+                root_skip = Some(parse_query_pagination_attr(meta.value()?)?);
+                return Ok(());
+            }
+            if meta.path.is_ident("limit") {
+                root_limit = Some(parse_query_pagination_attr(meta.value()?)?);
+                return Ok(());
+            }
             Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
         })?;
     }
@@ -821,7 +898,55 @@ fn parse_container_attrs(attrs: &[Attribute]) -> Result<QueryResultContainerAttr
         variables_ty,
         root_filters,
         root_orders,
+        root_skip,
+        root_limit,
     ))
+}
+
+enum QueryPaginationAttr {
+    Value(i64),
+    Variable(Ident),
+}
+
+impl QueryPaginationAttr {
+    fn is_variable(&self) -> bool {
+        matches!(self, Self::Variable(_))
+    }
+
+    fn variable(&self) -> Option<&Ident> {
+        match self {
+            Self::Value(_) => None,
+            Self::Variable(variable) => Some(variable),
+        }
+    }
+
+    fn expand_static_tokens(&self) -> Option<TokenStream2> {
+        match self {
+            Self::Value(value) => Some(quote! { ::vitrail_pg::QueryPagination::value(#value) }),
+            Self::Variable(_) => None,
+        }
+    }
+
+    fn expand_dynamic_tokens(&self) -> TokenStream2 {
+        match self {
+            Self::Value(value) => {
+                quote! { ::vitrail_pg::QueryPagination::value(#value) }
+            }
+            Self::Variable(variable) => {
+                let variable_name = variable.to_string();
+                quote! { ::vitrail_pg::QueryPagination::variable(#variable_name) }
+            }
+        }
+    }
+}
+
+fn parse_query_pagination_attr(input: ParseStream<'_>) -> Result<QueryPaginationAttr> {
+    if input.peek(syn::LitInt) {
+        let value = input.parse::<syn::LitInt>()?.base10_parse::<i64>()?;
+        return Ok(QueryPaginationAttr::Value(value));
+    }
+
+    Ok(QueryPaginationAttr::Variable(input.call(Ident::parse_any)?))
 }
 
 pub(crate) struct QueryVariablesDerive {

@@ -73,7 +73,7 @@ schema! {
 
 ### Nested queries
 
-Selections, includes, filters, and ordering follow the relation graph directly:
+Selections, includes, filters, ordering, and pagination follow the relation graph directly:
 
 ```rust
 query! {
@@ -96,6 +96,10 @@ query! {
             select: {
               body: true,
             },
+            order_by: [
+              { body: desc },
+            ],
+            limit: 3,
           },
         },
         where: {
@@ -106,11 +110,14 @@ query! {
         order_by: [
           { title: desc },
         ],
+        skip: 5,
+        limit: 10,
       },
     },
     order_by: [
       { created_at: desc },
     ],
+    limit: 20,
   }
 }
 ```
@@ -120,9 +127,9 @@ Again, query validation happens at compile time. The statement returns typed dat
 ```rust
 let users = client.find_many(query! { ... }).await.unwrap();
 
-// Everything in the entity fetched is typed, including nested ordering
+// Everything in the entity fetched is typed
 let latest_post_title: &str = &users[0].posts[0].title;
-println!("Latest post: {latest_post_title}");
+println!("Latest post on this page: {latest_post_title}");
 ```
 
 ### Writes

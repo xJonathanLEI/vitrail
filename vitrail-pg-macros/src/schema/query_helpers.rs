@@ -335,6 +335,12 @@ impl ParsedSchema {
                             $(,
                                 order_by: $order_by:tt
                             )?
+                            $(,
+                                skip: $skip:expr
+                            )?
+                            $(,
+                                limit: $limit:expr
+                            )?
                             $(,)?
                         }
                     ) => {
@@ -343,6 +349,8 @@ impl ParsedSchema {
                             $(, include { $($include_field : $include_value),* })?
                             $(, where { $($where_field : $where_value),* })?
                             $(, order_by $order_by)?
+                            $(, skip $skip)?
+                            $(, limit $limit)?
                         }
                     };
                     (
@@ -350,6 +358,8 @@ impl ParsedSchema {
                         $(, include { $($include_field:ident : $include_value:tt),* $(,)? })?
                         $(, where { $($where_field:ident : $where_value:tt),* $(,)? })?
                         $(, order_by $order_by:tt)?
+                        $(, skip $skip:expr)?
+                        $(, limit $limit:expr)?
                         $(,)?
                     ) => {{
                         $( #dollar_crate::#module_name::#select_assert_ident!($select_field); )*
@@ -377,6 +387,14 @@ impl ParsedSchema {
                                 .chain(#dollar_crate::#module_name::#order_entries_macro_ident!($order_by))
                                 .collect()
                             )?,
+                            skip: None $(.or(Some({
+                                let __vitrail_skip: i64 = $skip;
+                                ::vitrail_pg::QueryPagination::value(__vitrail_skip)
+                            })))?,
+                            limit: None $(.or(Some({
+                                let __vitrail_limit: i64 = $limit;
+                                ::vitrail_pg::QueryPagination::value(__vitrail_limit)
+                            })))?,
                         }
                     }};
                 }
@@ -404,6 +422,12 @@ impl ParsedSchema {
                             $(,
                                 order_by: $order_by:tt
                             )?
+                            $(,
+                                skip: $skip:expr
+                            )?
+                            $(,
+                                limit: $limit:expr
+                            )?
                             $(,)?
                         }
                     ) => {
@@ -413,6 +437,8 @@ impl ParsedSchema {
                             $(, include { $($include_field : $include_value),* } )?
                             $(, where { $($where_field : $where_value),* } )?
                             $(, order_by $order_by )?
+                            $(, skip $skip )?
+                            $(, limit $limit )?
                         }
                     };
                     (
@@ -421,6 +447,8 @@ impl ParsedSchema {
                         $(, include { $($include_field:ident : $include_value:tt),* $(,)? } )?
                         $(, where { $($where_field:ident : $where_value:tt),* $(,)? } )?
                         $(, order_by $order_by:tt )?
+                        $(, skip $skip:expr )?
+                        $(, limit $limit:expr )?
                     ) => {
                         $( #dollar_crate::#module_name::#select_assert_ident!($select_field); )*
                         $( $( #dollar_crate::#module_name::#include_assert_ident!($include_field); )* )?
