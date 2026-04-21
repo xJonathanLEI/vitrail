@@ -9,7 +9,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.0.6"
+version = "0.0.7"
 repository = "https://github.com/xJonathanLEI/vitrail"
 
 [workspace.dependencies]
@@ -29,6 +29,6 @@ tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
 trybuild = "1.0.116"
 url = "2.5.8"
 uuid = "1.23.0"
-vitrail-pg-core = { version = "0.0.6", path = "./vitrail-pg-core" }
-vitrail-pg-macros = { version = "0.0.6", path = "./vitrail-pg-macros" }
-vitrail-pg = { version = "0.0.6", path = "./vitrail-pg" }
+vitrail-pg-core = { version = "0.0.7", path = "./vitrail-pg-core" }
+vitrail-pg-macros = { version = "0.0.7", path = "./vitrail-pg-macros" }
+vitrail-pg = { version = "0.0.7", path = "./vitrail-pg" }

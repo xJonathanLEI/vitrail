@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "example-app"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "example-db",
  "vitrail-pg",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "example-db"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "chrono",
  "vitrail-pg",
@@ -2030,7 +2030,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vitrail-pg"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "chrono",
  "clap",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "vitrail-pg-core"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "chrono",
  "futures-util",
@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "vitrail-pg-macros"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "chrono",
  "proc-macro2",
