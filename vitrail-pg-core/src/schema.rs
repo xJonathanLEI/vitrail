@@ -977,14 +977,14 @@ impl Field {
 
         match default.function {
             DefaultFunction::Autoincrement => {
-                if self.ty != FieldType::int() {
+                if self.ty != FieldType::int() && self.ty != FieldType::big_int() {
                     errors.push(ValidationError::new(
                         ValidationLocation::Attribute {
                             model: model_name.to_owned(),
                             field: self.name.clone(),
                             attribute: "@default".to_owned(),
                         },
-                        "`@default(autoincrement())` is only supported on `Int` fields",
+                        "`@default(autoincrement())` is only supported on `Int` and `BigInt` fields",
                     ));
                 }
             }
@@ -1094,6 +1094,10 @@ impl FieldType {
         Self::scalar(ScalarType::Int, false)
     }
 
+    pub fn big_int() -> Self {
+        Self::scalar(ScalarType::BigInt, false)
+    }
+
     pub fn string() -> Self {
         Self::scalar(ScalarType::String, false)
     }
@@ -1143,6 +1147,7 @@ impl ScalarFieldType {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarType {
     Int,
+    BigInt,
     String,
     Boolean,
     DateTime,
@@ -1156,6 +1161,7 @@ impl ScalarType {
     pub fn as_str(self) -> &'static str {
         match self {
             ScalarType::Int => "Int",
+            ScalarType::BigInt => "BigInt",
             ScalarType::String => "String",
             ScalarType::Boolean => "Boolean",
             ScalarType::DateTime => "DateTime",

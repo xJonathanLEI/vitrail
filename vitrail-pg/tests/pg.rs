@@ -9,6 +9,10 @@ pub(crate) use insert::pg_insert_schema as insert_schema;
 mod bytes;
 pub(crate) use bytes::pg_bytes_schema as bytes_schema;
 
+#[path = "pg/bigint.rs"]
+mod bigint;
+pub(crate) use bigint::pg_bigint_schema as bigint_schema;
+
 #[path = "pg/custom_types.rs"]
 mod custom_types;
 pub(crate) use custom_types::pg_custom_types_schema as custom_types_schema;

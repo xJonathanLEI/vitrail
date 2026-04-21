@@ -631,7 +631,9 @@ fn insert_value_matches_field(value: &InsertValue, field: &Field) -> bool {
 
     match value {
         InsertValue::Null => scalar.optional(),
-        InsertValue::Int(_) => scalar.scalar() == ScalarType::Int,
+        InsertValue::Int(_) => {
+            matches!(scalar.scalar(), ScalarType::Int | ScalarType::BigInt)
+        }
         InsertValue::String(_) => scalar.scalar() == ScalarType::String && !field.has_db_uuid(),
         InsertValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         InsertValue::Float(_) => scalar.scalar() == ScalarType::Float,

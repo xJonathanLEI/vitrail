@@ -1256,6 +1256,7 @@ fn parse_ident_list(input: ParseStream<'_>) -> Result<Vec<Ident>> {
 fn scalar_type_from_ident(ident: &Ident) -> Option<core::ScalarType> {
     match ident.to_string().as_str() {
         "Int" => Some(core::ScalarType::Int),
+        "BigInt" => Some(core::ScalarType::BigInt),
         "String" => Some(core::ScalarType::String),
         "Boolean" => Some(core::ScalarType::Boolean),
         "DateTime" => Some(core::ScalarType::DateTime),
@@ -1270,6 +1271,7 @@ fn scalar_type_from_ident(ident: &Ident) -> Option<core::ScalarType> {
 fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
     let base = match ty.name.to_string().as_str() {
         "Int" => quote! { i64 },
+        "BigInt" => quote! { i64 },
         "String" => quote! { String },
         "Boolean" => quote! { bool },
         "DateTime" => quote! { ::chrono::DateTime<::chrono::Utc> },
@@ -1402,6 +1404,7 @@ fn push_error(target: &mut Option<Error>, error: Error) {
 fn scalar_type_variant(scalar: core::ScalarType) -> Ident {
     match scalar {
         core::ScalarType::Int => Ident::new("Int", Span::call_site()),
+        core::ScalarType::BigInt => Ident::new("BigInt", Span::call_site()),
         core::ScalarType::String => Ident::new("String", Span::call_site()),
         core::ScalarType::Boolean => Ident::new("Boolean", Span::call_site()),
         core::ScalarType::DateTime => Ident::new("DateTime", Span::call_site()),
@@ -1504,6 +1507,33 @@ mod tests {
         });
 
         schema.validate().expect("schema should validate");
+    }
+
+    #[test]
+    fn accepts_bigint_scalar_fields() {
+        let schema = parse_schema(quote! {
+            name bigint_schema
+
+            model account {
+                id           BigInt   @id @default(autoincrement())
+                external_ref BigInt   @unique
+                invoices     invoice[]
+            }
+
+            model invoice {
+                id         BigInt  @id @default(autoincrement())
+                account_id BigInt
+                settled_at BigInt?
+                account    account @relation(fields: [account_id], references: [id])
+            }
+        });
+
+        schema.validate().expect("schema should validate");
+
+        let generated = schema.expand().expect("schema should expand").to_string();
+        assert!(generated.contains("ScalarType :: BigInt"));
+        assert!(generated.contains("settled_at"));
+        assert!(generated.contains("external_ref"));
     }
 
     #[test]

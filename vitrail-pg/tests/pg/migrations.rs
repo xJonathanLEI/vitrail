@@ -8,6 +8,7 @@ const BASE_TO_EXPANDED_SQL: &str = include_str!("../fixtures/pg_migrations/base_
 const EMPTY_TO_EXPANDED_SQL: &str = include_str!("../fixtures/pg_migrations/empty_to_expanded.sql");
 const EXTERNAL_ONLY_TO_BASE_SQL: &str =
     include_str!("../fixtures/pg_migrations/external_only_to_base.sql");
+const EMPTY_TO_BIGINT_SQL: &str = include_str!("../fixtures/pg_migrations/empty_to_bigint.sql");
 
 schema! {
     name base_schema_with_external_table
@@ -120,6 +121,27 @@ schema! {
     }
 }
 
+schema! {
+    name migration_bigint_schema
+
+    model account {
+        id           BigInt   @id @default(autoincrement())
+        external_ref BigInt   @unique
+        credit_limit BigInt
+        invoices     invoice[]
+    }
+
+    model invoice {
+        id           BigInt  @id @default(autoincrement())
+        account_id   BigInt  @index
+        amount_cents BigInt
+        settled_at   BigInt?
+        account      account @relation(fields: [account_id], references: [id])
+
+        @@unique([account_id, amount_cents])
+    }
+}
+
 fn empty_database_schema() -> PostgresSchema {
     PostgresSchema::empty()
 }
@@ -130,6 +152,10 @@ fn base_database_schema() -> PostgresSchema {
 
 fn expanded_database_schema() -> PostgresSchema {
     PostgresSchema::from_schema_access::<expanded_schema::Schema>()
+}
+
+fn bigint_database_schema() -> PostgresSchema {
+    PostgresSchema::from_schema_access::<migration_bigint_schema::Schema>()
 }
 
 #[test]
@@ -154,6 +180,14 @@ fn empty_to_expanded_direct_diff_matches_expected_sql() {
         .migrate_from(&empty_database_schema())
         .to_sql();
     assert_eq!(normalize_sql(&sql), normalize_sql(EMPTY_TO_EXPANDED_SQL));
+}
+
+#[test]
+fn empty_to_bigint_direct_diff_matches_expected_sql() {
+    let sql = bigint_database_schema()
+        .migrate_from(&empty_database_schema())
+        .to_sql();
+    assert_eq!(normalize_sql(&sql), normalize_sql(EMPTY_TO_BIGINT_SQL));
 }
 
 #[tokio::test]
@@ -182,6 +216,16 @@ async fn generated_migration_brings_empty_database_to_expanded_schema() {
         &empty_database_schema(),
         &expanded_database_schema(),
         EMPTY_TO_EXPANDED_SQL,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn generated_migration_brings_empty_database_to_bigint_schema() {
+    assert_generated_migration_roundtrips(
+        &empty_database_schema(),
+        &bigint_database_schema(),
+        EMPTY_TO_BIGINT_SQL,
     )
     .await;
 }

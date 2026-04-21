@@ -1,0 +1,25 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model account {
+  id           BigInt    @id @default(autoincrement())
+  external_ref BigInt    @unique
+  credit_limit BigInt
+  invoices     invoice[]
+}
+
+model invoice {
+  id           BigInt   @id @default(autoincrement())
+  account_id   BigInt
+  amount_cents BigInt
+  settled_at   BigInt?
+  account      account  @relation(fields: [account_id], references: [id])
+
+  @@index([account_id])
+  @@unique([account_id, amount_cents])
+}

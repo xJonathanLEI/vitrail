@@ -21,10 +21,12 @@ const paths = {
 	externalPrismaConfig: resolve(fixturesDir, "prisma.external.config.ts"),
 	baseSchema: resolve(fixturesDir, "base.prisma"),
 	expandedSchema: resolve(fixturesDir, "expanded.prisma"),
+	bigintSchema: resolve(fixturesDir, "bigint.prisma"),
 	emptyToBaseSql: resolve(fixturesDir, "empty_to_base.sql"),
 	baseToExpandedSql: resolve(fixturesDir, "base_to_expanded.sql"),
 	emptyToExpandedSql: resolve(fixturesDir, "empty_to_expanded.sql"),
 	externalOnlyToBaseSql: resolve(fixturesDir, "external_only_to_base.sql"),
+	emptyToBigintSql: resolve(fixturesDir, "empty_to_bigint.sql"),
 };
 
 const baseDatabaseUrl =
@@ -42,6 +44,7 @@ async function main() {
 	const baseToExpandedDatabase = createTemporaryDatabase(baseDatabaseUrl);
 	const emptyToExpandedDatabase = createTemporaryDatabase(baseDatabaseUrl);
 	const externalOnlyToBaseDatabase = createTemporaryDatabase(baseDatabaseUrl);
+	const emptyToBigintDatabase = createTemporaryDatabase(baseDatabaseUrl);
 
 	try {
 		const generated = {
@@ -77,6 +80,21 @@ async function main() {
 				),
 			),
 			externalOnlyToBaseSql: "",
+			emptyToBigintSql: normalizeSql(
+				runPrisma(
+					[
+						"migrate",
+						"diff",
+						"--config",
+						paths.prismaConfig,
+						"--from-config-datasource",
+						"--to-schema",
+						paths.bigintSchema,
+						"--script",
+					],
+					emptyToBigintDatabase.databaseUrl,
+				),
+			),
 		};
 
 		runPrisma(
@@ -138,6 +156,7 @@ CREATE TABLE public.external_audit_log (
 		writeFileSync(paths.baseToExpandedSql, generated.baseToExpandedSql);
 		writeFileSync(paths.emptyToExpandedSql, generated.emptyToExpandedSql);
 		writeFileSync(paths.externalOnlyToBaseSql, generated.externalOnlyToBaseSql);
+		writeFileSync(paths.emptyToBigintSql, generated.emptyToBigintSql);
 
 		console.log("Prisma fixtures regenerated.");
 	} finally {
@@ -146,6 +165,7 @@ CREATE TABLE public.external_audit_log (
 			baseToExpandedDatabase.cleanup(),
 			emptyToExpandedDatabase.cleanup(),
 			externalOnlyToBaseDatabase.cleanup(),
+			emptyToBigintDatabase.cleanup(),
 		]);
 	}
 }

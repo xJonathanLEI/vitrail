@@ -138,6 +138,7 @@ pub(super) fn generate_filter_helper_items(
             } else {
                 match field.ty.name.to_string().as_str() {
                     "Int" => quote! { i64 },
+                    "BigInt" => quote! { i64 },
                     "String" => quote! { String },
                     "Boolean" => quote! { bool },
                     "DateTime" => quote! { ::chrono::DateTime<::chrono::Utc> },

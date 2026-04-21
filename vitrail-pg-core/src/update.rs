@@ -657,7 +657,9 @@ fn update_value_matches_field(value: &UpdateValue, field: &Field) -> bool {
 
     match value {
         UpdateValue::Null => scalar.optional(),
-        UpdateValue::Int(_) => scalar.scalar() == ScalarType::Int,
+        UpdateValue::Int(_) => {
+            matches!(scalar.scalar(), ScalarType::Int | ScalarType::BigInt)
+        }
         UpdateValue::String(_) => scalar.scalar() == ScalarType::String && !field.has_db_uuid(),
         UpdateValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
         UpdateValue::Float(_) => scalar.scalar() == ScalarType::Float,

@@ -162,7 +162,11 @@ fn rejects_invalid_default_usage() {
         .build()
         .expect_err("field should fail");
 
-    assert!(error.to_string().contains("only supported on `Int` fields"));
+    assert!(
+        error
+            .to_string()
+            .contains("only supported on `Int` and `BigInt` fields")
+    );
 }
 
 #[test]

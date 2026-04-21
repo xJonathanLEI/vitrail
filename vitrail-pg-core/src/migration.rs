@@ -715,6 +715,7 @@ impl PostgresColumn {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ColumnType {
     Integer,
+    BigInt,
     Text,
     Boolean,
     Timestamp3,
@@ -729,6 +730,7 @@ impl ColumnType {
     fn from_scalar_type(scalar: ScalarType, has_db_uuid: bool) -> Self {
         match scalar {
             ScalarType::Int => Self::Integer,
+            ScalarType::BigInt => Self::BigInt,
             ScalarType::String if has_db_uuid => Self::Uuid,
             ScalarType::String => Self::Text,
             ScalarType::Boolean => Self::Boolean,
@@ -744,6 +746,8 @@ impl ColumnType {
         match udt_name {
             "int4" if default.is_some_and(|value| value.contains("nextval(")) => Self::Integer,
             "int4" => Self::Integer,
+            "int8" if default.is_some_and(|value| value.contains("nextval(")) => Self::BigInt,
+            "int8" => Self::BigInt,
             "text" | "varchar" => Self::Text,
             "bool" => Self::Boolean,
             "timestamp" | "timestamptz" => Self::Timestamp3,
@@ -760,6 +764,8 @@ impl ColumnType {
         match (self, default) {
             (Self::Integer, Some(ColumnDefault::Autoincrement)) => "SERIAL",
             (Self::Integer, _) => "INTEGER",
+            (Self::BigInt, Some(ColumnDefault::Autoincrement)) => "BIGSERIAL",
+            (Self::BigInt, _) => "BIGINT",
             (Self::Text, _) => "TEXT",
             (Self::Boolean, _) => "BOOLEAN",
             (Self::Timestamp3, _) => "TIMESTAMP(3)",

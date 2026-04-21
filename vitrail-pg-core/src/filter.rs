@@ -376,7 +376,9 @@ fn query_value_matches_field(value: &QueryVariableValue, field: &Field) -> bool 
 
     match value {
         QueryVariableValue::Null => field.ty().is_optional(),
-        QueryVariableValue::Int(_) => scalar.scalar() == ScalarType::Int,
+        QueryVariableValue::Int(_) => {
+            matches!(scalar.scalar(), ScalarType::Int | ScalarType::BigInt)
+        }
         QueryVariableValue::String(_) => {
             scalar.scalar() == ScalarType::String && !field.has_db_uuid()
         }

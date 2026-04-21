@@ -1,4 +1,4 @@
-error: `@default(autoincrement())` is only supported on `Int` fields
+error: `@default(autoincrement())` is only supported on `Int` and `BigInt` fields
  --> tests/ui/fail/invalid_default.rs:9:24
   |
 9 |         id String @id @default(autoincrement())

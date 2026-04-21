@@ -4,7 +4,7 @@ schema! {
     name my_schema
 
     model user {
-        id          Int      @id @default(autoincrement())
+        id          BigInt   @id @default(autoincrement())
         external_id String   @unique @db.Uuid
         email       String   @unique
         name        String
@@ -13,11 +13,11 @@ schema! {
     }
 
     model post {
-        id         Int      @id @default(autoincrement())
+        id         BigInt   @id @default(autoincrement())
         title      String
         body       String?
         published  Boolean
-        author_id  Int
+        author_id  BigInt
         created_at DateTime @default(now())
         author     user     @relation(fields: [author_id], references: [id])
     }
