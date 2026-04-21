@@ -2,16 +2,13 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{
-    ParsedSchema, dollar_crate, filter_helpers::generate_filter_helper_items, to_pascal_case,
-};
+use super::{ParsedSchema, filter_helpers::generate_filter_helper_items, to_pascal_case};
 
 impl ParsedSchema {
     pub(super) fn generate_delete_helper_items(&self, module_name: &Ident) -> Result<TokenStream2> {
         let main_macro_ident = format_ident!("__vitrail_delete_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
-        let dollar_crate = dollar_crate();
 
         for model in &self.models {
             let model_ident = &model.name;
@@ -80,7 +77,7 @@ impl ParsedSchema {
                     struct #root_delete_ident;
 
                     impl ::vitrail_pg::DeleteManyModel for #root_delete_ident {
-                        type Schema = #dollar_crate::#module_name::Schema;
+                        type Schema = #module_name::Schema;
                         type Variables = ::vitrail_pg::QueryVariables;
 
                         fn model_name() -> &'static str {
@@ -90,14 +87,14 @@ impl ParsedSchema {
                         fn filter_with_variables(
                             _: &::vitrail_pg::QueryVariables,
                         ) -> Option<::vitrail_pg::QueryFilter> {
-                            #dollar_crate::#module_name::#where_variable_filter_macro_ident!({
+                            #module_name::#where_variable_filter_macro_ident!({
                                 $($where_field : $where_value),*
                             })
                         }
                     }
 
-                    #dollar_crate::#module_name::delete_many_with_variables::<#root_delete_ident>(
-                        #dollar_crate::#module_name::#where_variables_macro_ident!({
+                    #module_name::delete_many_with_variables::<#root_delete_ident>(
+                        #module_name::#where_variables_macro_ident!({
                             $($where_field : $where_value),*
                         })
                     )
@@ -110,7 +107,7 @@ impl ParsedSchema {
                     struct #root_delete_ident;
 
                     impl ::vitrail_pg::DeleteManyModel for #root_delete_ident {
-                        type Schema = #dollar_crate::#module_name::Schema;
+                        type Schema = #module_name::Schema;
                         type Variables = ();
 
                         fn model_name() -> &'static str {
@@ -118,7 +115,7 @@ impl ParsedSchema {
                         }
                     }
 
-                    #dollar_crate::#module_name::delete_many::<#root_delete_ident>()
+                    #module_name::delete_many::<#root_delete_ident>()
                 }};
             });
         }

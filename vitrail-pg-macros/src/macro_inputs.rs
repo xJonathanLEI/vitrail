@@ -35,32 +35,20 @@ fn normalize_macro_body(tokens: TokenStream2) -> TokenStream2 {
 
 fn expand_helper_macro(schema_path: Path, body: TokenStream2, macro_prefix: &str) -> TokenStream2 {
     let body = normalize_macro_body(body);
-    let segments = schema_path.segments.iter().collect::<Vec<_>>();
-    let module_segment = segments
+    let module_segment = schema_path
+        .segments
         .last()
         .expect("schema path should contain at least one segment");
     let macro_ident = format_ident!("__vitrail_{}_{}", macro_prefix, module_segment.ident);
+    let schema_module_ident = &module_segment.ident;
 
-    if segments.len() == 1
-        || segments
-            .first()
-            .is_some_and(|segment| segment.ident == "crate")
-        || segments
-            .first()
-            .is_some_and(|segment| segment.ident == "self")
-    {
-        quote! {
-            #macro_ident! {
-                #body
-            }
+    quote! {{
+        use #schema_path as #schema_module_ident;
+
+        #schema_module_ident::#macro_ident! {
+            #body
         }
-    } else {
-        quote! {
-            #schema_path::#macro_ident! {
-                #body
-            }
-        }
-    }
+    }}
 }
 
 pub(crate) struct QueryMacroInput {

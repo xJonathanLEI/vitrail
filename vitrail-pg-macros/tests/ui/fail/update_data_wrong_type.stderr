@@ -15,16 +15,11 @@ help: the trait `__VitrailUpdateDataType_update_schema_post_published` is implem
 13 | | }
    | |_^
 note: required by a bound in `__vitrail_assert_update_data_field_type`
-  --> tests/ui/fail/update_data_wrong_type.rs:5:1
+  --> tests/ui/fail/update_data_wrong_type.rs:6:10
    |
- 5 | / schema! {
- 6 | |     name update_schema
- 7 | |
- 8 | |     model post {
-...  |
-13 | | }
-   | |_^ required by this bound in `__vitrail_assert_update_data_field_type`
-14 |
-15 |   #[derive(UpdateData)]
-   |            ---------- in this derive macro expansion
+ 6 |     name update_schema
+   |          ^^^^^^^^^^^^^ required by this bound in `__vitrail_assert_update_data_field_type`
+...
+15 | #[derive(UpdateData)]
+   |          ---------- in this derive macro expansion
    = note: this error originates in the macro `schema` which comes from the expansion of the derive macro `UpdateData` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -27,8 +27,6 @@ schema! {
     }
 }
 
-pub(crate) use self::transaction_schema as pg_transaction_schema;
-
 #[allow(dead_code)]
 #[derive(InsertInput)]
 #[vitrail(schema = crate::transaction::transaction_schema::Schema, model = user)]

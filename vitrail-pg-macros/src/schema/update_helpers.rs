@@ -3,8 +3,8 @@ use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
 use super::{
-    ParsedSchema, dollar_crate, filter_helpers::generate_filter_helper_items,
-    rust_field_type_tokens, schema_owned_rust_field_type_tokens, to_pascal_case,
+    ParsedSchema, filter_helpers::generate_filter_helper_items, rust_field_type_tokens,
+    schema_owned_rust_field_type_tokens, to_pascal_case,
 };
 
 impl ParsedSchema {
@@ -12,7 +12,6 @@ impl ParsedSchema {
         let main_macro_ident = format_ident!("__vitrail_update_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
-        let dollar_crate = dollar_crate();
 
         for model in &self.models {
             let model_ident = &model.name;
@@ -106,7 +105,7 @@ impl ParsedSchema {
                         ($ty:ty, #ident) => {
                             {
                                 fn __vitrail_assert_update_data_field_type<
-                                    T: #dollar_crate::#module_name::#trait_module_ident::#trait_ident
+                                    T: #module_name::#trait_module_ident::#trait_ident
                                 >() {}
                                 __vitrail_assert_update_data_field_type::<$ty>();
                             }
@@ -174,7 +173,7 @@ impl ParsedSchema {
                             [ $($fields:tt)* ]
                             [ #ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                         ) => {
-                            #dollar_crate::#module_name::#data_struct_macro_ident! {
+                            #module_name::#data_struct_macro_ident! {
                                 @struct
                                 $data_ident
                                 [ $($fields)* pub #ident: #ty, ]
@@ -198,7 +197,7 @@ impl ParsedSchema {
                             [ $($initializers:tt)* ]
                             [ #ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                         ) => {
-                            #dollar_crate::#module_name::#data_value_macro_ident! {
+                            #module_name::#data_value_macro_ident! {
                                 @value
                                 $data_ident
                                 [
@@ -261,8 +260,8 @@ impl ParsedSchema {
                         [ $($fields:tt)* ]
                         [ $other:ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                     ) => {
-                        #dollar_crate::#module_name::#data_assert_ident!($other);
-                        #dollar_crate::#module_name::#data_struct_macro_ident! {
+                        #module_name::#data_assert_ident!($other);
+                        #module_name::#data_struct_macro_ident! {
                             @struct
                             $data_ident
                             [ $($fields)* ]
@@ -273,7 +272,7 @@ impl ParsedSchema {
                         $data_ident:ident;
                         { $($data_field:ident : $data_value:expr),* $(,)? }
                     ) => {
-                        #dollar_crate::#module_name::#data_struct_macro_ident! {
+                        #module_name::#data_struct_macro_ident! {
                             @struct
                             $data_ident
                             [ ]
@@ -288,7 +287,7 @@ impl ParsedSchema {
                     ) => {
                         #[allow(dead_code)]
                         #[derive(::vitrail_pg::UpdateData)]
-                        #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #model_name)]
+                        #[vitrail(schema = #module_name::Schema, model = #model_name)]
                         struct $data_ident {
                             $($fields)*
                         }
@@ -306,7 +305,7 @@ impl ParsedSchema {
                         [ $($initializers:tt)* ]
                         [ $other:ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                     ) => {
-                        #dollar_crate::#module_name::#data_value_macro_ident! {
+                        #module_name::#data_value_macro_ident! {
                             @value
                             $data_ident
                             [ $($bindings)* ]
@@ -330,7 +329,7 @@ impl ParsedSchema {
                         $data_ident:ident;
                         { $($data_field:ident : $data_value:expr),* $(,)? }
                     ) => {{
-                        #dollar_crate::#module_name::#data_value_macro_ident! {
+                        #module_name::#data_value_macro_ident! {
                             @value
                             $data_ident
                             [ ]
@@ -362,7 +361,7 @@ impl ParsedSchema {
                         $(,)?
                     }
                 ) => {{
-                    #dollar_crate::#module_name::#data_struct_macro_ident! {
+                    #module_name::#data_struct_macro_ident! {
                         #root_data_ident;
                         { $($data_field : $data_value),* }
                     }
@@ -371,7 +370,7 @@ impl ParsedSchema {
                     struct #root_update_ident;
 
                     impl ::vitrail_pg::UpdateManyModel for #root_update_ident {
-                        type Schema = #dollar_crate::#module_name::Schema;
+                        type Schema = #module_name::Schema;
                         type Values = #root_data_ident;
                         type Variables = ::vitrail_pg::QueryVariables;
 
@@ -382,17 +381,17 @@ impl ParsedSchema {
                         fn filter_with_variables(
                             _: &::vitrail_pg::QueryVariables,
                         ) -> Option<::vitrail_pg::QueryFilter> {
-                            #dollar_crate::#module_name::#where_variable_filter_macro_ident!({
+                            #module_name::#where_variable_filter_macro_ident!({
                                 $($where_field : $where_value),*
                             })
                         }
                     }
 
-                    #dollar_crate::#module_name::update_many_with_variables::<#root_update_ident>(
-                        #dollar_crate::#module_name::#where_variables_macro_ident!({
+                    #module_name::update_many_with_variables::<#root_update_ident>(
+                        #module_name::#where_variables_macro_ident!({
                             $($where_field : $where_value),*
                         }),
-                        #dollar_crate::#module_name::#data_value_macro_ident! {
+                        #module_name::#data_value_macro_ident! {
                             #root_data_ident;
                             { $($data_field : $data_value),* }
                         }
@@ -407,7 +406,7 @@ impl ParsedSchema {
                         $(,)?
                     }
                 ) => {{
-                    #dollar_crate::#module_name::#data_struct_macro_ident! {
+                    #module_name::#data_struct_macro_ident! {
                         #root_data_ident;
                         { $($data_field : $data_value),* }
                     }
@@ -416,7 +415,7 @@ impl ParsedSchema {
                     struct #root_update_ident;
 
                     impl ::vitrail_pg::UpdateManyModel for #root_update_ident {
-                        type Schema = #dollar_crate::#module_name::Schema;
+                        type Schema = #module_name::Schema;
                         type Values = #root_data_ident;
                         type Variables = ();
 
@@ -425,7 +424,7 @@ impl ParsedSchema {
                         }
                     }
 
-                    #dollar_crate::#module_name::update_many::<#root_update_ident>(#dollar_crate::#module_name::#data_value_macro_ident! {
+                    #module_name::update_many::<#root_update_ident>(#module_name::#data_value_macro_ident! {
                         #root_data_ident;
                         { $($data_field : $data_value),* }
                     })

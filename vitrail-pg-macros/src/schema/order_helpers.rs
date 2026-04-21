@@ -2,7 +2,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedModel, ParsedSchema, dollar_crate, to_pascal_case};
+use super::{ParsedModel, ParsedSchema, to_pascal_case};
 
 pub(super) fn generate_order_helper_items(
     schema: &ParsedSchema,
@@ -15,7 +15,6 @@ pub(super) fn generate_order_helper_items(
     let model_name = LitStr::new(&model.name.to_string(), model.name.span());
     let scalar_fields = model.scalar_fields();
     let relation_fields = model.relation_fields();
-    let dollar_crate = dollar_crate();
 
     let scalar_order_path_arms = scalar_fields.iter().map(|field| {
         let ident = &field.name;
@@ -86,7 +85,7 @@ pub(super) fn generate_order_helper_items(
                     ));
                 };
                 (#ident . $($rest:ident).+) => {
-                    #dollar_crate::#module_name::#target_order_path_assert_ident!($($rest).+);
+                    #module_name::#target_order_path_assert_ident!($($rest).+);
                 };
             })
         })
@@ -148,7 +147,7 @@ pub(super) fn generate_order_helper_items(
                 ({ #ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? } }) => {{
                     ::vitrail_pg::QueryOrder::relation(
                         ::core::stringify!(#ident),
-                        #dollar_crate::#module_name::#target_order_entries_macro_ident!({
+                        #module_name::#target_order_entries_macro_ident!({
                             $($nested_field : $nested_value),+
                         }),
                     )
@@ -180,7 +179,7 @@ pub(super) fn generate_order_helper_items(
             #(#scalar_order_field_arms)*
             #(#relation_order_field_arms)*
             ({ $field:ident : $value:ident $(,)? }) => {{
-                #dollar_crate::#module_name::#order_path_assert_ident!($field);
+                #module_name::#order_path_assert_ident!($field);
                 compile_error!(concat!(
                     "unsupported query `order_by` direction `",
                     ::core::stringify!($value),
@@ -188,7 +187,7 @@ pub(super) fn generate_order_helper_items(
                 ))
             }};
             ({ $field:ident : $value:tt $(,)? }) => {{
-                #dollar_crate::#module_name::#order_path_assert_ident!($field);
+                #module_name::#order_path_assert_ident!($field);
                 compile_error!(concat!(
                     "unsupported query `order_by` entry for field `",
                     ::core::stringify!($field),
@@ -205,27 +204,27 @@ pub(super) fn generate_order_helper_items(
         macro_rules! #order_entries_macro_ident {
             ([ $entry:tt, $($rest:tt)+ ]) => {{
                 let mut __vitrail_order_by = ::std::vec![
-                    #dollar_crate::#module_name::#order_field_entry_macro_ident!($entry)
+                    #module_name::#order_field_entry_macro_ident!($entry)
                 ];
                 __vitrail_order_by.extend(
-                    #dollar_crate::#module_name::#order_entries_macro_ident!([ $($rest)+ ])
+                    #module_name::#order_entries_macro_ident!([ $($rest)+ ])
                 );
                 __vitrail_order_by
             }};
             ([ $entry:tt $(,)? ]) => {
-                ::std::vec![#dollar_crate::#module_name::#order_field_entry_macro_ident!($entry)]
+                ::std::vec![#module_name::#order_field_entry_macro_ident!($entry)]
             };
             ({ $field:ident : $value:tt, $($rest:tt)+ }) => {{
                 let mut __vitrail_order_by = ::std::vec![
-                    #dollar_crate::#module_name::#order_field_entry_macro_ident!({ $field : $value })
+                    #module_name::#order_field_entry_macro_ident!({ $field : $value })
                 ];
                 __vitrail_order_by.extend(
-                    #dollar_crate::#module_name::#order_entries_macro_ident!({ $($rest)+ })
+                    #module_name::#order_entries_macro_ident!({ $($rest)+ })
                 );
                 __vitrail_order_by
             }};
             ({ $field:ident : $value:tt $(,)? }) => {
-                ::std::vec![#dollar_crate::#module_name::#order_field_entry_macro_ident!({ $field : $value })]
+                ::std::vec![#module_name::#order_field_entry_macro_ident!({ $field : $value })]
             };
             ({}) => {
                 ::std::vec::Vec::<::vitrail_pg::QueryOrder>::new()

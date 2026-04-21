@@ -3,8 +3,7 @@ use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
 use super::{
-    ParsedSchema, dollar_crate, rust_field_type_tokens, schema_owned_rust_field_type_tokens,
-    to_pascal_case,
+    ParsedSchema, rust_field_type_tokens, schema_owned_rust_field_type_tokens, to_pascal_case,
 };
 
 impl ParsedSchema {
@@ -12,7 +11,6 @@ impl ParsedSchema {
         let main_macro_ident = format_ident!("__vitrail_insert_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
-        let dollar_crate = dollar_crate();
 
         for model in &self.models {
             let model_name = LitStr::new(&model.name.to_string(), model.name.span());
@@ -205,7 +203,7 @@ impl ParsedSchema {
                         macro_rules! #scanner_ident {
                             (#ident $(, $rest:ident)*) => {};
                             ($other:ident $(, $rest:ident)*) => {
-                                #dollar_crate::#module_name::#scanner_ident!($($rest),*);
+                                #module_name::#scanner_ident!($($rest),*);
                             };
                             () => {
                                 compile_error!(concat!(
@@ -236,7 +234,7 @@ impl ParsedSchema {
                         ($ty:ty, #ident) => {
                             {
                                 fn __vitrail_assert_insert_input_field_type<
-                                    T: #dollar_crate::#module_name::#trait_module_ident::#trait_ident
+                                    T: #module_name::#trait_module_ident::#trait_ident
                                 >() {}
                                 __vitrail_assert_insert_input_field_type::<$ty>();
                             }
@@ -260,7 +258,7 @@ impl ParsedSchema {
                         ($ty:ty, #ident) => {
                             {
                                 fn __vitrail_assert_insert_result_field_type<
-                                    T: #dollar_crate::#module_name::#trait_module_ident::#trait_ident
+                                    T: #module_name::#trait_module_ident::#trait_ident
                                 >() {}
                                 __vitrail_assert_insert_result_field_type::<$ty>();
                             }
@@ -282,7 +280,7 @@ impl ParsedSchema {
                             [ $($fields:tt)* ]
                             [ #ident : $value:expr, $($rest_field:ident : $rest_value:expr,)* ]
                         ) => {
-                            #dollar_crate::#module_name::#input_struct_macro_ident! {
+                            #module_name::#input_struct_macro_ident! {
                                 @struct
                                 $input_ident
                                 [ $($fields)* pub #ident: #ty, ]
@@ -307,7 +305,7 @@ impl ParsedSchema {
                             [ #ident, $($rest_field:ident,)* ]
                             [ $input_ident:ident ]
                         ) => {
-                            #dollar_crate::#module_name::#result_struct_macro_ident! {
+                            #module_name::#result_struct_macro_ident! {
                                 @struct
                                 $result_ident
                                 [ $($fields)* pub #ident: #ty, ]
@@ -390,7 +388,7 @@ impl ParsedSchema {
                 #[macro_export]
                 macro_rules! #input_complete_assert_ident {
                     ( $($provided:ident),* $(,)? ) => {
-                        #( #dollar_crate::#module_name::#required_input_scanner_idents!($($provided),*); )*
+                        #( #module_name::#required_input_scanner_idents!($($provided),*); )*
                     };
                 }
 
@@ -412,10 +410,10 @@ impl ParsedSchema {
                         $input_ident:ident;
                         { $($data_field:ident : $data_value:expr),* $(,)? }
                     ) => {
-                        $( #dollar_crate::#module_name::#input_assert_ident!($data_field); )*
-                        #dollar_crate::#module_name::#input_complete_assert_ident!($($data_field),*);
+                        $( #module_name::#input_assert_ident!($data_field); )*
+                        #module_name::#input_complete_assert_ident!($($data_field),*);
 
-                        #dollar_crate::#module_name::#input_struct_macro_ident! {
+                        #module_name::#input_struct_macro_ident! {
                             @struct
                             $input_ident
                             [ ]
@@ -430,7 +428,7 @@ impl ParsedSchema {
                     ) => {
                         #[allow(dead_code)]
                         #[derive(::vitrail_pg::InsertInput)]
-                        #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #model_name)]
+                        #[vitrail(schema = #module_name::Schema, model = #model_name)]
                         struct $input_ident {
                             $($fields)*
                         }
@@ -446,9 +444,9 @@ impl ParsedSchema {
                         $input_ident:ident;
                         { $($select_field:ident : true),* $(,)? }
                     ) => {
-                        $( #dollar_crate::#module_name::#result_assert_ident!($select_field); )*
+                        $( #module_name::#result_assert_ident!($select_field); )*
 
-                        #dollar_crate::#module_name::#result_struct_macro_ident! {
+                        #module_name::#result_struct_macro_ident! {
                             @struct
                             $result_ident
                             [ ]
@@ -466,7 +464,7 @@ impl ParsedSchema {
                         #[allow(dead_code)]
                         #[derive(::vitrail_pg::InsertResult)]
                         #[vitrail(
-                            schema = #dollar_crate::#module_name::Schema,
+                            schema = #module_name::Schema,
                             model = #model_name,
                             input = $input_ident
                         )]
@@ -489,18 +487,18 @@ impl ParsedSchema {
                         $(,)?
                     }
                 ) => {{
-                    #dollar_crate::#module_name::#input_struct_macro_ident! {
+                    #module_name::#input_struct_macro_ident! {
                         #root_input_ident;
                         { $($data_field : $data_value),* }
                     }
 
-                    #dollar_crate::#module_name::#result_struct_macro_ident! {
+                    #module_name::#result_struct_macro_ident! {
                         #root_result_ident;
                         #root_input_ident;
                         { $($select_field : true),* }
                     }
 
-                    #dollar_crate::#module_name::insert::<#root_result_ident>(#root_input_ident {
+                    #module_name::insert::<#root_result_ident>(#root_input_ident {
                         $($data_field : $data_value),*
                     })
                 }};
@@ -513,18 +511,18 @@ impl ParsedSchema {
                         $(,)?
                     }
                 ) => {{
-                    #dollar_crate::#module_name::#input_struct_macro_ident! {
+                    #module_name::#input_struct_macro_ident! {
                         #root_input_ident;
                         { $($data_field : $data_value),* }
                     }
 
-                    #dollar_crate::#module_name::#result_struct_macro_ident! {
+                    #module_name::#result_struct_macro_ident! {
                         #root_result_ident;
                         #root_input_ident;
                         { #( #all_scalar_field_idents : true ),* }
                     }
 
-                    #dollar_crate::#module_name::insert::<#root_result_ident>(#root_input_ident {
+                    #module_name::insert::<#root_result_ident>(#root_input_ident {
                         $($data_field : $data_value),*
                     })
                 }};

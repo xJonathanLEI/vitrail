@@ -18,4 +18,4 @@ error: missing required field `email` in insert input for model `user`
 23 | |     };
    | |_____- in this macro invocation
    |
-   = note: this error originates in the macro `$crate::insert_schema::__vitrail_scan_insert_input_field_insert_schema_user_email` which comes from the expansion of the macro `insert` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `insert_schema::__vitrail_scan_insert_input_field_insert_schema_user_email` which comes from the expansion of the macro `insert` (in Nightly builds, run with -Z macro-backtrace for more info)

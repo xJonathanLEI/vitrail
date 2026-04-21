@@ -2,7 +2,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedModel, ParsedSchema, dollar_crate, rust_field_type_tokens, to_pascal_case};
+use super::{ParsedModel, ParsedSchema, rust_field_type_tokens, to_pascal_case};
 
 pub(super) fn generate_filter_helper_items(
     schema: &ParsedSchema,
@@ -17,7 +17,6 @@ pub(super) fn generate_filter_helper_items(
     let scalar_fields = model.scalar_fields();
     let relation_fields = model.relation_fields();
     let operation_display = LitStr::new(operation, model.name.span());
-    let dollar_crate = dollar_crate();
     let operation_type_prefix = to_pascal_case(operation);
     let filter_trait_module_ident = format_ident!(
         "__vitrail_{}_filter_traits_{}_{}",
@@ -106,7 +105,7 @@ pub(super) fn generate_filter_helper_items(
                     ));
                 };
                 (#ident . $($rest:ident).+) => {
-                    #dollar_crate::#module_name::#target_where_path_assert_ident!($($rest).+);
+                    #module_name::#target_where_path_assert_ident!($($rest).+);
                 };
             })
         })
@@ -243,19 +242,19 @@ pub(super) fn generate_filter_helper_items(
             Ok(quote! {
                 (#ident, eq, $value:expr) => {{
                     fn __vitrail_assert_filter_value_type<
-                        T: #dollar_crate::#module_name::#filter_trait_module_ident::#eq_trait_ident,
+                        T: #module_name::#filter_trait_module_ident::#eq_trait_ident,
                     >(_: &T) {}
                     __vitrail_assert_filter_value_type(&$value);
                 }};
                 (#ident, in, $value:expr) => {{
                     fn __vitrail_assert_filter_value_type<
-                        T: #dollar_crate::#module_name::#filter_trait_module_ident::#in_trait_ident,
+                        T: #module_name::#filter_trait_module_ident::#in_trait_ident,
                     >(_: &T) {}
                     __vitrail_assert_filter_value_type(&$value);
                 }};
                 (#ident, not, $value:expr) => {{
                     fn __vitrail_assert_filter_value_type<
-                        T: #dollar_crate::#module_name::#filter_trait_module_ident::#eq_trait_ident,
+                        T: #module_name::#filter_trait_module_ident::#eq_trait_ident,
                     >(_: &T) {}
                     __vitrail_assert_filter_value_type(&$value);
                 }};
@@ -284,7 +283,7 @@ pub(super) fn generate_filter_helper_items(
 
             Ok(quote! {
                 (#ident . $next:ident $(. $rest:ident)*, $operator:ident, $value:expr) => {
-                    #dollar_crate::#module_name::#target_where_filter_value_assert_ident!($next $(. $rest)*, $operator, $value)
+                    #module_name::#target_where_filter_value_assert_ident!($next $(. $rest)*, $operator, $value)
                 };
             })
         })
@@ -298,14 +297,14 @@ pub(super) fn generate_filter_helper_items(
                 ::vitrail_pg::QueryFilter::is_null(::core::stringify!(#ident))
             };
             (#ident : { eq : $value:expr $(,)? }) => {{
-                #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, eq, $value);
+                #module_name::#where_filter_value_assert_ident!(#ident, eq, $value);
                 ::vitrail_pg::QueryFilter::eq(
                     ::core::stringify!(#ident),
                     ::vitrail_pg::QueryFilterValue::value($value),
                 )
             }};
             (#ident : { in : $value:expr $(,)? }) => {{
-                #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, in, $value);
+                #module_name::#where_filter_value_assert_ident!(#ident, in, $value);
                 ::vitrail_pg::QueryFilter::r#in(
                     ::core::stringify!(#ident),
                     ::vitrail_pg::QueryFilterValues::from($value),
@@ -315,7 +314,7 @@ pub(super) fn generate_filter_helper_items(
                 ::vitrail_pg::QueryFilter::is_not_null(::core::stringify!(#ident))
             };
             (#ident : { not : $value:expr $(,)? }) => {{
-                #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, not, $value);
+                #module_name::#where_filter_value_assert_ident!(#ident, not, $value);
                 ::vitrail_pg::QueryFilter::ne(
                     ::core::stringify!(#ident),
                     ::vitrail_pg::QueryFilterValue::value($value),
@@ -449,7 +448,7 @@ pub(super) fn generate_filter_helper_items(
                 (#ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
                     ::vitrail_pg::QueryFilter::relation(
                         ::core::stringify!(#ident),
-                        #dollar_crate::#module_name::#target_where_filter_macro_ident!({
+                        #module_name::#target_where_filter_macro_ident!({
                             $($nested_field : $nested_value),+
                         })
                         .expect("nested relation filter should contain at least one predicate"),
@@ -458,7 +457,7 @@ pub(super) fn generate_filter_helper_items(
                 (@variable_filter [ $($path:tt)* ] #ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
                     ::vitrail_pg::QueryFilter::relation(
                         ::core::stringify!(#ident),
-                        #dollar_crate::#module_name::#target_where_variable_filter_macro_ident!(
+                        #module_name::#target_where_variable_filter_macro_ident!(
                             @filter_block
                             [ $($path)* #ident . ]
                             { $($nested_field : $nested_value),+ }
@@ -467,7 +466,7 @@ pub(super) fn generate_filter_helper_items(
                     )
                 };
                 (@variable_entries [ $($path:tt)* ] #ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
-                    #dollar_crate::#module_name::#target_where_variable_entries_macro_ident!(
+                    #module_name::#target_where_variable_entries_macro_ident!(
                         @entries_block
                         [ $($path)* #ident . ]
                         { $($nested_field : $nested_value),+ }
@@ -485,10 +484,10 @@ pub(super) fn generate_filter_helper_items(
                     ))
                 }};
                 (@variable_filter [ $($path:tt)* ] #ident : $value:tt) => {{
-                    #dollar_crate::#module_name::#where_field_filter_macro_ident!(#ident : $value)
+                    #module_name::#where_field_filter_macro_ident!(#ident : $value)
                 }};
                 (@variable_entries [ $($path:tt)* ] #ident : $value:tt) => {
-                    #dollar_crate::#module_name::#where_field_filter_macro_ident!(#ident : $value)
+                    #module_name::#where_field_filter_macro_ident!(#ident : $value)
                 };
             })
         })
@@ -529,7 +528,7 @@ pub(super) fn generate_filter_helper_items(
                 )
             }};
             (@filter [ $($path:tt)* ] #ident : $value:tt) => {{
-                #dollar_crate::#module_name::#where_field_filter_macro_ident!(#ident : $value)
+                #module_name::#where_field_filter_macro_ident!(#ident : $value)
             }};
         }
     });
@@ -543,7 +542,7 @@ pub(super) fn generate_filter_helper_items(
             };
             (@entries [ $($path:tt)* ] #ident : { eq : $value:expr $(,)? }) => {
                 ::std::vec![{
-                    #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, eq, $value);
+                    #module_name::#where_filter_value_assert_ident!(#ident, eq, $value);
                     (
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::eq")),
                         ::vitrail_pg::QueryScalar::into_query_variable_value($value),
@@ -552,7 +551,7 @@ pub(super) fn generate_filter_helper_items(
             };
             (@entries [ $($path:tt)* ] #ident : { in : $value:expr $(,)? }) => {
                 ::std::vec![{
-                    #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, in, $value);
+                    #module_name::#where_filter_value_assert_ident!(#ident, in, $value);
                     (
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::in")),
                         ::vitrail_pg::QueryScalar::into_query_variable_value($value),
@@ -564,7 +563,7 @@ pub(super) fn generate_filter_helper_items(
             };
             (@entries [ $($path:tt)* ] #ident : { not : $value:expr $(,)? }) => {
                 ::std::vec![{
-                    #dollar_crate::#module_name::#where_filter_value_assert_ident!(#ident, not, $value);
+                    #module_name::#where_filter_value_assert_ident!(#ident, not, $value);
                     (
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::not")),
                         ::vitrail_pg::QueryScalar::into_query_variable_value($value),
@@ -572,7 +571,7 @@ pub(super) fn generate_filter_helper_items(
                 }]
             };
             (@entries [ $($path:tt)* ] #ident : $value:tt) => {{
-                #dollar_crate::#module_name::#where_field_filter_macro_ident!(#ident : $value);
+                #module_name::#where_field_filter_macro_ident!(#ident : $value);
                 ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
             }};
         }
@@ -645,7 +644,7 @@ pub(super) fn generate_filter_helper_items(
             ({ $($where_field:ident : $where_value:tt),+ $(,)? }) => {{
                 let __vitrail_filters = ::std::vec![
                     $(
-                        #dollar_crate::#module_name::#where_field_filter_macro_ident!($where_field : $where_value)
+                        #module_name::#where_field_filter_macro_ident!($where_field : $where_value)
                     ),+
                 ];
 
@@ -668,7 +667,7 @@ pub(super) fn generate_filter_helper_items(
             #(#scalar_where_field_variable_filter_arms)*
             #(#relation_where_field_arms)*
             (@filter [ $($path:tt)* ] $other:ident : $value:tt) => {{
-                #dollar_crate::#module_name::#where_field_filter_macro_ident!($other : $value)
+                #module_name::#where_field_filter_macro_ident!($other : $value)
             }};
             ($other:tt $($rest:tt)*) => {{
                 compile_error!(concat!(
@@ -686,14 +685,14 @@ pub(super) fn generate_filter_helper_items(
         macro_rules! #where_variable_filter_macro_ident {
             (@filter_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt, $($rest:tt)+ }) => {{
                 let mut __vitrail_filters = ::std::vec![
-                    #dollar_crate::#module_name::#where_field_variable_filter_macro_ident!(
+                    #module_name::#where_field_variable_filter_macro_ident!(
                         @filter
                         [ $($path)* ]
                         $where_field : $where_value
                     )
                 ];
 
-                if let Some(__vitrail_rest_filter) = #dollar_crate::#module_name::#where_variable_filter_macro_ident!(
+                if let Some(__vitrail_rest_filter) = #module_name::#where_variable_filter_macro_ident!(
                     @filter_block
                     [ $($path)* ]
                     { $($rest)+ }
@@ -717,7 +716,7 @@ pub(super) fn generate_filter_helper_items(
             }};
             (@filter_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt $(,)? }) => {{
                 Some(
-                    #dollar_crate::#module_name::#where_field_variable_filter_macro_ident!(
+                    #module_name::#where_field_variable_filter_macro_ident!(
                         @filter
                         [ $($path)* ]
                         $where_field : $where_value
@@ -734,7 +733,7 @@ pub(super) fn generate_filter_helper_items(
                 ))
             }};
             ({ $($where_tokens:tt)+ }) => {
-                #dollar_crate::#module_name::#where_variable_filter_macro_ident!(
+                #module_name::#where_variable_filter_macro_ident!(
                     @filter_block
                     [ ]
                     { $($where_tokens)+ }
@@ -746,13 +745,13 @@ pub(super) fn generate_filter_helper_items(
         #[macro_export]
         macro_rules! #where_variable_entries_macro_ident {
             (@entries_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt, $($rest:tt)+ }) => {{
-                let mut __vitrail_entries = #dollar_crate::#module_name::#where_variable_entries_macro_ident!(
+                let mut __vitrail_entries = #module_name::#where_variable_entries_macro_ident!(
                     @entries
                     [ $($path)* ]
                     $where_field : $where_value
                 );
                 __vitrail_entries.extend(
-                    #dollar_crate::#module_name::#where_variable_entries_macro_ident!(
+                    #module_name::#where_variable_entries_macro_ident!(
                         @entries_block
                         [ $($path)* ]
                         { $($rest)+ }
@@ -761,7 +760,7 @@ pub(super) fn generate_filter_helper_items(
                 __vitrail_entries
             }};
             (@entries_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt $(,)? }) => {
-                #dollar_crate::#module_name::#where_variable_entries_macro_ident!(
+                #module_name::#where_variable_entries_macro_ident!(
                     @entries
                     [ $($path)* ]
                     $where_field : $where_value
@@ -770,7 +769,7 @@ pub(super) fn generate_filter_helper_items(
             #(#scalar_where_variable_entry_arms)*
             #(#relation_where_field_arms)*
             (@entries [ $($path:tt)* ] $other:ident : $value:tt) => {{
-                #dollar_crate::#module_name::#where_field_filter_macro_ident!($other : $value);
+                #module_name::#where_field_filter_macro_ident!($other : $value);
                 ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
             }};
             ($other:tt $($rest:tt)*) => {{
@@ -798,7 +797,7 @@ pub(super) fn generate_filter_helper_items(
             }};
             ({ $($where_field:ident : $where_value:tt),+ $(,)? }) => {{
                 ::vitrail_pg::QueryVariables::from_values(
-                    #dollar_crate::#module_name::#where_variable_entries_macro_ident!(
+                    #module_name::#where_variable_entries_macro_ident!(
                         @entries_block
                         [ ]
                         { $($where_field : $where_value),+ }

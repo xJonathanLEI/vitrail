@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
 use super::{
-    ParsedSchema, dollar_crate, filter_helpers::generate_filter_helper_items,
+    ParsedSchema, filter_helpers::generate_filter_helper_items,
     order_helpers::generate_order_helper_items, rust_field_type_tokens,
     schema_owned_rust_field_type_tokens, to_pascal_case,
 };
@@ -13,7 +13,6 @@ impl ParsedSchema {
         let main_macro_ident = format_ident!("__vitrail_query_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
-        let dollar_crate = dollar_crate();
 
         for model in &self.models {
             let model_ident = &model.name;
@@ -151,13 +150,13 @@ impl ParsedSchema {
                         (#ident, $nested_ident:ident, true) => {
                             #[allow(dead_code)]
                             #[derive(::vitrail_pg::QueryResult)]
-                            #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #target_model_name)]
+                            #[vitrail(schema = #module_name::Schema, model = #target_model_name)]
                             struct $nested_ident {
                                 #(#target_scalar_fields)*
                             }
                         };
                         (#ident, $nested_ident:ident, $nested_query:tt) => {
-                            #dollar_crate::#module_name::#target_root_struct_macro_ident! {
+                            #module_name::#target_root_struct_macro_ident! {
                                 $nested_ident;
                                 $nested_query
                             }
@@ -189,12 +188,12 @@ impl ParsedSchema {
 
                     Ok(quote! {
                         (#ident, true) => {
-                            #dollar_crate::#module_name::#target_selection_macro_ident! {
+                            #module_name::#target_selection_macro_ident! {
                                 select { #( #target_scalar_field_idents : true ),* }
                             }
                         };
                         (#ident, $nested_query:tt) => {
-                            #dollar_crate::#module_name::#target_selection_macro_ident! {
+                            #module_name::#target_selection_macro_ident! {
                                 $nested_query
                             }
                         };
@@ -216,7 +215,7 @@ impl ParsedSchema {
                             [ #ident, $($rest_select:ident,)* ]
                             [ $($include_field:ident => $include_value:tt,)* ]
                         ) => {
-                            #dollar_crate::#module_name::#root_struct_macro_ident! {
+                            #module_name::#root_struct_macro_ident! {
                                 @struct
                                 $root_ident
                                 [ $($attrs)* ]
@@ -250,9 +249,9 @@ impl ParsedSchema {
                             [ ]
                             [ #ident => $include_value:tt, $($rest_include:ident => $rest_include_value:tt,)* ]
                         ) => {
-                            #dollar_crate::#module_name::#include_struct_ident!(#ident, #nested_ident, $include_value);
+                            #module_name::#include_struct_ident!(#ident, #nested_ident, $include_value);
 
-                            #dollar_crate::#module_name::#root_struct_macro_ident! {
+                            #module_name::#root_struct_macro_ident! {
                                 @struct
                                 $root_ident
                                 [ $($attrs)* ]
@@ -344,7 +343,7 @@ impl ParsedSchema {
                             $(,)?
                         }
                     ) => {
-                        #dollar_crate::#module_name::#selection_macro_ident! {
+                        #module_name::#selection_macro_ident! {
                             select { $($select_field : true),* }
                             $(, include { $($include_field : $include_value),* })?
                             $(, where { $($where_field : $where_value),* })?
@@ -362,8 +361,8 @@ impl ParsedSchema {
                         $(, limit $limit:expr)?
                         $(,)?
                     ) => {{
-                        $( #dollar_crate::#module_name::#select_assert_ident!($select_field); )*
-                        $( $( #dollar_crate::#module_name::#include_assert_ident!($include_field); )* )?
+                        $( #module_name::#select_assert_ident!($select_field); )*
+                        $( $( #module_name::#include_assert_ident!($include_field); )* )?
                         ::vitrail_pg::QuerySelection {
                             model: #model_name,
                             scalar_fields: ::std::vec![$( ::core::stringify!($select_field) ),*],
@@ -372,19 +371,19 @@ impl ParsedSchema {
                                     $(
                                         ::vitrail_pg::QueryRelationSelection {
                                             field: ::core::stringify!($include_field),
-                                            selection: #dollar_crate::#module_name::#include_selection_ident!($include_field, $include_value),
+                                            selection: #module_name::#include_selection_ident!($include_field, $include_value),
                                         }
                                     ),*
                                 )?
                             ],
                             filter: None $(.or_else(|| {
-                                #dollar_crate::#module_name::#where_filter_macro_ident!({
+                                #module_name::#where_filter_macro_ident!({
                                     $($where_field : $where_value),*
                                 })
                             }))?,
                             order_by: ::std::vec![] $(
                                 .into_iter()
-                                .chain(#dollar_crate::#module_name::#order_entries_macro_ident!($order_by))
+                                .chain(#module_name::#order_entries_macro_ident!($order_by))
                                 .collect()
                             )?,
                             skip: None $(.or(Some({
@@ -431,7 +430,7 @@ impl ParsedSchema {
                             $(,)?
                         }
                     ) => {
-                        #dollar_crate::#module_name::#root_struct_macro_ident! {
+                        #module_name::#root_struct_macro_ident! {
                             $root_ident;
                             select { $($select_field),* }
                             $(, include { $($include_field : $include_value),* } )?
@@ -450,10 +449,10 @@ impl ParsedSchema {
                         $(, skip $skip:expr )?
                         $(, limit $limit:expr )?
                     ) => {
-                        $( #dollar_crate::#module_name::#select_assert_ident!($select_field); )*
-                        $( $( #dollar_crate::#module_name::#include_assert_ident!($include_field); )* )?
+                        $( #module_name::#select_assert_ident!($select_field); )*
+                        $( $( #module_name::#include_assert_ident!($include_field); )* )?
 
-                        #dollar_crate::#module_name::#root_struct_macro_ident! {
+                        #module_name::#root_struct_macro_ident! {
                             @struct
                             $root_ident
                             [ ]
@@ -472,7 +471,7 @@ impl ParsedSchema {
                     ) => {
                         #[allow(dead_code)]
                         #[derive(::vitrail_pg::QueryResult)]
-                        #[vitrail(schema = #dollar_crate::#module_name::Schema, model = #model_name)]
+                        #[vitrail(schema = #module_name::Schema, model = #model_name)]
                         $($attrs)*
                         struct $root_ident {
                             $($fields)*
@@ -485,13 +484,13 @@ impl ParsedSchema {
                 (
                     #model_ident $query_body:tt
                 ) => {{
-                    #dollar_crate::#module_name::#root_struct_macro_ident! {
+                    #module_name::#root_struct_macro_ident! {
                         #root_struct_ident;
                         $query_body
                     }
 
-                    ::vitrail_pg::Query::<#dollar_crate::#module_name::Schema, #root_struct_ident>::with_selection(
-                        #dollar_crate::#module_name::#selection_macro_ident! {
+                    ::vitrail_pg::Query::<#module_name::Schema, #root_struct_ident>::with_selection(
+                        #module_name::#selection_macro_ident! {
                             $query_body
                         }
                     )

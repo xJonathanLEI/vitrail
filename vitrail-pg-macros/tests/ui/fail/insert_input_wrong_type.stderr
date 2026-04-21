@@ -15,16 +15,11 @@ help: the trait `__VitrailInsertInputType_insert_schema_user_email` is implement
 12 | | }
    | |_^
 note: required by a bound in `__vitrail_assert_insert_input_field_type`
-  --> tests/ui/fail/insert_input_wrong_type.rs:5:1
+  --> tests/ui/fail/insert_input_wrong_type.rs:6:10
    |
- 5 | / schema! {
- 6 | |     name insert_schema
- 7 | |
- 8 | |     model user {
-...  |
-12 | | }
-   | |_^ required by this bound in `__vitrail_assert_insert_input_field_type`
-13 |
-14 |   #[derive(InsertInput)]
-   |            ----------- in this derive macro expansion
+ 6 |     name insert_schema
+   |          ^^^^^^^^^^^^^ required by this bound in `__vitrail_assert_insert_input_field_type`
+...
+14 | #[derive(InsertInput)]
+   |          ----------- in this derive macro expansion
    = note: this error originates in the macro `schema` which comes from the expansion of the derive macro `InsertInput` (in Nightly builds, run with -Z macro-backtrace for more info)
