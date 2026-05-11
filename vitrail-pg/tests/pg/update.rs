@@ -17,13 +17,14 @@ schema! {
     }
 
     model post {
-        id        Int     @id @default(autoincrement())
-        title     String
-        body      String?
-        published Boolean
-        author_id Int
-        author    user    @relation(fields: [author_id], references: [id])
-        comments  comment[]
+        id         Int       @id @default(autoincrement())
+        title      String
+        body       String?
+        published  Boolean
+        updated_at DateTime?
+        author_id  Int
+        author     user      @relation(fields: [author_id], references: [id])
+        comments   comment[]
     }
 
     model comment {
@@ -1237,6 +1238,72 @@ fn update_helper_generates_expected_sql_for_in_filter() {
         ]
         .join(" ")
     );
+}
+
+#[tokio::test]
+async fn update_many_supports_nullable_datetime_assignments() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to postgres");
+
+    let post_id: i64 = sqlx::query_scalar(
+        r#"
+        UPDATE "post"
+        SET "updated_at" = now()
+        WHERE "title" = 'Alice draft 1'
+        RETURNING "id"::bigint
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should update post timestamp");
+
+    let updated = client
+        .update_many(update! {
+            crate::update_schema,
+            post {
+                data: {
+                    updated_at: None::<chrono::DateTime<chrono::Utc>>,
+                },
+                where: {
+                    id: {
+                        eq: post_id
+                    },
+                },
+            }
+        })
+        .await
+        .expect("update should support null datetime assignments");
+
+    assert_eq!(updated, 1);
+
+    let updated_at: Option<chrono::NaiveDateTime> = sqlx::query_scalar(
+        r#"
+        SELECT "updated_at"
+        FROM "post"
+        WHERE "id" = $1
+        "#,
+    )
+    .bind(post_id)
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch updated post");
+
+    assert_eq!(updated_at, None);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup().await;
 }
 
 #[test]

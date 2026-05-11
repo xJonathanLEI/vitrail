@@ -554,7 +554,12 @@ impl<'a> UpdateSqlBuilder<'a> {
         is_db_uuid: bool,
     ) -> Result<String, sqlx::Error> {
         let binding = match (value, scalar, is_db_uuid) {
+            (UpdateValue::Null, ScalarType::String, false) => BoundValue::NullString,
+            (UpdateValue::Null, ScalarType::Boolean, _) => BoundValue::NullBool,
+            (UpdateValue::Null, ScalarType::Float, _) => BoundValue::NullFloat,
+            (UpdateValue::Null, ScalarType::Decimal, _) => BoundValue::NullDecimal,
             (UpdateValue::Null, ScalarType::Bytes, _) => BoundValue::NullBytes,
+            (UpdateValue::Null, ScalarType::DateTime, _) => BoundValue::NullDateTime,
             (UpdateValue::Null, ScalarType::String, true) => BoundValue::NullUuid,
             (value, _, _) => value.into(),
         };
@@ -604,7 +609,12 @@ impl<'a> FilterBuilder<'a> for UpdateSqlBuilder<'a> {
 #[derive(Clone, Debug, PartialEq)]
 enum BoundValue {
     Null,
+    NullString,
+    NullBool,
+    NullFloat,
+    NullDecimal,
     NullBytes,
+    NullDateTime,
     NullUuid,
     Int(i64),
     String(String),
@@ -677,7 +687,12 @@ fn bind_update<'q>(
     for binding in bindings {
         query = match binding {
             BoundValue::Null => query.bind(Option::<i64>::None),
+            BoundValue::NullString => query.bind(Option::<String>::None),
+            BoundValue::NullBool => query.bind(Option::<bool>::None),
+            BoundValue::NullFloat => query.bind(Option::<f64>::None),
+            BoundValue::NullDecimal => query.bind(Option::<Decimal>::None),
             BoundValue::NullBytes => query.bind(Option::<Vec<u8>>::None),
+            BoundValue::NullDateTime => query.bind(Option::<chrono::DateTime<chrono::Utc>>::None),
             BoundValue::NullUuid => query.bind(Option::<Uuid>::None),
             BoundValue::Int(value) => query.bind(*value),
             BoundValue::String(value) => query.bind(value),
