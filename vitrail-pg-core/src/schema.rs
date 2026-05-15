@@ -400,6 +400,7 @@ impl Model {
             }
 
             let Some(relation) = field.relation() else {
+                self.validate_inferred_relation_cardinality(schema, field, errors);
                 continue;
             };
 
@@ -565,6 +566,72 @@ impl Model {
         }
     }
 
+    fn validate_inferred_relation_cardinality(
+        &self,
+        schema: &Schema,
+        field: &Field,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        let target_model = match schema.resolve_model(field.ty.name()) {
+            Resolution::Found(model) => model,
+            Resolution::NotFound | Resolution::Ambiguous(_) => return,
+        };
+
+        let Some(reverse_field) = target_model.fields.iter().find(|candidate| {
+            candidate.ty.name().eq_ignore_ascii_case(&self.name) && candidate.relation().is_some()
+        }) else {
+            return;
+        };
+
+        let reverse_relation = reverse_field
+            .relation()
+            .expect("reverse relation existence checked above");
+
+        if target_model.has_unique_constraint_on_fields(reverse_relation.fields())
+            && (!field.ty.is_optional() || field.ty.is_many())
+        {
+            errors.push(ValidationError::new(
+                ValidationLocation::FieldType {
+                    model: self.name.clone(),
+                    field: field.name.clone(),
+                    ty: field.ty.name().to_owned(),
+                },
+                format!(
+                    "relation back-link field `{}.{}` must be optional because `{}.{}` references it through unique relation fields; use `{}?`",
+                    self.name,
+                    field.name,
+                    target_model.name,
+                    reverse_field.name,
+                    field.ty.name()
+                ),
+            ));
+        }
+    }
+
+    fn has_unique_constraint_on_fields(&self, field_names: &[String]) -> bool {
+        if field_names.len() == 1 {
+            let field_name = &field_names[0];
+
+            if self
+                .field_named(field_name)
+                .is_some_and(|field| field.has_id() || field.has_unique())
+            {
+                return true;
+            }
+        }
+
+        let matches_fields = |candidate_fields: Vec<&str>| {
+            candidate_fields.len() == field_names.len()
+                && candidate_fields
+                    .iter()
+                    .zip(field_names)
+                    .all(|(left, right)| *left == right)
+        };
+
+        matches_fields(self.primary_key_columns())
+            || self.unique_column_sets().into_iter().any(matches_fields)
+    }
+
     pub fn field_named(&self, name: &str) -> Option<&Field> {
         self.fields.iter().find(|field| field.name == name)
     }
@@ -659,6 +726,12 @@ impl Field {
         self.attributes
             .iter()
             .any(|attribute| matches!(attribute, Attribute::Id))
+    }
+
+    pub fn has_unique(&self) -> bool {
+        self.attributes
+            .iter()
+            .any(|attribute| matches!(attribute, Attribute::Unique))
     }
 
     pub fn relation(&self) -> Option<&RelationAttribute> {
