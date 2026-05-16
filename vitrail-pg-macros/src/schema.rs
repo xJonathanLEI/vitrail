@@ -318,12 +318,12 @@ impl ParsedModel {
             .build()
     }
 
-    fn generate_schema_model(&self, schema: &ParsedSchema) -> Result<TokenStream2> {
+    fn generate_schema_model(&self) -> Result<TokenStream2> {
         let model_name = syn::LitStr::new(&self.name.to_string(), self.name.span());
         let mut fields = Vec::with_capacity(self.fields.len());
 
         for field in &self.fields {
-            fields.push(field.generate_schema_field(schema, self)?);
+            fields.push(field.generate_schema_field()?);
         }
 
         let mut attributes = Vec::with_capacity(self.attributes.len());
@@ -754,25 +754,13 @@ impl ParsedField {
             .build_for_model(model_name)
     }
 
-    fn generate_schema_field(
-        &self,
-        schema: &ParsedSchema,
-        model: &ParsedModel,
-    ) -> Result<TokenStream2> {
+    fn generate_schema_field(&self) -> Result<TokenStream2> {
         let field_name = syn::LitStr::new(&self.name.to_string(), self.name.span());
         let ty = self.ty.generate_schema_field_type();
         let mut attributes = Vec::with_capacity(self.attributes.len() + 1);
 
         for attribute in &self.attributes {
             attributes.push(attribute.generate_schema_attribute()?);
-        }
-
-        if matches!(
-            self.ty.to_core(),
-            core::FieldType::Relation { many: false, .. }
-        ) && self.relation().is_none()
-        {
-            attributes.push(schema.generate_relation_attribute(model, self)?);
         }
 
         Ok(quote! {

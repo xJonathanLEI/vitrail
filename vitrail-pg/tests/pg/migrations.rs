@@ -9,6 +9,8 @@ const EMPTY_TO_EXPANDED_SQL: &str = include_str!("../fixtures/pg_migrations/empt
 const EXTERNAL_ONLY_TO_BASE_SQL: &str =
     include_str!("../fixtures/pg_migrations/external_only_to_base.sql");
 const EMPTY_TO_BIGINT_SQL: &str = include_str!("../fixtures/pg_migrations/empty_to_bigint.sql");
+const EMPTY_TO_OPTIONAL_ONE_TO_ONE_SQL: &str =
+    include_str!("../fixtures/pg_migrations/empty_to_optional_one_to_one.sql");
 
 schema! {
     name base_schema_with_external_table
@@ -142,6 +144,21 @@ schema! {
     }
 }
 
+schema! {
+    name optional_one_to_one_schema
+
+    model user {
+        id      Int      @id @default(autoincrement())
+        profile profile?
+    }
+
+    model profile {
+        id      Int   @id @default(autoincrement())
+        user_id Int?  @unique
+        user    user? @relation(fields: [user_id], references: [id])
+    }
+}
+
 fn empty_database_schema() -> PostgresSchema {
     PostgresSchema::empty()
 }
@@ -156,6 +173,10 @@ fn expanded_database_schema() -> PostgresSchema {
 
 fn bigint_database_schema() -> PostgresSchema {
     PostgresSchema::from_schema_access::<migration_bigint_schema::Schema>()
+}
+
+fn optional_one_to_one_database_schema() -> PostgresSchema {
+    PostgresSchema::from_schema_access::<optional_one_to_one_schema::Schema>()
 }
 
 #[test]
@@ -188,6 +209,17 @@ fn empty_to_bigint_direct_diff_matches_expected_sql() {
         .migrate_from(&empty_database_schema())
         .to_sql();
     assert_eq!(normalize_sql(&sql), normalize_sql(EMPTY_TO_BIGINT_SQL));
+}
+
+#[test]
+fn empty_to_optional_one_to_one_direct_diff_matches_expected_sql() {
+    let sql = optional_one_to_one_database_schema()
+        .migrate_from(&empty_database_schema())
+        .to_sql();
+    assert_eq!(
+        normalize_sql(&sql),
+        normalize_sql(EMPTY_TO_OPTIONAL_ONE_TO_ONE_SQL)
+    );
 }
 
 #[tokio::test]
@@ -226,6 +258,16 @@ async fn generated_migration_brings_empty_database_to_bigint_schema() {
         &empty_database_schema(),
         &bigint_database_schema(),
         EMPTY_TO_BIGINT_SQL,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn generated_migration_brings_empty_database_to_optional_one_to_one_schema() {
+    assert_generated_migration_roundtrips(
+        &empty_database_schema(),
+        &optional_one_to_one_database_schema(),
+        EMPTY_TO_OPTIONAL_ONE_TO_ONE_SQL,
     )
     .await;
 }

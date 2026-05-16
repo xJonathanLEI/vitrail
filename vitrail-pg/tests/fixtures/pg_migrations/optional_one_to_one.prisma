@@ -1,0 +1,18 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model user {
+  id      Int      @id @default(autoincrement())
+  profile profile?
+}
+
+model profile {
+  id      Int   @id @default(autoincrement())
+  user_id Int?  @unique
+  user    user? @relation(fields: [user_id], references: [id])
+}

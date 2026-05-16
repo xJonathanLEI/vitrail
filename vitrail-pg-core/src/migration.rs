@@ -87,7 +87,11 @@ impl PostgresSchema {
                     columns: relation.fields().to_vec(),
                     referenced_table: field.ty().name().to_owned(),
                     referenced_columns: relation.references().to_vec(),
-                    on_delete: ForeignKeyAction::Restrict,
+                    on_delete: if field.ty().is_optional() {
+                        ForeignKeyAction::SetNull
+                    } else {
+                        ForeignKeyAction::Restrict
+                    },
                     on_update: ForeignKeyAction::Cascade,
                 });
             }

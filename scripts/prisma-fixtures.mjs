@@ -22,11 +22,16 @@ const paths = {
 	baseSchema: resolve(fixturesDir, "base.prisma"),
 	expandedSchema: resolve(fixturesDir, "expanded.prisma"),
 	bigintSchema: resolve(fixturesDir, "bigint.prisma"),
+	optionalOneToOneSchema: resolve(fixturesDir, "optional_one_to_one.prisma"),
 	emptyToBaseSql: resolve(fixturesDir, "empty_to_base.sql"),
 	baseToExpandedSql: resolve(fixturesDir, "base_to_expanded.sql"),
 	emptyToExpandedSql: resolve(fixturesDir, "empty_to_expanded.sql"),
 	externalOnlyToBaseSql: resolve(fixturesDir, "external_only_to_base.sql"),
 	emptyToBigintSql: resolve(fixturesDir, "empty_to_bigint.sql"),
+	emptyToOptionalOneToOneSql: resolve(
+		fixturesDir,
+		"empty_to_optional_one_to_one.sql",
+	),
 };
 
 const baseDatabaseUrl =
@@ -45,6 +50,8 @@ async function main() {
 	const emptyToExpandedDatabase = createTemporaryDatabase(baseDatabaseUrl);
 	const externalOnlyToBaseDatabase = createTemporaryDatabase(baseDatabaseUrl);
 	const emptyToBigintDatabase = createTemporaryDatabase(baseDatabaseUrl);
+	const emptyToOptionalOneToOneDatabase =
+		createTemporaryDatabase(baseDatabaseUrl);
 
 	try {
 		const generated = {
@@ -93,6 +100,21 @@ async function main() {
 						"--script",
 					],
 					emptyToBigintDatabase.databaseUrl,
+				),
+			),
+			emptyToOptionalOneToOneSql: normalizeSql(
+				runPrisma(
+					[
+						"migrate",
+						"diff",
+						"--config",
+						paths.prismaConfig,
+						"--from-config-datasource",
+						"--to-schema",
+						paths.optionalOneToOneSchema,
+						"--script",
+					],
+					emptyToOptionalOneToOneDatabase.databaseUrl,
 				),
 			),
 		};
@@ -157,6 +179,10 @@ CREATE TABLE public.external_audit_log (
 		writeFileSync(paths.emptyToExpandedSql, generated.emptyToExpandedSql);
 		writeFileSync(paths.externalOnlyToBaseSql, generated.externalOnlyToBaseSql);
 		writeFileSync(paths.emptyToBigintSql, generated.emptyToBigintSql);
+		writeFileSync(
+			paths.emptyToOptionalOneToOneSql,
+			generated.emptyToOptionalOneToOneSql,
+		);
 
 		console.log("Prisma fixtures regenerated.");
 	} finally {
@@ -166,6 +192,7 @@ CREATE TABLE public.external_audit_log (
 			emptyToExpandedDatabase.cleanup(),
 			externalOnlyToBaseDatabase.cleanup(),
 			emptyToBigintDatabase.cleanup(),
+			emptyToOptionalOneToOneDatabase.cleanup(),
 		]);
 	}
 }

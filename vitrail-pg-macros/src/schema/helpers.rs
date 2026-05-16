@@ -1,8 +1,8 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Error, Result};
+use syn::Result;
 
-use super::{ParsedField, ParsedModel, ParsedSchema, rust_type_alias_items};
+use super::{ParsedSchema, rust_type_alias_items};
 
 impl ParsedSchema {
     pub(super) fn generate_named_schema(&self) -> Result<TokenStream2> {
@@ -524,7 +524,7 @@ impl ParsedSchema {
             .collect::<Vec<_>>();
 
         for model in &self.models {
-            models.push(model.generate_schema_model(self)?);
+            models.push(model.generate_schema_model()?);
         }
 
         Ok(quote! {
@@ -533,102 +533,6 @@ impl ParsedSchema {
                 .external_tables(vec![#(::std::string::String::from(#external_tables)),*])
                 .build()
                 .expect("schema was validated during macro expansion")
-        })
-    }
-
-    fn find_model(&self, name: &str) -> Option<&ParsedModel> {
-        self.models
-            .iter()
-            .find(|model| self.model_names_match(&model.name.to_string(), name))
-    }
-
-    fn model_names_match(&self, left: &str, right: &str) -> bool {
-        left.eq_ignore_ascii_case(right)
-    }
-
-    fn infer_relation_fields(
-        &self,
-        model: &ParsedModel,
-        field: &ParsedField,
-        target_model: &ParsedModel,
-    ) -> Result<(Vec<syn::LitStr>, Vec<syn::LitStr>)> {
-        let reverse_relation = target_model
-            .fields
-            .iter()
-            .find(|candidate| {
-                self.model_names_match(&candidate.ty.name.to_string(), &model.name.to_string())
-                    && candidate.relation().is_some()
-            })
-            .ok_or_else(|| {
-                Error::new(
-                    field.ty.name.span(),
-                    format!(
-                        "could not infer relation metadata for `{}.{}`",
-                        model.name, field.name
-                    ),
-                )
-            })?;
-
-        let reverse_relation = reverse_relation
-            .relation()
-            .expect("reverse relation existence checked above");
-
-        let local_fields = reverse_relation
-            .references
-            .iter()
-            .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
-            .collect::<Vec<_>>();
-        let referenced_fields = reverse_relation
-            .fields
-            .iter()
-            .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
-            .collect::<Vec<_>>();
-
-        Ok((local_fields, referenced_fields))
-    }
-
-    pub(super) fn generate_relation_attribute(
-        &self,
-        model: &ParsedModel,
-        field: &ParsedField,
-    ) -> Result<TokenStream2> {
-        let (fields, references) = match field.relation() {
-            Some(relation) => (
-                relation
-                    .fields
-                    .iter()
-                    .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
-                    .collect::<Vec<_>>(),
-                relation
-                    .references
-                    .iter()
-                    .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
-                    .collect::<Vec<_>>(),
-            ),
-            None => {
-                let target_model =
-                    self.find_model(&field.ty.name.to_string()).ok_or_else(|| {
-                        Error::new(
-                            field.ty.name.span(),
-                            format!(
-                                "unknown relation target model `{}` for field `{}`",
-                                field.ty.name, field.name
-                            ),
-                        )
-                    })?;
-
-                self.infer_relation_fields(model, field, target_model)?
-            }
-        };
-
-        Ok(quote! {
-            ::vitrail_pg::Attribute::Relation(
-                ::vitrail_pg::RelationAttribute::builder()
-                    .fields(vec![#(#fields.to_owned()),*])
-                    .references(vec![#(#references.to_owned()),*])
-                    .build()
-                    .expect("relation attribute was validated during macro expansion")
-            )
         })
     }
 }
