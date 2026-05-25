@@ -22,7 +22,7 @@
 
 - Prisma-like syntax for running compile-time validated SQL queries and getting type-safe data
 - Transaction support
-- Migration script generation and management - [via the CLI](./examples/pg_migration_cli.rs) or programmatically
+- Migration script generation and management - [via the CLI](./examples/pg_migration_cli.rs) or programmatically (with easy embedding via the `embed_migrations!()` macro)
 - [Custom Rust type support](./examples/pg_custom_string_types.rs) with arbitrary mapping logic via trait implementation
 
 ## The API

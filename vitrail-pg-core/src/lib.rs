@@ -90,8 +90,8 @@ pub use migration::{
     PostgresMigration, PostgresPrimaryKey, PostgresSchema, PostgresTable,
 };
 pub use migrator::{
-    AppliedMigration, ApplyMigrationsReport, DiskMigration, GeneratedMigration, MigrationDirectory,
-    MigratorError, PostgresMigrator,
+    AppliedMigration, ApplyMigrationsReport, EmbeddedMigrations, GeneratedMigration, Migration,
+    MigrationDirectory, MigrationSource, MigratorError, PostgresMigrator,
 };
 pub use query::{
     BoxFuture, Query, QueryFilter, QueryFilterValue, QueryFilterValues, QueryModel, QueryOrder,

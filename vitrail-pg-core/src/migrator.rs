@@ -3,6 +3,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
@@ -24,6 +25,7 @@ pub enum MigratorError {
     MissingMigrationScript {
         directory: PathBuf,
     },
+    MigrationGenerationRequiresDirectory,
     CleanupFailed {
         database_name: String,
         source: sqlx::Error,
@@ -49,6 +51,10 @@ impl fmt::Display for MigratorError {
                 "migration directory `{}` does not contain `{MIGRATION_SQL_FILE_NAME}`",
                 directory.display()
             ),
+            Self::MigrationGenerationRequiresDirectory => write!(
+                f,
+                "generating migrations requires a filesystem-backed migration directory"
+            ),
             Self::CleanupFailed {
                 database_name,
                 source,
@@ -68,7 +74,8 @@ impl std::error::Error for MigratorError {
             Self::CleanupFailed { source, .. } => Some(source),
             Self::InvalidDatabaseUrl(_)
             | Self::InvalidMigrationName(_)
-            | Self::MissingMigrationScript { .. } => None,
+            | Self::MissingMigrationScript { .. }
+            | Self::MigrationGenerationRequiresDirectory => None,
         }
     }
 }
@@ -86,28 +93,92 @@ impl From<sqlx::Error> for MigratorError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DiskMigration {
+pub struct Migration {
     name: String,
-    directory: PathBuf,
-    sql_path: PathBuf,
+    directory: Option<PathBuf>,
+    sql_path: Option<PathBuf>,
     sql: String,
 }
 
-impl DiskMigration {
+impl Migration {
+    pub fn new(name: impl Into<String>, sql: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            directory: None,
+            sql_path: None,
+            sql: sql.into(),
+        }
+    }
+
+    fn from_directory(
+        name: impl Into<String>,
+        directory: impl Into<PathBuf>,
+        sql_path: impl Into<PathBuf>,
+        sql: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            directory: Some(directory.into()),
+            sql_path: Some(sql_path.into()),
+            sql: sql.into(),
+        }
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn directory(&self) -> &Path {
-        &self.directory
+    pub fn directory(&self) -> Option<&Path> {
+        self.directory.as_deref()
     }
 
-    pub fn sql_path(&self) -> &Path {
-        &self.sql_path
+    pub fn sql_path(&self) -> Option<&Path> {
+        self.sql_path.as_deref()
     }
 
     pub fn sql(&self) -> &str {
         &self.sql
+    }
+}
+
+pub trait MigrationSource: fmt::Debug + Send + Sync {
+    fn read_all(&self) -> Result<Vec<Migration>, MigratorError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedMigrations {
+    migrations: Vec<Migration>,
+}
+
+impl EmbeddedMigrations {
+    pub fn new<I, N, S>(migrations: I) -> Self
+    where
+        I: IntoIterator<Item = (N, S)>,
+        N: Into<String>,
+        S: Into<String>,
+    {
+        let mut migrations = migrations
+            .into_iter()
+            .map(|(name, sql)| Migration::new(name, sql))
+            .collect::<Vec<_>>();
+
+        migrations.sort_by(|left, right| left.name().cmp(right.name()));
+
+        Self { migrations }
+    }
+}
+
+impl MigrationSource for EmbeddedMigrations {
+    fn read_all(&self) -> Result<Vec<Migration>, MigratorError> {
+        Ok(self.migrations.clone())
+    }
+}
+
+impl MigrationSource for Vec<Migration> {
+    fn read_all(&self) -> Result<Vec<Migration>, MigratorError> {
+        let mut migrations = self.clone();
+        migrations.sort_by(|left, right| left.name().cmp(right.name()));
+        Ok(migrations)
     }
 }
 
@@ -124,28 +195,28 @@ impl AppliedMigration {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApplyMigrationsReport {
-    applied: Vec<DiskMigration>,
-    skipped: Vec<DiskMigration>,
+    applied: Vec<Migration>,
+    skipped: Vec<Migration>,
 }
 
 impl ApplyMigrationsReport {
-    pub fn applied(&self) -> &[DiskMigration] {
+    pub fn applied(&self) -> &[Migration] {
         &self.applied
     }
 
-    pub fn skipped(&self) -> &[DiskMigration] {
+    pub fn skipped(&self) -> &[Migration] {
         &self.skipped
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedMigration {
-    migration: DiskMigration,
+    migration: Migration,
     sql: String,
 }
 
 impl GeneratedMigration {
-    pub fn migration(&self) -> &DiskMigration {
+    pub fn migration(&self) -> &Migration {
         &self.migration
     }
 
@@ -173,7 +244,7 @@ impl MigrationDirectory {
         Ok(())
     }
 
-    pub fn read_all(&self) -> Result<Vec<DiskMigration>, MigratorError> {
+    pub fn read_all(&self) -> Result<Vec<Migration>, MigratorError> {
         self.ensure_exists()?;
 
         let mut entries = fs::read_dir(&self.root)?
@@ -197,12 +268,7 @@ impl MigrationDirectory {
             let sql = fs::read_to_string(&sql_path)?;
             let name = entry.file_name().to_string_lossy().into_owned();
 
-            migrations.push(DiskMigration {
-                name,
-                directory: entry.path(),
-                sql_path,
-                sql,
-            });
+            migrations.push(Migration::from_directory(name, entry.path(), sql_path, sql));
         }
 
         Ok(migrations)
@@ -212,7 +278,7 @@ impl MigrationDirectory {
         &self,
         migration_name: &str,
         sql: impl Into<String>,
-    ) -> Result<DiskMigration, MigratorError> {
+    ) -> Result<Migration, MigratorError> {
         self.ensure_exists()?;
 
         let slug = slugify_migration_name(migration_name)?;
@@ -225,8 +291,8 @@ impl MigrationDirectory {
         let sql = sql.into();
         fs::write(&sql_path, &sql)?;
 
-        Ok(DiskMigration {
-            name: directory
+        Ok(Migration::from_directory(
+            directory
                 .file_name()
                 .expect("generated migration directory should always have a file name")
                 .to_string_lossy()
@@ -234,30 +300,74 @@ impl MigrationDirectory {
             directory,
             sql_path,
             sql,
-        })
+        ))
     }
 }
 
-#[derive(Clone, Debug)]
+impl MigrationSource for MigrationDirectory {
+    fn read_all(&self) -> Result<Vec<Migration>, MigratorError> {
+        self.read_all()
+    }
+}
+
+#[derive(Clone)]
 pub struct PostgresMigrator {
     database_url: String,
-    migrations: MigrationDirectory,
+    migrations: Arc<dyn MigrationSource>,
+    migration_directory: Option<MigrationDirectory>,
+}
+
+impl fmt::Debug for PostgresMigrator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PostgresMigrator")
+            .field("database_url", &self.database_url)
+            .field("migrations", &self.migrations)
+            .field("migration_directory", &self.migration_directory)
+            .finish()
+    }
 }
 
 impl PostgresMigrator {
     pub fn new(database_url: impl Into<String>, migrations_path: impl Into<PathBuf>) -> Self {
+        let migration_directory = MigrationDirectory::new(migrations_path);
+
         Self {
             database_url: database_url.into(),
-            migrations: MigrationDirectory::new(migrations_path),
+            migrations: Arc::new(migration_directory.clone()),
+            migration_directory: Some(migration_directory),
         }
+    }
+
+    pub fn from_source(
+        database_url: impl Into<String>,
+        migrations: impl MigrationSource + 'static,
+    ) -> Self {
+        Self {
+            database_url: database_url.into(),
+            migrations: Arc::new(migrations),
+            migration_directory: None,
+        }
+    }
+
+    pub fn embedded<I, N, S>(database_url: impl Into<String>, migrations: I) -> Self
+    where
+        I: IntoIterator<Item = (N, S)>,
+        N: Into<String>,
+        S: Into<String>,
+    {
+        Self::from_source(database_url, EmbeddedMigrations::new(migrations))
     }
 
     pub fn database_url(&self) -> &str {
         &self.database_url
     }
 
-    pub fn migration_directory(&self) -> &MigrationDirectory {
-        &self.migrations
+    pub fn migration_source(&self) -> &dyn MigrationSource {
+        self.migrations.as_ref()
+    }
+
+    pub fn migration_directory(&self) -> Option<&MigrationDirectory> {
+        self.migration_directory.as_ref()
     }
 
     pub async fn applied_migrations(&self) -> Result<Vec<AppliedMigration>, MigratorError> {
@@ -315,7 +425,12 @@ impl PostgresMigrator {
     where
         S: SchemaAccess,
     {
-        self.migrations.ensure_exists()?;
+        let migration_directory = self
+            .migration_directory
+            .as_ref()
+            .ok_or(MigratorError::MigrationGenerationRequiresDirectory)?;
+
+        migration_directory.ensure_exists()?;
 
         let target_schema = PostgresSchema::from_schema_access::<S>();
         let shadow_database = ShadowDatabase::create(&self.database_url).await?;
@@ -335,9 +450,8 @@ impl PostgresMigrator {
             }
 
             let sql = migration.to_sql();
-            let disk_migration = self
-                .migrations
-                .create_migration(migration_name, sql.clone())?;
+            let disk_migration =
+                migration_directory.create_migration(migration_name, sql.clone())?;
 
             Ok(Some(GeneratedMigration {
                 migration: disk_migration,

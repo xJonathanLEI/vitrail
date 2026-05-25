@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 
 mod delete;
+mod embedded_migrations;
 mod filter;
 mod insert;
 mod macro_inputs;
@@ -10,6 +11,7 @@ mod schema;
 mod update;
 
 use delete::DeleteManyDerive;
+use embedded_migrations::EmbeddedMigrationsInput;
 use insert::{InsertInputDerive, InsertResultDerive};
 use macro_inputs::{DeleteMacroInput, InsertMacroInput, QueryMacroInput, UpdateMacroInput};
 use query::{QueryResultDerive, QueryVariablesDerive};
@@ -49,6 +51,16 @@ pub fn delete(input: TokenStream) -> TokenStream {
 pub fn update(input: TokenStream) -> TokenStream {
     let update = syn::parse_macro_input!(input as UpdateMacroInput);
     update.expand().into()
+}
+
+#[proc_macro]
+pub fn embed_migrations(input: TokenStream) -> TokenStream {
+    let migrations = syn::parse_macro_input!(input as EmbeddedMigrationsInput);
+
+    match migrations.expand() {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
 #[proc_macro_derive(QueryResult, attributes(vitrail))]

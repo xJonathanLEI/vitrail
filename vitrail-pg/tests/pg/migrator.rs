@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::support::TestDatabase;
-use vitrail_pg::{PostgresMigrator, PostgresSchema, schema};
+use sqlx::Row as _;
+use sqlx::postgres::PgPoolOptions;
+use vitrail_pg::{MigrationSource, PostgresMigrator, PostgresSchema, embed_migrations, schema};
 
 schema! {
     name migrator_base_schema
@@ -33,6 +35,95 @@ schema! {
     }
 }
 
+#[test]
+fn embed_migrations_macro_embeds_directory_migrations() {
+    let migrations = embed_migrations!("tests/fixtures/embedded_migrations");
+    let migrations = migrations
+        .read_all()
+        .expect("embedded migrations should be readable");
+
+    assert_eq!(migrations.len(), 2);
+    assert_eq!(migrations[0].name(), "20240101000000_first");
+    assert_eq!(migrations[0].sql(), "SELECT 1;\n");
+    assert_eq!(migrations[1].name(), "20240102000000_second");
+    assert_eq!(migrations[1].sql(), "SELECT 2;\n");
+}
+
+#[test]
+fn embed_migrations_macro_accepts_empty_directory() {
+    let migrations = embed_migrations!("tests/fixtures/empty_embedded_migrations");
+    let migrations = migrations
+        .read_all()
+        .expect("empty embedded migrations should be readable");
+
+    assert!(migrations.is_empty());
+}
+
+#[tokio::test]
+async fn apply_all_accepts_embedded_migrations_without_filesystem_source() {
+    let database = TestDatabase::new().await;
+    let migrator = PostgresMigrator::embedded(
+        database.url(),
+        [(
+            "20240101000000_create_embedded_table",
+            r#"
+CREATE TABLE "embedded_user" (
+    "id" SERIAL PRIMARY KEY,
+    "email" TEXT NOT NULL
+);
+"#,
+        )],
+    );
+
+    let report = migrator
+        .apply_all()
+        .await
+        .expect("should apply embedded migrations");
+
+    assert_eq!(report.applied().len(), 1);
+    assert!(report.skipped().is_empty());
+    assert_eq!(
+        report.applied()[0].name(),
+        "20240101000000_create_embedded_table"
+    );
+
+    let second_report = migrator
+        .apply_all()
+        .await
+        .expect("re-running embedded migrations should be idempotent");
+
+    assert!(second_report.applied().is_empty());
+    assert_eq!(second_report.skipped().len(), 1);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(database.url())
+        .await
+        .expect("should connect to migrated database");
+
+    let row = sqlx::query(
+        r#"
+SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'embedded_user'
+) AS "exists"
+"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should check whether embedded migration table exists");
+
+    assert!(
+        row.get::<bool, _>("exists"),
+        "embedded migration SQL should create the expected table"
+    );
+
+    pool.close().await;
+    database.cleanup().await;
+}
+
 #[tokio::test]
 async fn generate_migration_writes_directory_for_pending_change() {
     let database = TestDatabase::new().await;
@@ -51,11 +142,19 @@ async fn generate_migration_writes_directory_for_pending_change() {
         generated.migration().name()
     );
     assert!(
-        generated.migration().directory().is_dir(),
+        generated
+            .migration()
+            .directory()
+            .expect("generated migration should always have a filesystem directory")
+            .is_dir(),
         "migration directory should exist on disk"
     );
     assert!(
-        generated.migration().sql_path().is_file(),
+        generated
+            .migration()
+            .sql_path()
+            .expect("generated migration should always have a filesystem path")
+            .is_file(),
         "migration.sql should exist on disk"
     );
 
@@ -65,8 +164,13 @@ async fn generate_migration_writes_directory_for_pending_change() {
 
     assert_eq!(normalize_sql(generated.sql()), normalize_sql(&expected_sql));
 
-    let migration_sql = fs::read_to_string(generated.migration().sql_path())
-        .expect("should read generated migration from disk");
+    let migration_sql = fs::read_to_string(
+        generated
+            .migration()
+            .sql_path()
+            .expect("generated migration should always have a filesystem path"),
+    )
+    .expect("should read generated migration from disk");
     assert_eq!(normalize_sql(&migration_sql), normalize_sql(&expected_sql));
 
     remove_migrations_dir(&migrations_path);

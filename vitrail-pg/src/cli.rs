@@ -111,7 +111,11 @@ impl MigrateDevArgs {
                 println!(
                     "Created migration `{}` at `{}`",
                     generated.migration().name(),
-                    generated.migration().sql_path().display(),
+                    generated
+                        .migration()
+                        .sql_path()
+                        .expect("generated migration should always have a filesystem path")
+                        .display(),
                 );
                 print!("{}", generated.sql());
             }
@@ -167,11 +171,14 @@ impl MigrationConnectionArgs {
     async fn run_status(self) -> Result<(), Box<dyn Error>> {
         let migrator = self.migrator();
         let applied = migrator.applied_migrations().await?;
-        let disk = migrator.migration_directory().read_all()?;
+        let migration_directory = migrator
+            .migration_directory()
+            .expect("CLI migrator should always use a migration directory");
+        let disk = migration_directory.read_all()?;
 
         println!(
             "Migration directory: {}",
-            migrator.migration_directory().path().display()
+            migration_directory.path().display()
         );
         println!("Migrations on disk: {}", disk.len());
         println!("Migrations applied: {}", applied.len());

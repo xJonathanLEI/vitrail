@@ -1,4 +1,24 @@
+use crate::migrator::MigrationSource;
 use crate::*;
+
+#[test]
+fn embedded_migrations_source_orders_migrations_by_name() {
+    let migrations = EmbeddedMigrations::new([
+        ("20240102000000_second", "SELECT 2;"),
+        ("20240101000000_first", "SELECT 1;"),
+    ]);
+
+    let migrations = migrations
+        .read_all()
+        .expect("embedded migrations should be readable");
+
+    assert_eq!(migrations[0].name(), "20240101000000_first");
+    assert_eq!(migrations[0].sql(), "SELECT 1;");
+    assert!(migrations[0].directory().is_none());
+    assert!(migrations[0].sql_path().is_none());
+    assert_eq!(migrations[1].name(), "20240102000000_second");
+    assert_eq!(migrations[1].sql(), "SELECT 2;");
+}
 
 #[test]
 fn accepts_valid_schema_definition() {
