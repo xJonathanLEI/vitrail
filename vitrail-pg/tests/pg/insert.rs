@@ -37,6 +37,17 @@ schema! {
 
         @@unique([post_id, locale])
     }
+
+    model nullable_scalar {
+        id         Int       @id @default(autoincrement())
+        name       String    @unique
+        text       String?
+        published  Boolean?
+        rating     Float?
+        price      Decimal?
+        data       Bytes?
+        happened_at DateTime?
+    }
 }
 
 pub(crate) use self::insert_schema as pg_insert_schema;
@@ -411,6 +422,58 @@ async fn helper_scalar_insert_nullable_field_round_trips_as_null_on_postgres() {
     assert_eq!(stored.2, post.author_id);
 
     pool.close().await;
+    client.close().await;
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn helper_scalar_insert_explicit_nulls_round_trip_for_nullable_scalar_types_on_postgres() {
+    let database = TestDatabase::new().await;
+    let database_url = database.url().to_owned();
+
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let row = client
+        .insert(insert! {
+            crate::insert_schema,
+            nullable_scalar {
+                data: {
+                    name: "null scalars".to_owned(),
+                    text: None,
+                    published: None,
+                    rating: None,
+                    price: None,
+                    data: None,
+                    happened_at: None,
+                },
+                select: {
+                    id: true,
+                    name: true,
+                    text: true,
+                    published: true,
+                    rating: true,
+                    price: true,
+                    data: true,
+                    happened_at: true,
+                },
+            }
+        })
+        .await
+        .expect("insert with explicit null scalar values should succeed");
+
+    assert!(row.id > 0, "generated id should be returned");
+    assert_eq!(row.name, "null scalars");
+    assert_eq!(row.text, None);
+    assert_eq!(row.published, None);
+    assert_eq!(row.rating, None);
+    assert_eq!(row.price, None);
+    assert_eq!(row.data, None);
+    assert_eq!(row.happened_at, None);
+
     client.close().await;
     database.cleanup().await;
 }

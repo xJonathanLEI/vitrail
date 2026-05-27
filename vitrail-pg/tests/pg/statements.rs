@@ -1222,7 +1222,7 @@ fn helper_insert_with_nullable_field_and_subset_select_generates_expected_sql() 
         sql,
         [
             r#"INSERT INTO "post" ("title", "body", "published", "author_id")"#,
-            r#"VALUES ($1, $2, $3, $4)"#,
+            r#"VALUES ($1, $2::text, $3, $4)"#,
             r#"RETURNING"#,
             r#"("post"."id")::bigint AS "post__id","#,
             r#""post"."title" AS "post__title","#,

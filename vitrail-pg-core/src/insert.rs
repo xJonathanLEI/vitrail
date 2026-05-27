@@ -398,9 +398,34 @@ fn build_insert_sql(
                 let placeholder = format!("${}", index + 1);
                 match (field.ty(), value) {
                     (FieldType::Scalar(scalar), InsertValue::Null)
+                        if scalar.scalar() == ScalarType::String && !field.has_db_uuid() =>
+                    {
+                        format!("{placeholder}::text")
+                    }
+                    (FieldType::Scalar(scalar), InsertValue::Null)
+                        if scalar.scalar() == ScalarType::Boolean =>
+                    {
+                        format!("{placeholder}::boolean")
+                    }
+                    (FieldType::Scalar(scalar), InsertValue::Null)
+                        if scalar.scalar() == ScalarType::Float =>
+                    {
+                        format!("{placeholder}::double precision")
+                    }
+                    (FieldType::Scalar(scalar), InsertValue::Null)
+                        if scalar.scalar() == ScalarType::Decimal =>
+                    {
+                        format!("{placeholder}::numeric")
+                    }
+                    (FieldType::Scalar(scalar), InsertValue::Null)
                         if scalar.scalar() == ScalarType::Bytes =>
                     {
                         format!("{placeholder}::bytea")
+                    }
+                    (FieldType::Scalar(scalar), InsertValue::Null)
+                        if scalar.scalar() == ScalarType::DateTime =>
+                    {
+                        format!("{placeholder}::timestamp")
                     }
                     (FieldType::Scalar(_), InsertValue::Null) if field.has_db_uuid() => {
                         format!("{placeholder}::uuid")
@@ -423,9 +448,34 @@ fn build_insert_sql(
         .into_iter()
         .map(|(field, value)| match (field.ty(), value.clone()) {
             (FieldType::Scalar(scalar), InsertValue::Null)
+                if scalar.scalar() == ScalarType::String && !field.has_db_uuid() =>
+            {
+                BoundInsertValue::NullString
+            }
+            (FieldType::Scalar(scalar), InsertValue::Null)
+                if scalar.scalar() == ScalarType::Boolean =>
+            {
+                BoundInsertValue::NullBool
+            }
+            (FieldType::Scalar(scalar), InsertValue::Null)
+                if scalar.scalar() == ScalarType::Float =>
+            {
+                BoundInsertValue::NullFloat
+            }
+            (FieldType::Scalar(scalar), InsertValue::Null)
+                if scalar.scalar() == ScalarType::Decimal =>
+            {
+                BoundInsertValue::NullDecimal
+            }
+            (FieldType::Scalar(scalar), InsertValue::Null)
                 if scalar.scalar() == ScalarType::Bytes =>
             {
                 BoundInsertValue::NullBytes
+            }
+            (FieldType::Scalar(scalar), InsertValue::Null)
+                if scalar.scalar() == ScalarType::DateTime =>
+            {
+                BoundInsertValue::NullDateTime
             }
             (FieldType::Scalar(_), InsertValue::Null) if field.has_db_uuid() => {
                 BoundInsertValue::NullUuid
@@ -440,7 +490,12 @@ fn build_insert_sql(
 #[derive(Clone, Debug, PartialEq)]
 enum BoundInsertValue {
     Null,
+    NullString,
+    NullBool,
+    NullFloat,
+    NullDecimal,
     NullBytes,
+    NullDateTime,
     NullUuid,
     Int(i64),
     String(String),
@@ -671,7 +726,14 @@ fn bind_insert<'q>(
     for binding in bindings {
         query = match binding {
             BoundInsertValue::Null => query.bind(Option::<i64>::None),
+            BoundInsertValue::NullString => query.bind(Option::<String>::None),
+            BoundInsertValue::NullBool => query.bind(Option::<bool>::None),
+            BoundInsertValue::NullFloat => query.bind(Option::<f64>::None),
+            BoundInsertValue::NullDecimal => query.bind(Option::<Decimal>::None),
             BoundInsertValue::NullBytes => query.bind(Option::<Vec<u8>>::None),
+            BoundInsertValue::NullDateTime => {
+                query.bind(Option::<chrono::DateTime<chrono::Utc>>::None)
+            }
             BoundInsertValue::NullUuid => query.bind(Option::<Uuid>::None),
             BoundInsertValue::Int(value) => query.bind(*value),
             BoundInsertValue::String(value) => query.bind(value),
