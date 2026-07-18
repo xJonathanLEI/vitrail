@@ -9,8 +9,9 @@ repository.workspace = true
 description = "SQLite support for vitrail"
 
 [dependencies]
+chrono.workspace = true
 clap.workspace = true
-sqlx = { workspace = true, features = ["sqlite", "runtime-tokio"] }
+sqlx = { workspace = true, features = ["sqlite", "runtime-tokio", "chrono"] }
 vitrail-sqlite-core.workspace = true
 vitrail-sqlite-macros.workspace = true
 

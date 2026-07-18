@@ -1502,6 +1502,7 @@ fn rust_type_tokens<D: core::Dialect>(
         "Float" => quote! { f64 },
         "Decimal" => quote! { #runtime_path::rust_decimal::Decimal },
         "Bytes" => quote! { Vec<u8> },
+        "Json" => quote! { #runtime_path::serde_json::Value },
         other => {
             return Err(Error::new(
                 ty.name.span(),

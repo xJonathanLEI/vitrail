@@ -2093,6 +2093,7 @@ dependencies = [
 name = "vitrail-sqlite"
 version = "0.0.12"
 dependencies = [
+ "chrono",
  "clap",
  "sqlx",
  "tokio",
@@ -2104,6 +2105,9 @@ dependencies = [
 name = "vitrail-sqlite-core"
 version = "0.0.12"
 dependencies = [
+ "chrono",
+ "futures-util",
+ "serde_json",
  "sqlx",
  "vitrail-core",
 ]
@@ -2112,6 +2116,7 @@ dependencies = [
 name = "vitrail-sqlite-macros"
 version = "0.0.12"
 dependencies = [
+ "chrono",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

@@ -157,6 +157,7 @@ pub(super) fn generate_filter_helper_items<D: Dialect>(
                     "Float" => quote! { f64 },
                     "Decimal" => quote! { #runtime_path::rust_decimal::Decimal },
                     "Bytes" => quote! { Vec<u8> },
+                    "Json" => quote! { #runtime_path::serde_json::Value },
                     other => unreachable!("unsupported scalar field type `{other}`"),
                 }
             };

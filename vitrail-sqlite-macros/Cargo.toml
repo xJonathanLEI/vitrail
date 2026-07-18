@@ -17,6 +17,7 @@ vitrail-macros-core.workspace = true
 vitrail-sqlite-core.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 quote.workspace = true
 trybuild.workspace = true
 vitrail-sqlite-core.workspace = true

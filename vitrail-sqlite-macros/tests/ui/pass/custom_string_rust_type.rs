@@ -1,9 +1,19 @@
 pub use vitrail_sqlite_core::*;
-pub use vitrail_sqlite_macros::schema;
+pub use vitrail_sqlite_macros::{QueryResult, QueryVariables, schema};
 extern crate self as vitrail_sqlite;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PostalCode(String);
+
+impl StringValueType for PostalCode {
+    fn from_db_string(value: String) -> Result<Self, sqlx::Error> {
+        Ok(Self(value))
+    }
+
+    fn into_db_string(self) -> String {
+        self.0
+    }
+}
 
 schema! {
     name custom_string_rust_type_schema
@@ -14,4 +24,27 @@ schema! {
     }
 }
 
-fn main() {}
+#[derive(QueryVariables)]
+struct AddressVariables {
+    postal_code: PostalCode,
+}
+
+#[derive(QueryResult)]
+#[vitrail(
+    schema = crate::custom_string_rust_type_schema::Schema,
+    model = address,
+    variables = AddressVariables,
+    where(postal_code = eq(postal_code))
+)]
+struct AddressSummary {
+    id: i64,
+    postal_code: PostalCode,
+}
+
+fn main() {
+    let _ = crate::custom_string_rust_type_schema::query_with_variables::<AddressSummary>(
+        AddressVariables {
+            postal_code: PostalCode("75001".to_owned()),
+        },
+    );
+}

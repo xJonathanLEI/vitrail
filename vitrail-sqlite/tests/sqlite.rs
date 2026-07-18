@@ -7,6 +7,10 @@ mod migrations;
 #[path = "sqlite/migrator.rs"]
 mod migrator;
 
+#[path = "sqlite/query.rs"]
+mod query;
+pub(crate) use query::sqlite_query_schema as query_schema;
+
 vitrail_sqlite::schema! {
     name sqlite_facade_schema
 
