@@ -1,3 +1,6 @@
+#[path = "sqlite/migrations.rs"]
+mod migrations;
+
 vitrail_sqlite::schema! {
     name sqlite_facade_schema
 

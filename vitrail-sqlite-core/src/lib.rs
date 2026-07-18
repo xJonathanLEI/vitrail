@@ -1,6 +1,11 @@
+mod migration;
 mod schema;
 mod validation;
 
+pub use migration::{
+    ColumnDefault, ColumnType, ForeignKeyAction, SqliteColumn, SqliteForeignKey, SqliteIndex,
+    SqliteMigration, SqlitePrimaryKey, SqliteSchema, SqliteTable,
+};
 pub use schema::{
     Attribute, DefaultAttribute, DefaultFunction, Field, FieldBuilder, FieldKind, FieldType, Model,
     ModelAttribute, ModelBuilder, ModelIndexAttribute, ModelIndexAttributeBuilder,

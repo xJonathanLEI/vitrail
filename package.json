@@ -5,7 +5,9 @@
     "prisma": "prisma",
     "format": "biome format --write .",
     "format:check": "biome check --formatter-enabled=true .",
-    "generate:prisma-fixtures": "node scripts/prisma-fixtures.mjs generate"
+    "generate:prisma-fixtures": "node scripts/prisma-fixtures.mjs generate",
+    "generate:prisma-fixtures:postgres": "node scripts/prisma-fixtures.mjs postgres",
+    "generate:prisma-fixtures:sqlite": "node scripts/prisma-fixtures.mjs sqlite"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",

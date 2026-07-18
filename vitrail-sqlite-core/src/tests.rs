@@ -1,6 +1,7 @@
 use crate::{
-    Attribute, DefaultAttribute, Field, FieldType, Model, ModelAttribute, ModelPrimaryKeyAttribute,
-    RustTypeAttribute, ScalarType, Schema, ValidationError, ValidationErrors, ValidationLocation,
+    Attribute, ColumnDefault, ColumnType, DefaultAttribute, Field, FieldType, Model,
+    ModelAttribute, ModelPrimaryKeyAttribute, RustTypeAttribute, ScalarType, Schema,
+    ValidationError, ValidationErrors, ValidationLocation,
 };
 
 #[test]
@@ -48,6 +49,77 @@ fn accepts_supported_sqlite_scalar_types() {
 
     assert_eq!(schema.models().len(), 1);
     assert_eq!(schema.external_tables(), &["external_audit_log"]);
+
+    let sqlite_schema = schema.to_sqlite_schema();
+    let columns = sqlite_schema.tables()[0].columns();
+
+    assert_eq!(
+        columns
+            .iter()
+            .map(|column| column.column_type())
+            .collect::<Vec<_>>(),
+        vec![
+            ColumnType::Integer,
+            ColumnType::BigInt,
+            ColumnType::Text,
+            ColumnType::Boolean,
+            ColumnType::DateTime,
+            ColumnType::Real,
+            ColumnType::Blob,
+            ColumnType::JsonB,
+        ]
+    );
+    assert_eq!(columns[0].default(), Some(&ColumnDefault::Autoincrement));
+    assert_eq!(columns[4].default(), Some(&ColumnDefault::CurrentTimestamp));
+    assert!(
+        columns
+            .iter()
+            .enumerate()
+            .all(|(index, column)| matches!(index, 0 | 4) || column.default().is_none())
+    );
+
+    let sql = sqlite_schema
+        .migrate_from(&crate::SqliteSchema::empty())
+        .to_sql();
+
+    assert!(sql.contains(r#""id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT"#));
+    assert!(sql.contains(r#""metadata" JSONB NOT NULL"#));
+}
+
+#[test]
+fn migration_sql_escapes_programmatic_schema_identifiers() {
+    let schema = Schema::builder()
+        .model(
+            Model::builder("quoted\"table")
+                .fields(vec![
+                    Field::builder("id\"column", FieldType::int())
+                        .attributes(vec![
+                            Attribute::Id,
+                            Attribute::Default(DefaultAttribute::autoincrement()),
+                        ])
+                        .build()
+                        .expect("primary key field should build"),
+                    Field::builder("value\"column", FieldType::string())
+                        .attribute(Attribute::Unique)
+                        .build()
+                        .expect("unique field should build"),
+                ])
+                .build()
+                .expect("model should build"),
+        )
+        .build()
+        .expect("schema should build");
+
+    let sql = schema
+        .to_sqlite_schema()
+        .migrate_from(&crate::SqliteSchema::empty())
+        .to_sql();
+
+    assert!(sql.contains(r#"CREATE TABLE "quoted""table" ("#));
+    assert!(sql.contains(r#""id""column" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT"#));
+    assert!(sql.contains(
+        r#"CREATE UNIQUE INDEX "quoted""table_value""column_key" ON "quoted""table"("value""column");"#
+    ));
 }
 
 #[test]

@@ -165,6 +165,10 @@ impl Schema {
     pub fn model(&self, name: &str) -> Option<&Model> {
         self.inner.model(name)
     }
+
+    pub(crate) fn resolve_model(&self, requested: &str) -> Resolution<'_> {
+        self.inner.resolve_model(requested)
+    }
 }
 
 #[derive(Clone, Default, Eq, PartialEq)]

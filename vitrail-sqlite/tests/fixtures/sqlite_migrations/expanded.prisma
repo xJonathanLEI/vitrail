@@ -1,0 +1,63 @@
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model user {
+  id          Int      @id @default(autoincrement())
+  external_id String   @unique
+  email       String   @unique
+  name        String
+  created_at  DateTime @default(now())
+  posts       post[]
+}
+
+model post {
+  id         Int           @id @default(autoincrement())
+  public_id  String        @unique
+  title      String
+  body       String?
+  published  Boolean
+  author_id  Int
+  created_at DateTime      @default(now())
+  score      Float
+  updated_at DateTime?
+  checksum   Bytes?
+  author     user          @relation(fields: [author_id], references: [id])
+  comments   comment[]
+  locales    post_locale[]
+
+  @@index([author_id])
+  @@index([published, created_at])
+}
+
+model comment {
+  id        Int    @id @default(autoincrement())
+  public_id String @unique
+  body      String
+  post_id   Int
+  post      post   @relation(fields: [post_id], references: [id])
+}
+
+model post_locale {
+  post_id Int
+  locale  String
+  title   String
+  post    post               @relation(fields: [post_id], references: [id])
+  notes   translation_note[]
+
+  @@id([post_id, locale])
+  @@unique([post_id, title])
+  @@index([title, locale])
+}
+
+model translation_note {
+  id          Int         @id @default(autoincrement())
+  post_id     Int
+  locale      String
+  body        String
+  translation post_locale @relation(fields: [post_id, locale], references: [post_id, locale])
+}
