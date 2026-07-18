@@ -1,6 +1,6 @@
 use crate::query::{
-    QueryFilter, QueryFilterValue, QueryVariableValue, QueryVariables, column_expr, quoted_ident,
-    schema_error,
+    QueryFilter, QueryFilterValue, QueryFilterValues, QueryVariableValue, QueryVariables,
+    column_expr, quoted_ident, schema_error,
 };
 use crate::schema::{Field, FieldType, Model, Resolution, ScalarType, Schema};
 
@@ -130,10 +130,70 @@ pub(crate) fn compile_filter_sql<'a>(
                 _ => unreachable!("handled by outer match"),
             }
         }
-        QueryFilter::In { field, .. } => Err(schema_error(format!(
-            "`in` filters for field `{}.{field}` are not supported by SQLite read queries yet",
-            model.name()
-        ))),
+        QueryFilter::In { field, values } => {
+            let field = model.field_named(field).ok_or_else(|| {
+                schema_error(format!(
+                    "unknown field `{}.{}` in {} filter",
+                    model.name(),
+                    field,
+                    builder.operation_name()
+                ))
+            })?;
+
+            let scalar = match field.ty() {
+                FieldType::Scalar(scalar) => scalar.scalar(),
+                FieldType::Relation { .. } => {
+                    return Err(schema_error(format!(
+                        "field `{}.{}` is not scalar and cannot appear in {} `where`",
+                        model.name(),
+                        field.name(),
+                        builder.operation_name()
+                    )));
+                }
+            };
+
+            let bindings = resolve_filter_values(builder.variables(), values)?;
+            if bindings.is_empty() {
+                return Err(schema_error(format!(
+                    "`in` filter for field `{}.{}` requires at least one value",
+                    model.name(),
+                    field.name()
+                )));
+            }
+
+            if !query_values_match_field(&bindings, field) {
+                return Err(schema_error(format!(
+                    "filter values for field `{}.{}` are incompatible with schema type `{}`",
+                    model.name(),
+                    field.name(),
+                    field.ty().name()
+                )));
+            }
+
+            if bindings.iter().any(|binding| {
+                matches!(
+                    binding,
+                    QueryVariableValue::Null | QueryVariableValue::List(_)
+                )
+            }) {
+                return Err(schema_error(format!(
+                    "`in` filter for field `{}.{}` only supports non-null scalar values",
+                    model.name(),
+                    field.name()
+                )));
+            }
+
+            let placeholders = bindings
+                .into_iter()
+                .map(|binding| builder.push_filter_binding(binding, scalar))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(format!(
+                "{} IN ({})",
+                column_expr(table_alias, field.name(), scalar),
+                placeholders.join(", ")
+            ))
+        }
         QueryFilter::Relation { field, filter } => {
             let relation_field = model.field_named(field).ok_or_else(|| {
                 schema_error(format!(
@@ -187,6 +247,42 @@ fn resolve_filter_value(
             .get(name)
             .cloned()
             .ok_or_else(|| schema_error(format!("missing query variable `{name}`"))),
+    }
+}
+
+fn resolve_filter_values(
+    variables: &QueryVariables,
+    values: &QueryFilterValues,
+) -> Result<Vec<QueryVariableValue>, sqlx::Error> {
+    match values {
+        QueryFilterValues::Values(values) => values
+            .iter()
+            .map(|value| resolve_filter_value(variables, value))
+            .collect(),
+        QueryFilterValues::Variable(name) => {
+            let value = variables
+                .get(name)
+                .cloned()
+                .ok_or_else(|| schema_error(format!("missing query variable `{name}`")))?;
+
+            match value {
+                QueryVariableValue::List(values) => Ok(values),
+                value => Err(schema_error(format!(
+                    "query variable `{name}` must be a list for `in` filters, got `{}`",
+                    match value {
+                        QueryVariableValue::Null => "null",
+                        QueryVariableValue::Int(_) => "int",
+                        QueryVariableValue::String(_) => "string",
+                        QueryVariableValue::Bool(_) => "bool",
+                        QueryVariableValue::Float(_) => "float",
+                        QueryVariableValue::Bytes(_) => "bytes",
+                        QueryVariableValue::DateTime(_) => "datetime",
+                        QueryVariableValue::Json(_) => "json",
+                        QueryVariableValue::List(_) => unreachable!(),
+                    }
+                ))),
+            }
+        }
     }
 }
 
@@ -287,4 +383,33 @@ fn query_value_matches_field(value: &QueryVariableValue, field: &Field) -> bool 
         QueryVariableValue::Json(_) => scalar.scalar() == ScalarType::Json,
         QueryVariableValue::List(_) => false,
     }
+}
+
+fn query_values_match_field(values: &[QueryVariableValue], field: &Field) -> bool {
+    let Some(first) = values.first() else {
+        return true;
+    };
+
+    if matches!(
+        first,
+        QueryVariableValue::Null | QueryVariableValue::List(_)
+    ) {
+        return false;
+    }
+
+    values.iter().all(|value| {
+        matches!(
+            (first, value),
+            (QueryVariableValue::Int(_), QueryVariableValue::Int(_))
+                | (QueryVariableValue::String(_), QueryVariableValue::String(_))
+                | (QueryVariableValue::Bool(_), QueryVariableValue::Bool(_))
+                | (QueryVariableValue::Float(_), QueryVariableValue::Float(_))
+                | (QueryVariableValue::Bytes(_), QueryVariableValue::Bytes(_))
+                | (
+                    QueryVariableValue::DateTime(_),
+                    QueryVariableValue::DateTime(_)
+                )
+                | (QueryVariableValue::Json(_), QueryVariableValue::Json(_))
+        ) && query_value_matches_field(value, field)
+    })
 }
