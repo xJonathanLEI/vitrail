@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "vitrail-core",
     "vitrail-pg",
     "vitrail-pg-core",
     "vitrail-pg-macros",
@@ -29,6 +30,7 @@ tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
 trybuild = "1.0.116"
 url = "2.5.8"
 uuid = "1.23.0"
+vitrail-core = { version = "0.0.12", path = "./vitrail-core" }
 vitrail-pg-core = { version = "0.0.12", path = "./vitrail-pg-core" }
 vitrail-pg-macros = { version = "0.0.12", path = "./vitrail-pg-macros" }
 vitrail-pg = { version = "0.0.12", path = "./vitrail-pg" }

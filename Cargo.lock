@@ -2029,6 +2029,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vitrail-core"
+version = "0.0.12"
+dependencies = [
+ "chrono",
+ "heck",
+]
+
+[[package]]
 name = "vitrail-pg"
 version = "0.0.12"
 dependencies = [
@@ -2047,12 +2055,12 @@ version = "0.0.12"
 dependencies = [
  "chrono",
  "futures-util",
- "heck",
  "rust_decimal",
  "serde_json",
  "sqlx",
  "url",
  "uuid",
+ "vitrail-core",
 ]
 
 [[package]]

@@ -97,7 +97,7 @@ pub use query::{
     BoxFuture, Query, QueryFilter, QueryFilterValue, QueryFilterValues, QueryModel, QueryOrder,
     QueryOrderDirection, QueryPagination, QueryRelationSelection, QueryResultValue, QueryScalar,
     QuerySelection, QuerySpec, QueryValue, QueryVariableSet, QueryVariableValue, QueryVariables,
-    SchemaAccess, StringValueType, alias_name, json_array_field, json_as_bool, json_as_bytes,
+    StringValueType, alias_name, json_array_field, json_as_bool, json_as_bytes,
     json_as_datetime_utc, json_as_decimal, json_as_f64, json_as_i64, json_as_string, json_value,
     parse_decimal, query_model_is_null, row_as_bytes, row_as_datetime_utc, row_as_decimal,
     row_value, schema_error,
@@ -107,7 +107,7 @@ pub use schema::{
     ModelAttribute, ModelBuilder, ModelIndexAttribute, ModelIndexAttributeBuilder,
     ModelPrimaryKeyAttribute, ModelPrimaryKeyAttributeBuilder, ModelUniqueAttribute,
     ModelUniqueAttributeBuilder, RelationAttribute, RelationAttributeBuilder, Resolution,
-    RustTypeAttribute, ScalarFieldType, ScalarType, Schema, SchemaBuilder,
+    RustTypeAttribute, ScalarFieldType, ScalarType, Schema, SchemaAccess, SchemaBuilder,
 };
 pub use transaction::{TransactionIsolationLevel, TransactionOptions, VitrailTransaction};
 pub use update::{

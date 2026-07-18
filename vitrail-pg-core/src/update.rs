@@ -9,10 +9,10 @@ use uuid::Uuid;
 use crate::PgExecutor;
 use crate::filter::{FilterBuilder, compile_filter_sql, schema_model as resolve_schema_model};
 use crate::query::{
-    BoxFuture, QueryFilter, QueryVariableSet, QueryVariableValue, QueryVariables, SchemaAccess,
-    StringValueType, quoted_ident, schema_error,
+    BoxFuture, QueryFilter, QueryVariableSet, QueryVariableValue, QueryVariables, StringValueType,
+    quoted_ident, schema_error,
 };
-use crate::schema::{Field, FieldType, Model, ScalarType, Schema};
+use crate::schema::{Field, FieldType, Model, ScalarType, Schema, SchemaAccess};
 
 /// Runtime contract implemented by executable update values.
 pub trait UpdateSpec: Send + Sync {

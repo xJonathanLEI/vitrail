@@ -1,19 +1,31 @@
 use std::collections::BTreeSet;
 use std::fmt;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::Utc;
 use sqlx::Connection as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgConnection, PgPool, PgPoolOptions};
+use vitrail_core::migrations::{
+    AppliedMigration as SharedAppliedMigration,
+    ApplyMigrationsReport as SharedApplyMigrationsReport,
+    EmbeddedMigrations as SharedEmbeddedMigrations, GeneratedMigration as SharedGeneratedMigration,
+    MIGRATION_SQL_FILE_NAME, Migration as SharedMigration,
+    MigrationDirectory as SharedMigrationDirectory, MigrationSource as SharedMigrationSource,
+    MigrationSourceError, new_applied_migration, new_apply_migrations_report,
+    new_generated_migration,
+};
 
+use crate::schema::PostgresDialect;
 use crate::{PostgresMigration, PostgresSchema, SchemaAccess};
 
-const MIGRATION_SQL_FILE_NAME: &str = "migration.sql";
+pub type Migration = SharedMigration<PostgresDialect>;
+pub type EmbeddedMigrations = SharedEmbeddedMigrations<PostgresDialect>;
+pub type AppliedMigration = SharedAppliedMigration<PostgresDialect>;
+pub type ApplyMigrationsReport = SharedApplyMigrationsReport<PostgresDialect>;
+pub type GeneratedMigration = SharedGeneratedMigration<PostgresDialect>;
 pub const POSTGRES_MIGRATION_HISTORY_TABLE_NAME: &str = "_vitrail_migrations";
 
 #[derive(Debug)]
@@ -86,58 +98,21 @@ impl From<io::Error> for MigratorError {
     }
 }
 
+impl From<MigrationSourceError> for MigratorError {
+    fn from(value: MigrationSourceError) -> Self {
+        match value {
+            MigrationSourceError::Io(error) => Self::Io(error),
+            MigrationSourceError::InvalidMigrationName(name) => Self::InvalidMigrationName(name),
+            MigrationSourceError::MissingMigrationScript { directory } => {
+                Self::MissingMigrationScript { directory }
+            }
+        }
+    }
+}
+
 impl From<sqlx::Error> for MigratorError {
     fn from(value: sqlx::Error) -> Self {
         Self::Sqlx(value)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Migration {
-    name: String,
-    directory: Option<PathBuf>,
-    sql_path: Option<PathBuf>,
-    sql: String,
-}
-
-impl Migration {
-    pub fn new(name: impl Into<String>, sql: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            directory: None,
-            sql_path: None,
-            sql: sql.into(),
-        }
-    }
-
-    fn from_directory(
-        name: impl Into<String>,
-        directory: impl Into<PathBuf>,
-        sql_path: impl Into<PathBuf>,
-        sql: impl Into<String>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            directory: Some(directory.into()),
-            sql_path: Some(sql_path.into()),
-            sql: sql.into(),
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn directory(&self) -> Option<&Path> {
-        self.directory.as_deref()
-    }
-
-    pub fn sql_path(&self) -> Option<&Path> {
-        self.sql_path.as_deref()
-    }
-
-    pub fn sql(&self) -> &str {
-        &self.sql
     }
 }
 
@@ -145,133 +120,46 @@ pub trait MigrationSource: fmt::Debug + Send + Sync {
     fn read_all(&self) -> Result<Vec<Migration>, MigratorError>;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EmbeddedMigrations {
-    migrations: Vec<Migration>,
-}
-
-impl EmbeddedMigrations {
-    pub fn new<I, N, S>(migrations: I) -> Self
-    where
-        I: IntoIterator<Item = (N, S)>,
-        N: Into<String>,
-        S: Into<String>,
-    {
-        let mut migrations = migrations
-            .into_iter()
-            .map(|(name, sql)| Migration::new(name, sql))
-            .collect::<Vec<_>>();
-
-        migrations.sort_by(|left, right| left.name().cmp(right.name()));
-
-        Self { migrations }
-    }
-}
-
 impl MigrationSource for EmbeddedMigrations {
     fn read_all(&self) -> Result<Vec<Migration>, MigratorError> {
-        Ok(self.migrations.clone())
+        <Self as SharedMigrationSource<PostgresDialect>>::read_all(self).map_err(Into::into)
     }
 }
 
 impl MigrationSource for Vec<Migration> {
     fn read_all(&self) -> Result<Vec<Migration>, MigratorError> {
-        let mut migrations = self.clone();
-        migrations.sort_by(|left, right| left.name().cmp(right.name()));
-        Ok(migrations)
+        <Self as SharedMigrationSource<PostgresDialect>>::read_all(self).map_err(Into::into)
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AppliedMigration {
-    name: String,
-}
-
-impl AppliedMigration {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ApplyMigrationsReport {
-    applied: Vec<Migration>,
-    skipped: Vec<Migration>,
-}
-
-impl ApplyMigrationsReport {
-    pub fn applied(&self) -> &[Migration] {
-        &self.applied
-    }
-
-    pub fn skipped(&self) -> &[Migration] {
-        &self.skipped
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GeneratedMigration {
-    migration: Migration,
-    sql: String,
-}
-
-impl GeneratedMigration {
-    pub fn migration(&self) -> &Migration {
-        &self.migration
-    }
-
-    pub fn sql(&self) -> &str {
-        &self.sql
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MigrationDirectory {
-    root: PathBuf,
+    inner: SharedMigrationDirectory<PostgresDialect>,
+}
+
+impl fmt::Debug for MigrationDirectory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
 }
 
 impl MigrationDirectory {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { root: path.into() }
+        Self {
+            inner: SharedMigrationDirectory::new(path),
+        }
     }
 
     pub fn path(&self) -> &Path {
-        &self.root
+        self.inner.path()
     }
 
     pub fn ensure_exists(&self) -> Result<(), MigratorError> {
-        fs::create_dir_all(&self.root)?;
-        Ok(())
+        self.inner.ensure_exists().map_err(Into::into)
     }
 
     pub fn read_all(&self) -> Result<Vec<Migration>, MigratorError> {
-        self.ensure_exists()?;
-
-        let mut entries = fs::read_dir(&self.root)?
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
-            .collect::<Vec<_>>();
-
-        entries.sort_by_key(|entry| entry.file_name());
-
-        let mut migrations = Vec::with_capacity(entries.len());
-
-        for entry in entries {
-            let directory = entry.path();
-            let sql_path = directory.join(MIGRATION_SQL_FILE_NAME);
-
-            if !sql_path.is_file() {
-                return Err(MigratorError::MissingMigrationScript { directory });
-            }
-
-            let sql = fs::read_to_string(&sql_path)?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-
-            migrations.push(Migration::from_directory(name, entry.path(), sql_path, sql));
-        }
-
-        Ok(migrations)
+        self.inner.read_all().map_err(Into::into)
     }
 
     pub fn create_migration(
@@ -279,34 +167,15 @@ impl MigrationDirectory {
         migration_name: &str,
         sql: impl Into<String>,
     ) -> Result<Migration, MigratorError> {
-        self.ensure_exists()?;
-
-        let slug = slugify_migration_name(migration_name)?;
-        let timestamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
-
-        let directory = self.root.join(format!("{timestamp}_{slug}"));
-        fs::create_dir_all(&directory)?;
-
-        let sql_path = directory.join(MIGRATION_SQL_FILE_NAME);
-        let sql = sql.into();
-        fs::write(&sql_path, &sql)?;
-
-        Ok(Migration::from_directory(
-            directory
-                .file_name()
-                .expect("generated migration directory should always have a file name")
-                .to_string_lossy()
-                .into_owned(),
-            directory,
-            sql_path,
-            sql,
-        ))
+        self.inner
+            .create_migration(migration_name, sql)
+            .map_err(Into::into)
     }
 }
 
 impl MigrationSource for MigrationDirectory {
     fn read_all(&self) -> Result<Vec<Migration>, MigratorError> {
-        self.read_all()
+        MigrationDirectory::read_all(self)
     }
 }
 
@@ -382,7 +251,7 @@ impl PostgresMigrator {
 
         Ok(applied
             .into_iter()
-            .map(|name| AppliedMigration { name })
+            .map(new_applied_migration::<PostgresDialect>)
             .collect())
     }
 
@@ -415,7 +284,7 @@ impl PostgresMigrator {
 
         pool.close().await;
 
-        Ok(ApplyMigrationsReport { applied, skipped })
+        Ok(new_apply_migrations_report(applied, skipped))
     }
 
     pub async fn generate_migration<S>(
@@ -453,10 +322,7 @@ impl PostgresMigrator {
             let disk_migration =
                 migration_directory.create_migration(migration_name, sql.clone())?;
 
-            Ok(Some(GeneratedMigration {
-                migration: disk_migration,
-                sql,
-            }))
+            Ok(Some(new_generated_migration(disk_migration, sql)))
         }
         .await;
 
@@ -659,29 +525,4 @@ fn unique_suffix() -> String {
         .as_nanos();
 
     format!("{}_{}", std::process::id(), unix_nanos)
-}
-
-fn slugify_migration_name(name: &str) -> Result<String, MigratorError> {
-    let mut slug = String::new();
-    let mut previous_was_separator = false;
-
-    for character in name.chars() {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character.to_ascii_lowercase());
-            previous_was_separator = false;
-        } else if !previous_was_separator && !slug.is_empty() {
-            slug.push('_');
-            previous_was_separator = true;
-        }
-    }
-
-    while slug.ends_with('_') {
-        slug.pop();
-    }
-
-    if slug.is_empty() {
-        return Err(MigratorError::InvalidMigrationName(name.to_owned()));
-    }
-
-    Ok(slug)
 }

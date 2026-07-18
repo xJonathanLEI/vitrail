@@ -8,10 +8,11 @@ use uuid::Uuid;
 
 use crate::PgExecutor;
 use crate::query::{
-    BoxFuture, SchemaAccess, StringValueType, alias_name, quoted_ident, schema_error, select_expr,
+    BoxFuture, StringValueType, alias_name, quoted_ident, schema_error, select_expr,
 };
 use crate::schema::{
     Attribute, DefaultFunction, Field, FieldType, Model, Resolution, ScalarType, Schema,
+    SchemaAccess,
 };
 
 /// Runtime contract implemented by executable insert values.

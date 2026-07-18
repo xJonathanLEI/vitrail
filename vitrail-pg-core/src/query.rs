@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::PgExecutor;
 use crate::filter::{FilterBuilder, compile_filter_sql, schema_model as resolve_schema_model};
-use crate::schema::{FieldType, Model, ScalarType, Schema};
+use crate::schema::{FieldType, Model, ScalarType, Schema, SchemaAccess};
 
 /// Runtime contract implemented by executable query values.
 pub trait QuerySpec: Send + Sync {
@@ -42,10 +42,6 @@ pub trait QuerySpec: Send + Sync {
                 .ok_or(sqlx::Error::RowNotFound)
         })
     }
-}
-
-pub trait SchemaAccess: Send + Sync + 'static {
-    fn schema() -> &'static Schema;
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -6,10 +6,9 @@ use sqlx::{Postgres, query::Query as SqlxQuery};
 use crate::PgExecutor;
 use crate::filter::{FilterBuilder, compile_filter_sql, schema_model as resolve_schema_model};
 use crate::query::{
-    BoxFuture, QueryFilter, QueryVariableSet, QueryVariableValue, QueryVariables, SchemaAccess,
-    quoted_ident,
+    BoxFuture, QueryFilter, QueryVariableSet, QueryVariableValue, QueryVariables, quoted_ident,
 };
-use crate::schema::{Model, ScalarType, Schema};
+use crate::schema::{Model, ScalarType, Schema, SchemaAccess};
 
 /// Runtime contract implemented by executable delete values.
 pub trait DeleteSpec: Send + Sync {
