@@ -1,0 +1,5 @@
+error: unknown primary key field `missing_field`
+  --> tests/ui/fail/compound_primary_key_unknown_field.rs:12:24
+   |
+12 |         @@id([post_id, missing_field])
+   |                        ^^^^^^^^^^^^^

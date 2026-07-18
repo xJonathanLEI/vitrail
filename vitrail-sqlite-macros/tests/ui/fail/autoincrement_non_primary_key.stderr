@@ -1,0 +1,5 @@
+error: `@default(autoincrement())` is only supported on a field that is the sole primary key column in SQLite
+  --> tests/ui/fail/autoincrement_non_primary_key.rs:10:23
+   |
+10 |         sequence Int @default(autoincrement())
+   |                       ^^^^^^^

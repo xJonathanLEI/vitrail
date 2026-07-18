@@ -1,0 +1,12 @@
+[package]
+name = "vitrail-sqlite"
+version.workspace = true
+authors = ["Jonathan LEI <me@xjonathan.dev>"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+repository.workspace = true
+description = "SQLite support for vitrail"
+
+[dependencies]
+vitrail-sqlite-core.workspace = true
+vitrail-sqlite-macros.workspace = true

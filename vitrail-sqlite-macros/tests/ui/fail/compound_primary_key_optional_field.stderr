@@ -1,0 +1,5 @@
+error: primary key field `post_id` must not be optional
+  --> tests/ui/fail/compound_primary_key_optional_field.rs:12:15
+   |
+12 |         @@id([post_id, user_id])
+   |               ^^^^^^^

@@ -1,0 +1,5 @@
+error: external table `main.external_audit_log` must use an unqualified table name in SQLite
+ --> tests/ui/fail/qualified_external_table.rs:9:20
+  |
+9 |         external: ["main.external_audit_log"]
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^

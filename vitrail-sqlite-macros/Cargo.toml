@@ -1,0 +1,22 @@
+[package]
+name = "vitrail-sqlite-macros"
+version.workspace = true
+authors = ["Jonathan LEI <me@xjonathan.dev>"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+repository.workspace = true
+description = "Procedural macros for the vitrail-sqlite crate"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+syn.workspace = true
+vitrail-macros-core.workspace = true
+vitrail-sqlite-core.workspace = true
+
+[dev-dependencies]
+quote.workspace = true
+trybuild.workspace = true
+vitrail-sqlite-core.workspace = true

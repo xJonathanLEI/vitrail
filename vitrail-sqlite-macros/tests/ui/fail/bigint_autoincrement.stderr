@@ -1,0 +1,5 @@
+error: `@default(autoincrement())` is only supported on `Int` fields in SQLite
+ --> tests/ui/fail/bigint_autoincrement.rs:9:24
+  |
+9 |         id BigInt @id @default(autoincrement())
+  |                        ^^^^^^^

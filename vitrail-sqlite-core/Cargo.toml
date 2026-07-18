@@ -1,0 +1,11 @@
+[package]
+name = "vitrail-sqlite-core"
+version.workspace = true
+authors = ["Jonathan LEI <me@xjonathan.dev>"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+repository.workspace = true
+description = "Core schema types for the vitrail-sqlite crate"
+
+[dependencies]
+vitrail-core.workspace = true

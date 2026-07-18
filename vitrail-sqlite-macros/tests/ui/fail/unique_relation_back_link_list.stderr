@@ -1,0 +1,5 @@
+error: relation back-link field `user.profiles` must be optional because `profile.user` references it through unique relation fields; use `profile?`
+  --> tests/ui/fail/unique_relation_back_link_list.rs:10:18
+   |
+10 |         profiles profile[]
+   |                  ^^^^^^^

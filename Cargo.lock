@@ -2089,6 +2089,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "vitrail-sqlite"
+version = "0.0.12"
+dependencies = [
+ "vitrail-sqlite-core",
+ "vitrail-sqlite-macros",
+]
+
+[[package]]
+name = "vitrail-sqlite-core"
+version = "0.0.12"
+dependencies = [
+ "vitrail-core",
+]
+
+[[package]]
+name = "vitrail-sqlite-macros"
+version = "0.0.12"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "trybuild",
+ "vitrail-macros-core",
+ "vitrail-sqlite-core",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

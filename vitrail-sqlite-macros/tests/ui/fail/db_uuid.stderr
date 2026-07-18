@@ -1,0 +1,5 @@
+error: `@db.Uuid` is a PostgreSQL native attribute and is not supported by the SQLite dialect
+  --> tests/ui/fail/db_uuid.rs:10:37
+   |
+10 |         external_id String @unique @db.Uuid
+   |                                     ^^

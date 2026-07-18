@@ -1,0 +1,5 @@
+error: index field `author` must be scalar
+  --> tests/ui/fail/composite_index_relation_field.rs:18:29
+   |
+18 |         @@index([author_id, author])
+   |                             ^^^^^^

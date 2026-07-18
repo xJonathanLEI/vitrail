@@ -1,0 +1,5 @@
+error: `Decimal` fields are not supported by the SQLite dialect because SQLx cannot preserve arbitrary-precision decimals for SQLite
+  --> tests/ui/fail/decimal.rs:10:17
+   |
+10 |         balance Decimal
+   |                 ^^^^^^^

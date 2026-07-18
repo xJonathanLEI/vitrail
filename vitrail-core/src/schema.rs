@@ -18,6 +18,12 @@ pub trait DialectPolicy: Clone + Copy + fmt::Debug + Default + Eq + Send + Sync 
 
     fn validate_default(field_type: &FieldType, function: &DefaultFunction) -> Result<(), String>;
 
+    fn validate_autoincrement_primary_key(
+        _is_single_column_primary_key: bool,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     fn normalize_external_table_name(table: &str) -> Result<String, String>;
 }
 
@@ -42,6 +48,9 @@ pub trait Dialect:
 
     fn validate_default(field_type: &FieldType, function: &DefaultFunction) -> Result<(), String>;
 
+    fn validate_autoincrement_primary_key(is_single_column_primary_key: bool)
+    -> Result<(), String>;
+
     fn normalize_external_table_name(table: &str) -> Result<String, String>;
 }
 
@@ -59,6 +68,12 @@ impl<P: DialectPolicy> Dialect for DialectMarker<P> {
 
     fn validate_default(field_type: &FieldType, function: &DefaultFunction) -> Result<(), String> {
         P::validate_default(field_type, function)
+    }
+
+    fn validate_autoincrement_primary_key(
+        is_single_column_primary_key: bool,
+    ) -> Result<(), String> {
+        P::validate_autoincrement_primary_key(is_single_column_primary_key)
     }
 
     fn normalize_external_table_name(table: &str) -> Result<String, String> {
@@ -431,6 +446,38 @@ impl<D: Dialect> Model<D> {
                         "extra `@id` field declared here",
                     ));
                 }
+            }
+        }
+
+        let primary_key_columns = self.primary_key_columns();
+
+        for field in &self.fields {
+            let has_autoincrement_default = field.attributes.iter().any(|attribute| {
+                matches!(
+                    attribute,
+                    Attribute::Default(default)
+                        if matches!(default.function(), DefaultFunction::Autoincrement)
+                )
+            });
+
+            if !has_autoincrement_default {
+                continue;
+            }
+
+            let is_single_column_primary_key =
+                primary_key_columns.as_slice() == [field.name.as_str()];
+
+            if let Err(message) =
+                D::validate_autoincrement_primary_key(is_single_column_primary_key)
+            {
+                errors.push(ValidationError::new(
+                    ValidationLocation::Attribute {
+                        model: self.name.clone(),
+                        field: field.name.clone(),
+                        attribute: "@default".to_owned(),
+                    },
+                    message,
+                ));
             }
         }
     }

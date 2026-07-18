@@ -1,0 +1,11 @@
+error: duplicate field `id` in model `user`
+  --> tests/ui/fail/duplicate_field.rs:10:9
+   |
+10 |         id Int
+   |         ^^
+
+error: first declaration of this field
+ --> tests/ui/fail/duplicate_field.rs:9:9
+  |
+9 |         id Int @id
+  |         ^^
