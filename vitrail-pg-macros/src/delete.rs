@@ -1,7 +1,7 @@
-use crate::filter::{RootFilter, parse_root_filter};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result};
+use vitrail_macros_core::{RootFilter, parse_root_filter};
 
 use crate::update::{schema_module_ident, schema_module_path};
 
@@ -57,6 +57,7 @@ impl DeleteManyDerive {
         let model_name = self.model_name;
         let variables_ty = self.variables_ty;
         let root_filters = self.root_filters;
+        let runtime_path: Path = syn::parse_quote!(::vitrail_pg);
 
         let schema_module_ident = schema_module_ident(&schema_path, "DeleteMany")?;
         let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
@@ -143,7 +144,7 @@ impl DeleteManyDerive {
 
         let filter_exprs = root_filters
             .iter()
-            .map(RootFilter::expand)
+            .map(|filter| filter.expand(&runtime_path))
             .collect::<Vec<_>>();
 
         let filter_tokens = if filter_exprs.is_empty() {

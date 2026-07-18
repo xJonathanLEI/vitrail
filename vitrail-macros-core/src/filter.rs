@@ -2,9 +2,9 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{ToTokens, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::{Error, Result, Token, parenthesized};
+use syn::{Error, Path, Result, Token, parenthesized};
 
-pub(crate) struct RootFilter {
+pub struct RootFilter {
     path: Vec<Ident>,
     filter: ScalarFilter,
 }
@@ -18,56 +18,53 @@ enum ScalarFilter {
 }
 
 impl RootFilter {
-    pub(crate) fn expand(&self) -> TokenStream2 {
+    pub fn expand(&self, runtime_path: &Path) -> TokenStream2 {
         let final_field = self.path.last().expect("filter path should never be empty");
 
         let mut filter = match &self.filter {
             ScalarFilter::Eq { variable } => quote! {
-                ::vitrail_pg::QueryFilter::eq(
+                #runtime_path::QueryFilter::eq(
                     stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                    #runtime_path::QueryFilterValue::variable(stringify!(#variable)),
                 )
             },
             ScalarFilter::In { variable } => quote! {
-                ::vitrail_pg::QueryFilter::r#in(
+                #runtime_path::QueryFilter::r#in(
                     stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValues::variable(stringify!(#variable)),
+                    #runtime_path::QueryFilterValues::variable(stringify!(#variable)),
                 )
             },
             ScalarFilter::Ne { variable } => quote! {
-                ::vitrail_pg::QueryFilter::ne(
+                #runtime_path::QueryFilter::ne(
                     stringify!(#final_field),
-                    ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                    #runtime_path::QueryFilterValue::variable(stringify!(#variable)),
                 )
             },
             ScalarFilter::IsNull => quote! {
-                ::vitrail_pg::QueryFilter::is_null(stringify!(#final_field))
+                #runtime_path::QueryFilter::is_null(stringify!(#final_field))
             },
             ScalarFilter::IsNotNull => quote! {
-                ::vitrail_pg::QueryFilter::is_not_null(stringify!(#final_field))
+                #runtime_path::QueryFilter::is_not_null(stringify!(#final_field))
             },
         };
 
         for segment in self.path[..self.path.len() - 1].iter().rev() {
             filter = quote! {
-                ::vitrail_pg::QueryFilter::relation(stringify!(#segment), #filter)
+                #runtime_path::QueryFilter::relation(stringify!(#segment), #filter)
             };
         }
 
         filter
     }
 
-    pub(crate) fn validation_tokens(
-        &self,
-        where_path_assert_macro: &impl ToTokens,
-    ) -> TokenStream2 {
+    pub fn validation_tokens(&self, where_path_assert_macro: &impl ToTokens) -> TokenStream2 {
         let segments = &self.path;
         quote! {
             #where_path_assert_macro!(#(#segments).*);
         }
     }
 
-    pub(crate) fn type_validation_tokens(
+    pub fn type_validation_tokens(
         &self,
         where_filter_value_assert_macro: &impl ToTokens,
     ) -> Option<TokenStream2> {
@@ -87,7 +84,7 @@ impl RootFilter {
         }
     }
 
-    pub(crate) fn variable(&self) -> Option<&Ident> {
+    pub fn variable(&self) -> Option<&Ident> {
         match &self.filter {
             ScalarFilter::Eq { variable }
             | ScalarFilter::In { variable }
@@ -172,7 +169,7 @@ impl Parse for RootFilter {
     }
 }
 
-pub(crate) fn parse_root_filter(input: ParseStream<'_>) -> Result<RootFilter> {
+pub fn parse_root_filter(input: ParseStream<'_>) -> Result<RootFilter> {
     let content;
     parenthesized!(content in input);
     content.parse()

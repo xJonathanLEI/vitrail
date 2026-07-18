@@ -2,7 +2,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{ToTokens, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::{Error, Result, Token, parenthesized};
+use syn::{Error, Path, Result, Token, parenthesized};
 
 pub(crate) struct RootOrder {
     path: Vec<Ident>,
@@ -16,20 +16,20 @@ enum OrderDirection {
 }
 
 impl RootOrder {
-    pub(crate) fn expand(&self) -> TokenStream2 {
+    pub(crate) fn expand(&self, runtime_path: &Path) -> TokenStream2 {
         let final_field = self.path.last().expect("order path should never be empty");
         let direction = match self.direction {
-            OrderDirection::Asc => quote! { ::vitrail_pg::QueryOrderDirection::Asc },
-            OrderDirection::Desc => quote! { ::vitrail_pg::QueryOrderDirection::Desc },
+            OrderDirection::Asc => quote! { #runtime_path::QueryOrderDirection::Asc },
+            OrderDirection::Desc => quote! { #runtime_path::QueryOrderDirection::Desc },
         };
 
         let mut order = quote! {
-            ::vitrail_pg::QueryOrder::scalar(stringify!(#final_field), #direction)
+            #runtime_path::QueryOrder::scalar(stringify!(#final_field), #direction)
         };
 
         for segment in self.path[..self.path.len() - 1].iter().rev() {
             order = quote! {
-                ::vitrail_pg::QueryOrder::relation(stringify!(#segment), vec![#order])
+                #runtime_path::QueryOrder::relation(stringify!(#segment), vec![#order])
             };
         }
 

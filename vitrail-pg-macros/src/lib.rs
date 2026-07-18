@@ -1,21 +1,18 @@
 use proc_macro::TokenStream;
 
 mod delete;
-mod filter;
 mod insert;
 mod macro_inputs;
-mod order;
-mod query;
 mod update;
 
 use delete::DeleteManyDerive;
 use insert::{InsertInputDerive, InsertResultDerive};
-use macro_inputs::{DeleteMacroInput, InsertMacroInput, QueryMacroInput, UpdateMacroInput};
-use query::{QueryResultDerive, QueryVariablesDerive};
+use macro_inputs::{DeleteMacroInput, InsertMacroInput, UpdateMacroInput};
 use update::{UpdateDataDerive, UpdateManyDerive};
 use vitrail_macros_core::{
-    NativeAttributeKind, NativeAttributeMapping, OperationFamilies, SchemaMacroConfig,
-    expand_embedded_migrations, expand_schema,
+    NativeAttributeKind, NativeAttributeMapping, OperationFamilies, QueryMacroConfig,
+    SchemaMacroConfig, expand_embedded_migrations, expand_query, expand_query_result,
+    expand_query_variables, expand_schema,
 };
 
 fn expand_postgres_schema(
@@ -33,6 +30,13 @@ fn expand_postgres_schema(
     );
 
     expand_schema(input, &config)
+}
+
+fn postgres_query_macro_config() -> QueryMacroConfig {
+    QueryMacroConfig::new(
+        syn::parse_quote!(::vitrail_pg),
+        syn::parse_quote!(::vitrail_pg::sqlx::postgres::PgRow),
+    )
 }
 
 fn expand_postgres_embedded_migrations(
@@ -53,8 +57,10 @@ pub fn schema(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn query(input: TokenStream) -> TokenStream {
-    let query = syn::parse_macro_input!(input as QueryMacroInput);
-    query.expand().into()
+    match expand_query(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
 #[proc_macro]
@@ -87,7 +93,7 @@ pub fn embed_migrations(input: TokenStream) -> TokenStream {
 pub fn derive_query_result(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
-    match QueryResultDerive::parse(input).and_then(|derive| derive.expand()) {
+    match expand_query_result(input, &postgres_query_macro_config()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -97,7 +103,7 @@ pub fn derive_query_result(input: TokenStream) -> TokenStream {
 pub fn derive_query_variables(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
-    match QueryVariablesDerive::parse(input).and_then(|derive| derive.expand()) {
+    match expand_query_variables(input, &postgres_query_macro_config()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }

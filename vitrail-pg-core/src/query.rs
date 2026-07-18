@@ -957,6 +957,19 @@ pub fn row_as_bytes(row: &PgRow, alias: &str) -> Result<Vec<u8>, sqlx::Error> {
     row.try_get(alias)
 }
 
+#[doc(hidden)]
+pub fn row_relation_json(row: &PgRow, alias: &str) -> Result<JsonValue, sqlx::Error> {
+    row.try_get(alias)
+}
+
+#[doc(hidden)]
+pub fn row_optional_relation_json(
+    row: &PgRow,
+    alias: &str,
+) -> Result<Option<JsonValue>, sqlx::Error> {
+    row.try_get(alias)
+}
+
 pub fn row_value<T>(row: &PgRow, alias: &str) -> Result<T, sqlx::Error>
 where
     T: QueryResultValue,

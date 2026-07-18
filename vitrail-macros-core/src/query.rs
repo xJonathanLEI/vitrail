@@ -1,14 +1,75 @@
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::ext::IdentExt;
-use syn::parse::ParseStream;
+use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{
     Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Token, Type, parenthesized,
 };
 
 use crate::filter::{RootFilter, parse_root_filter};
+use crate::helper_macro::expand_helper_macro;
 use crate::order::{RootOrder, parse_root_orders};
+
+/// Dialect-specific paths used by shared query procedural macro expansion.
+pub struct QueryMacroConfig {
+    runtime_path: Path,
+    row_path: Path,
+}
+
+impl QueryMacroConfig {
+    pub fn new(runtime_path: Path, row_path: Path) -> Self {
+        Self {
+            runtime_path,
+            row_path,
+        }
+    }
+
+    pub fn runtime_path(&self) -> &Path {
+        &self.runtime_path
+    }
+
+    pub fn row_path(&self) -> &Path {
+        &self.row_path
+    }
+}
+
+/// Expands the user-facing `query!` macro into its schema-generated helper.
+pub fn expand_query(input: TokenStream2) -> Result<TokenStream2> {
+    let input = syn::parse2::<QueryMacroInput>(input)?;
+    Ok(expand_helper_macro(input.schema_path, input.body, "query"))
+}
+
+/// Expands a `QueryResult` derive using dialect-specific runtime paths.
+pub fn expand_query_result(
+    input: syn::DeriveInput,
+    config: &QueryMacroConfig,
+) -> Result<TokenStream2> {
+    QueryResultDerive::parse(input)?.expand(config)
+}
+
+/// Expands a `QueryVariables` derive using a dialect-specific runtime path.
+pub fn expand_query_variables(
+    input: syn::DeriveInput,
+    config: &QueryMacroConfig,
+) -> Result<TokenStream2> {
+    QueryVariablesDerive::parse(input)?.expand(config)
+}
+
+struct QueryMacroInput {
+    schema_path: Path,
+    body: TokenStream2,
+}
+
+impl Parse for QueryMacroInput {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let schema_path = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let body = input.parse()?;
+
+        Ok(Self { schema_path, body })
+    }
+}
 
 type QueryResultContainerAttrs = (
     Path,
@@ -78,7 +139,9 @@ impl QueryResultDerive {
         })
     }
 
-    pub(crate) fn expand(self) -> Result<TokenStream2> {
+    pub(crate) fn expand(self, config: &QueryMacroConfig) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
+        let row_path = config.row_path();
         let ident = self.ident;
         let generics = self.generics;
         let schema_path = self.schema_path;
@@ -125,9 +188,9 @@ impl QueryResultDerive {
             let name = &field.query_name;
             let nested_ty = field.nested_type().expect("include field");
             quote! {
-                ::vitrail_pg::QueryRelationSelection {
+                #runtime_path::QueryRelationSelection {
                     field: #name,
-                    selection: <#nested_ty as ::vitrail_pg::QueryModel>::selection(),
+                    selection: <#nested_ty as #runtime_path::QueryModel>::selection(),
                 }
             }
         });
@@ -139,7 +202,7 @@ impl QueryResultDerive {
                     quote! {
                         {
                             fn __vitrail_assert_query_variables_match<
-                                T: ::vitrail_pg::QueryModel<Variables = ()>,
+                                T: #runtime_path::QueryModel<Variables = ()>,
                             >() {
                             }
 
@@ -157,16 +220,16 @@ impl QueryResultDerive {
                 let name = &field.query_name;
                 let nested_ty = field.nested_type().expect("include field");
                 quote! {
-                    ::vitrail_pg::QueryRelationSelection {
+                    #runtime_path::QueryRelationSelection {
                         field: #name,
-                        selection: <#nested_ty as ::vitrail_pg::QueryModel>::selection_with_variables(variables),
+                        selection: <#nested_ty as #runtime_path::QueryModel>::selection_with_variables(variables),
                     }
                 }
             })
             .collect::<Vec<_>>();
         let order_exprs = root_orders
             .iter()
-            .map(RootOrder::expand)
+            .map(|order| order.expand(runtime_path))
             .collect::<Vec<_>>();
         let order_tokens = if order_exprs.is_empty() {
             quote! { ::std::vec![] }
@@ -178,7 +241,7 @@ impl QueryResultDerive {
             let mut filters = root_filters
                 .iter()
                 .filter(|filter| filter.variable().is_none())
-                .map(RootFilter::expand)
+                .map(|filter| filter.expand(runtime_path))
                 .collect::<Vec<_>>();
 
             filters.extend(scalar_fields.iter().filter_map(|field| {
@@ -189,10 +252,10 @@ impl QueryResultDerive {
                     | QueryResultFieldFilter::In { .. }
                     | QueryResultFieldFilter::Ne { .. } => None,
                     QueryResultFieldFilter::IsNull => Some(quote! {
-                        ::vitrail_pg::QueryFilter::is_null(#field_name)
+                        #runtime_path::QueryFilter::is_null(#field_name)
                     }),
                     QueryResultFieldFilter::IsNotNull => Some(quote! {
-                        ::vitrail_pg::QueryFilter::is_not_null(#field_name)
+                        #runtime_path::QueryFilter::is_not_null(#field_name)
                     }),
                 }
             }));
@@ -205,23 +268,23 @@ impl QueryResultDerive {
             let filter = &static_filter_exprs[0];
             quote! { Some(#filter) }
         } else {
-            quote! { Some(::vitrail_pg::QueryFilter::And(vec![#(#static_filter_exprs),*])) }
+            quote! { Some(#runtime_path::QueryFilter::And(vec![#(#static_filter_exprs),*])) }
         };
         let static_skip_tokens = root_skip
             .as_ref()
-            .and_then(QueryPaginationAttr::expand_static_tokens)
+            .and_then(|pagination| pagination.expand_static_tokens(runtime_path))
             .map(|tokens| quote! { Some(#tokens) })
             .unwrap_or_else(|| quote! { None });
         let static_limit_tokens = root_limit
             .as_ref()
-            .and_then(QueryPaginationAttr::expand_static_tokens)
+            .and_then(|pagination| pagination.expand_static_tokens(runtime_path))
             .map(|tokens| quote! { Some(#tokens) })
             .unwrap_or_else(|| quote! { None });
         let selection_with_variables_tokens = if variables_ty.is_some() {
             let filter_exprs = {
                 let mut filters = root_filters
                     .iter()
-                    .map(RootFilter::expand)
+                    .map(|filter| filter.expand(runtime_path))
                     .collect::<Vec<_>>();
 
                 filters.extend(scalar_fields.iter().filter_map(|field| {
@@ -229,28 +292,28 @@ impl QueryResultDerive {
                     let filter = field.filter.as_ref()?;
                     Some(match filter {
                         QueryResultFieldFilter::Eq { variable } => quote! {
-                            ::vitrail_pg::QueryFilter::eq(
+                            #runtime_path::QueryFilter::eq(
                                 #field_name,
-                                ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                                #runtime_path::QueryFilterValue::variable(stringify!(#variable)),
                             )
                         },
                         QueryResultFieldFilter::In { variable } => quote! {
-                            ::vitrail_pg::QueryFilter::r#in(
+                            #runtime_path::QueryFilter::r#in(
                                 #field_name,
-                                ::vitrail_pg::QueryFilterValues::variable(stringify!(#variable)),
+                                #runtime_path::QueryFilterValues::variable(stringify!(#variable)),
                             )
                         },
                         QueryResultFieldFilter::Ne { variable } => quote! {
-                            ::vitrail_pg::QueryFilter::ne(
+                            #runtime_path::QueryFilter::ne(
                                 #field_name,
-                                ::vitrail_pg::QueryFilterValue::variable(stringify!(#variable)),
+                                #runtime_path::QueryFilterValue::variable(stringify!(#variable)),
                             )
                         },
                         QueryResultFieldFilter::IsNull => quote! {
-                            ::vitrail_pg::QueryFilter::is_null(#field_name)
+                            #runtime_path::QueryFilter::is_null(#field_name)
                         },
                         QueryResultFieldFilter::IsNotNull => quote! {
-                            ::vitrail_pg::QueryFilter::is_not_null(#field_name)
+                            #runtime_path::QueryFilter::is_not_null(#field_name)
                         },
                     })
                 }));
@@ -264,23 +327,23 @@ impl QueryResultDerive {
                 let filter = &filter_exprs[0];
                 quote! { Some(#filter) }
             } else {
-                quote! { Some(::vitrail_pg::QueryFilter::And(vec![#(#filter_exprs),*])) }
+                quote! { Some(#runtime_path::QueryFilter::And(vec![#(#filter_exprs),*])) }
             };
             let skip_tokens = root_skip
                 .as_ref()
-                .map(|pagination| pagination.expand_dynamic_tokens())
+                .map(|pagination| pagination.expand_dynamic_tokens(runtime_path))
                 .map(|tokens| quote! { Some(#tokens) })
                 .unwrap_or_else(|| quote! { None });
             let limit_tokens = root_limit
                 .as_ref()
-                .map(|pagination| pagination.expand_dynamic_tokens())
+                .map(|pagination| pagination.expand_dynamic_tokens(runtime_path))
                 .map(|tokens| quote! { Some(#tokens) })
                 .unwrap_or_else(|| quote! { None });
 
             quote! {
                 let _ = variables;
 
-                ::vitrail_pg::QuerySelection {
+                #runtime_path::QuerySelection {
                     model: #model_name,
                     scalar_fields: vec![#(#selection_scalars),*],
                     relations: vec![#(#selection_relations_with_variables),*],
@@ -503,7 +566,7 @@ impl QueryResultDerive {
 
                 if field.include {
                     let nested_ty = field.nested_type().expect("include field");
-                    let decode_relation = field.decode_relation_tokens(&nested_ty);
+                    let decode_relation = field.decode_relation_tokens(&nested_ty, runtime_path);
                     quote! {
                         #ident: {
                             #decode_relation
@@ -512,8 +575,8 @@ impl QueryResultDerive {
                 } else {
                     quote! {
                         #ident: {
-                            let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                            ::vitrail_pg::row_value::<#field_ty>(row, __vitrail_alias.as_str())?
+                            let __vitrail_alias = #runtime_path::alias_name(prefix, #field_name);
+                            #runtime_path::row_value::<#field_ty>(row, __vitrail_alias.as_str())?
                         }
                     }
                 }
@@ -523,25 +586,25 @@ impl QueryResultDerive {
             .fields
             .iter()
             .enumerate()
-            .map(|(index, field)| field.decode_json_field_tokens(index))
+            .map(|(index, field)| field.decode_json_field_tokens(index, runtime_path))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(quote! {
             #variable_validation_tokens
 
-            impl #impl_generics ::vitrail_pg::QueryValue for #ident #ty_generics
+            impl #impl_generics #runtime_path::QueryValue for #ident #ty_generics
             #where_clause
             {
                 fn from_json(
-                    value: &::vitrail_pg::serde_json::Value,
-                ) -> Result<Self, ::vitrail_pg::sqlx::Error> {
+                    value: &#runtime_path::serde_json::Value,
+                ) -> Result<Self, #runtime_path::sqlx::Error> {
                     Ok(Self {
                         #(#json_decode_fields),*
                     })
                 }
             }
 
-            impl #impl_generics ::vitrail_pg::QueryModel for #ident #ty_generics
+            impl #impl_generics #runtime_path::QueryModel for #ident #ty_generics
             #where_clause
             {
                 type Schema = #schema_path;
@@ -551,10 +614,10 @@ impl QueryResultDerive {
                     #model_name
                 }
 
-                fn selection() -> ::vitrail_pg::QuerySelection {
+                fn selection() -> #runtime_path::QuerySelection {
                     #(#selection_relation_assertions)*
 
-                    ::vitrail_pg::QuerySelection {
+                    #runtime_path::QuerySelection {
                         model: #model_name,
                         scalar_fields: vec![#(#selection_scalars),*],
                         relations: vec![#(#selection_relations),*],
@@ -566,17 +629,15 @@ impl QueryResultDerive {
                 }
 
                 fn selection_with_variables(
-                    variables: &::vitrail_pg::QueryVariables,
-                ) -> ::vitrail_pg::QuerySelection {
+                    variables: &#runtime_path::QueryVariables,
+                ) -> #runtime_path::QuerySelection {
                     #selection_with_variables_tokens
                 }
 
                 fn from_row(
-                    row: &::vitrail_pg::sqlx::postgres::PgRow,
+                    row: &#row_path,
                     prefix: &str,
-                ) -> Result<Self, ::vitrail_pg::sqlx::Error> {
-                    use ::vitrail_pg::sqlx::Row as _;
-
+                ) -> Result<Self, #runtime_path::sqlx::Error> {
                     Ok(Self {
                         #(#decode_fields),*
                     })
@@ -735,31 +796,46 @@ impl QueryResultField {
         }
     }
 
-    fn decode_relation_tokens(&self, nested_ty: &TokenStream2) -> TokenStream2 {
+    fn decode_relation_tokens(
+        &self,
+        nested_ty: &TokenStream2,
+        runtime_path: &Path,
+    ) -> TokenStream2 {
         let field_name = &self.query_name;
 
         if option_inner_type(&self.ty).is_some() {
             quote! {
                 {
-                    let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                    let __vitrail_value: Option<::vitrail_pg::serde_json::Value> = row.try_get(__vitrail_alias.as_str())?;
+                    let __vitrail_alias = #runtime_path::alias_name(prefix, #field_name);
+                    let __vitrail_value =
+                        #runtime_path::row_optional_relation_json(
+                            row,
+                            __vitrail_alias.as_str(),
+                        )?;
                     __vitrail_value
                         .as_ref()
-                        .map(<#nested_ty as ::vitrail_pg::QueryValue>::from_json)
+                        .map(<#nested_ty as #runtime_path::QueryValue>::from_json)
                         .transpose()?
                 }
             }
         } else if vec_inner_type(&self.ty).is_some() {
             quote! {
                 {
-                    let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                    let __vitrail_value: ::vitrail_pg::serde_json::Value = row.try_get(__vitrail_alias.as_str())?;
+                    let __vitrail_alias = #runtime_path::alias_name(prefix, #field_name);
+                    let __vitrail_value =
+                        #runtime_path::row_relation_json(row, __vitrail_alias.as_str())?;
                     let __vitrail_items = __vitrail_value.as_array().ok_or_else(|| {
-                        ::vitrail_pg::schema_error("expected JSON array in query result".to_owned())
+                        #runtime_path::schema_error(
+                            "expected JSON array in query result".to_owned(),
+                        )
                     })?;
                     let mut __vitrail_values = Vec::with_capacity(__vitrail_items.len());
                     for __vitrail_item in __vitrail_items {
-                        __vitrail_values.push(<#nested_ty as ::vitrail_pg::QueryValue>::from_json(__vitrail_item)?);
+                        __vitrail_values.push(
+                            <#nested_ty as #runtime_path::QueryValue>::from_json(
+                                __vitrail_item,
+                            )?,
+                        );
                     }
                     __vitrail_values
                 }
@@ -767,15 +843,20 @@ impl QueryResultField {
         } else {
             quote! {
                 {
-                    let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                    let __vitrail_value: ::vitrail_pg::serde_json::Value = row.try_get(__vitrail_alias.as_str())?;
-                    <#nested_ty as ::vitrail_pg::QueryValue>::from_json(&__vitrail_value)?
+                    let __vitrail_alias = #runtime_path::alias_name(prefix, #field_name);
+                    let __vitrail_value =
+                        #runtime_path::row_relation_json(row, __vitrail_alias.as_str())?;
+                    <#nested_ty as #runtime_path::QueryValue>::from_json(&__vitrail_value)?
                 }
             }
         }
     }
 
-    fn decode_json_field_tokens(&self, json_index: usize) -> Result<TokenStream2> {
+    fn decode_json_field_tokens(
+        &self,
+        json_index: usize,
+        runtime_path: &Path,
+    ) -> Result<TokenStream2> {
         let ident = &self.ident;
         let json_index = syn::Index::from(json_index);
 
@@ -784,24 +865,36 @@ impl QueryResultField {
             if option_inner_type(&self.ty).is_some() {
                 Ok(quote! {
                     #ident: {
-                        let __vitrail_value = ::vitrail_pg::json_array_field(value, #json_index)?;
+                        let __vitrail_value =
+                            #runtime_path::json_array_field(value, #json_index)?;
                         if __vitrail_value.is_null() {
                             None
                         } else {
-                            Some(<#nested_ty as ::vitrail_pg::QueryValue>::from_json(__vitrail_value)?)
+                            Some(
+                                <#nested_ty as #runtime_path::QueryValue>::from_json(
+                                    __vitrail_value,
+                                )?,
+                            )
                         }
                     }
                 })
             } else if vec_inner_type(&self.ty).is_some() {
                 Ok(quote! {
                     #ident: {
-                        let __vitrail_value = ::vitrail_pg::json_array_field(value, #json_index)?;
+                        let __vitrail_value =
+                            #runtime_path::json_array_field(value, #json_index)?;
                         let __vitrail_items = __vitrail_value.as_array().ok_or_else(|| {
-                            ::vitrail_pg::schema_error("expected JSON array in query result".to_owned())
+                            #runtime_path::schema_error(
+                                "expected JSON array in query result".to_owned(),
+                            )
                         })?;
                         let mut __vitrail_values = Vec::with_capacity(__vitrail_items.len());
                         for __vitrail_item in __vitrail_items {
-                            __vitrail_values.push(<#nested_ty as ::vitrail_pg::QueryValue>::from_json(__vitrail_item)?);
+                            __vitrail_values.push(
+                                <#nested_ty as #runtime_path::QueryValue>::from_json(
+                                    __vitrail_item,
+                                )?,
+                            );
                         }
                         __vitrail_values
                     }
@@ -809,15 +902,17 @@ impl QueryResultField {
             } else {
                 Ok(quote! {
                     #ident: {
-                        let __vitrail_value = ::vitrail_pg::json_array_field(value, #json_index)?;
-                        <#nested_ty as ::vitrail_pg::QueryValue>::from_json(__vitrail_value)?
+                        let __vitrail_value =
+                            #runtime_path::json_array_field(value, #json_index)?;
+                        <#nested_ty as #runtime_path::QueryValue>::from_json(__vitrail_value)?
                     }
                 })
             }
         } else {
             let decode = json_decode_tokens_for_type(
                 &self.ty,
-                quote! { ::vitrail_pg::json_array_field(value, #json_index)? },
+                quote! { #runtime_path::json_array_field(value, #json_index)? },
+                runtime_path,
             )?;
             Ok(quote! {
                 #ident: { #decode }
@@ -920,21 +1015,21 @@ impl QueryPaginationAttr {
         }
     }
 
-    fn expand_static_tokens(&self) -> Option<TokenStream2> {
+    fn expand_static_tokens(&self, runtime_path: &Path) -> Option<TokenStream2> {
         match self {
-            Self::Value(value) => Some(quote! { ::vitrail_pg::QueryPagination::value(#value) }),
+            Self::Value(value) => Some(quote! { #runtime_path::QueryPagination::value(#value) }),
             Self::Variable(_) => None,
         }
     }
 
-    fn expand_dynamic_tokens(&self) -> TokenStream2 {
+    fn expand_dynamic_tokens(&self, runtime_path: &Path) -> TokenStream2 {
         match self {
             Self::Value(value) => {
-                quote! { ::vitrail_pg::QueryPagination::value(#value) }
+                quote! { #runtime_path::QueryPagination::value(#value) }
             }
             Self::Variable(variable) => {
                 let variable_name = variable.to_string();
-                quote! { ::vitrail_pg::QueryPagination::variable(#variable_name) }
+                quote! { #runtime_path::QueryPagination::variable(#variable_name) }
             }
         }
     }
@@ -990,7 +1085,8 @@ impl QueryVariablesDerive {
         })
     }
 
-    pub(crate) fn expand(self) -> Result<TokenStream2> {
+    pub(crate) fn expand(self, config: &QueryMacroConfig) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let ident = self.ident;
         let mut generics = self.generics;
         let fields = self.fields;
@@ -999,22 +1095,27 @@ impl QueryVariablesDerive {
             generics
                 .make_where_clause()
                 .predicates
-                .push(syn::parse_quote!(#field_ty: ::vitrail_pg::QueryScalar));
+                .push(syn::parse_quote!(#field_ty: #runtime_path::QueryScalar));
         }
 
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
         let named_values = fields.iter().map(|(field, _)| {
             let name = field.to_string();
-            quote! { (#name, ::vitrail_pg::QueryScalar::into_query_variable_value(self.#field)) }
+            quote! {
+                (
+                    #name,
+                    #runtime_path::QueryScalar::into_query_variable_value(self.#field),
+                )
+            }
         });
 
         Ok(quote! {
-            impl #impl_generics ::vitrail_pg::QueryVariableSet for #ident #ty_generics
+            impl #impl_generics #runtime_path::QueryVariableSet for #ident #ty_generics
             #where_clause
             {
-                fn into_query_variables(self) -> ::vitrail_pg::QueryVariables {
-                    ::vitrail_pg::QueryVariables::from_values(vec![#(#named_values),*])
+                fn into_query_variables(self) -> #runtime_path::QueryVariables {
+                    #runtime_path::QueryVariables::from_values(vec![#(#named_values),*])
                 }
             }
         })
@@ -1085,9 +1186,14 @@ fn generic_inner_type(ty: &Type, expected: &str) -> Option<Type> {
     Some(inner.clone())
 }
 
-fn json_decode_tokens_for_type(value_ty: &Type, value_expr: TokenStream2) -> Result<TokenStream2> {
+fn json_decode_tokens_for_type(
+    value_ty: &Type,
+    value_expr: TokenStream2,
+    runtime_path: &Path,
+) -> Result<TokenStream2> {
     if let Some(inner) = option_inner_type(value_ty) {
-        let inner_decode = json_decode_tokens_for_type(&inner, quote! { __vitrail_value })?;
+        let inner_decode =
+            json_decode_tokens_for_type(&inner, quote! { __vitrail_value }, runtime_path)?;
         return Ok(quote! {
             {
                 let __vitrail_value = #value_expr;
@@ -1100,5 +1206,99 @@ fn json_decode_tokens_for_type(value_ty: &Type, value_expr: TokenStream2) -> Res
         });
     }
 
-    Ok(quote! { ::vitrail_pg::json_value::<#value_ty>(#value_expr)? })
+    Ok(quote! { #runtime_path::json_value::<#value_ty>(#value_expr)? })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+
+    fn custom_config() -> QueryMacroConfig {
+        QueryMacroConfig::new(
+            syn::parse_quote!(::custom_facade),
+            syn::parse_quote!(::custom_backend::CustomRow),
+        )
+    }
+
+    #[test]
+    fn query_result_expansion_uses_configured_facade_and_row_paths() {
+        let input = syn::parse2(quote! {
+            #[vitrail(
+                schema = crate::custom_schema::Schema,
+                model = user,
+                variables = Variables,
+                where(profile.email = eq(email)),
+                order_by(profile.id = desc),
+                skip = skip,
+                limit = 10
+            )]
+            struct UserQuery {
+                id: i64,
+                #[vitrail(include)]
+                profile: Option<ProfileQuery>,
+                #[vitrail(include)]
+                posts: Vec<PostQuery>,
+            }
+        })
+        .expect("query result input should parse");
+
+        let generated = expand_query_result(input, &custom_config())
+            .expect("query result should expand")
+            .to_string();
+
+        for expected in [
+            "custom_facade :: QueryModel",
+            "custom_facade :: QueryValue",
+            "custom_facade :: QueryFilter :: relation",
+            "custom_facade :: QueryOrder :: relation",
+            "custom_facade :: QueryPagination :: variable",
+            "custom_facade :: QueryPagination :: value",
+            "custom_facade :: row_optional_relation_json",
+            "custom_facade :: row_relation_json",
+            "custom_backend :: CustomRow",
+        ] {
+            assert!(
+                generated.contains(expected),
+                "generated query result is missing `{expected}`"
+            );
+        }
+
+        for hardcoded_facade in ["vitrail_pg", "vitrail_sqlite"] {
+            assert!(
+                !generated.contains(hardcoded_facade),
+                "generated query result leaked `{hardcoded_facade}`"
+            );
+        }
+    }
+
+    #[test]
+    fn query_variables_expansion_uses_configured_facade_path() {
+        let input = syn::parse2(quote! {
+            struct Variables {
+                email: String,
+                skip: i64,
+            }
+        })
+        .expect("query variables input should parse");
+
+        let generated = expand_query_variables(input, &custom_config())
+            .expect("query variables should expand")
+            .to_string();
+
+        for expected in [
+            "custom_facade :: QueryScalar",
+            "custom_facade :: QueryVariableSet",
+            "custom_facade :: QueryVariables",
+        ] {
+            assert!(
+                generated.contains(expected),
+                "generated query variables are missing `{expected}`"
+            );
+        }
+
+        assert!(!generated.contains("custom_backend"));
+        assert!(!generated.contains("vitrail_pg"));
+        assert!(!generated.contains("vitrail_sqlite"));
+    }
 }
