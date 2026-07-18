@@ -582,9 +582,10 @@ impl QueryResultDerive {
                 }
             })
             .collect::<Vec<_>>();
-        let json_decode_fields = self
-            .fields
+        // SQL builders encode nested JSON rows with scalar fields first, followed by relations.
+        let json_decode_fields = scalar_fields
             .iter()
+            .chain(&relation_fields)
             .enumerate()
             .map(|(index, field)| field.decode_json_field_tokens(index, runtime_path))
             .collect::<Result<Vec<_>>>()?;
@@ -1237,6 +1238,7 @@ mod tests {
                 id: i64,
                 #[vitrail(include)]
                 profile: Option<ProfileQuery>,
+                email: String,
                 #[vitrail(include)]
                 posts: Vec<PostQuery>,
             }
@@ -1261,6 +1263,27 @@ mod tests {
             assert!(
                 generated.contains(expected),
                 "generated query result is missing `{expected}`"
+            );
+        }
+
+        let from_json_start = generated
+            .find("fn from_json")
+            .expect("query result expansion should contain a JSON decoder");
+        let query_model_start = generated[from_json_start..]
+            .find("custom_facade :: QueryModel")
+            .map(|offset| from_json_start + offset)
+            .expect("query result expansion should contain a query model implementation");
+        let from_json = &generated[from_json_start..query_model_start];
+        let field_positions = ["id :", "email :", "profile :", "posts :"].map(|field| {
+            from_json
+                .find(field)
+                .unwrap_or_else(|| panic!("JSON decoder is missing field `{field}`"))
+        });
+
+        for positions in field_positions.windows(2) {
+            assert!(
+                positions[0] < positions[1],
+                "nested JSON fields should decode scalars before relations: {from_json}"
             );
         }
 

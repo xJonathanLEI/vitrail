@@ -5,6 +5,8 @@ use crate::query::{
 use crate::schema::{Field, FieldType, Model, Resolution, ScalarType, Schema};
 
 pub(crate) trait FilterBuilder<'a> {
+    fn schema(&self) -> &'a Schema;
+
     fn variables(&self) -> &'a QueryVariables;
 
     fn push_filter_binding(
@@ -12,6 +14,8 @@ pub(crate) trait FilterBuilder<'a> {
         value: QueryVariableValue,
         scalar: ScalarType,
     ) -> Result<String, sqlx::Error>;
+
+    fn next_filter_alias(&mut self) -> String;
 
     fn operation_name(&self) -> &'static str;
 }
@@ -42,7 +46,7 @@ pub(crate) fn schema_model<'a>(
 
 pub(crate) fn compile_filter_sql<'a>(
     builder: &mut impl FilterBuilder<'a>,
-    model: &Model,
+    model: &'a Model,
     filter: &QueryFilter,
     table_alias: &str,
 ) -> Result<String, sqlx::Error> {
@@ -130,10 +134,46 @@ pub(crate) fn compile_filter_sql<'a>(
             "`in` filters for field `{}.{field}` are not supported by SQLite read queries yet",
             model.name()
         ))),
-        QueryFilter::Relation { field, .. } => Err(schema_error(format!(
-            "relation filters through `{}.{field}` are not supported by SQLite read queries yet",
-            model.name()
-        ))),
+        QueryFilter::Relation { field, filter } => {
+            let relation_field = model.field_named(field).ok_or_else(|| {
+                schema_error(format!(
+                    "unknown relation `{}.{}` in {} filter",
+                    model.name(),
+                    field,
+                    builder.operation_name()
+                ))
+            })?;
+
+            if relation_field.kind().is_scalar() {
+                return Err(schema_error(format!(
+                    "field `{}.{}` is not a relation and cannot appear in {} `where`",
+                    model.name(),
+                    relation_field.name(),
+                    builder.operation_name()
+                )));
+            }
+
+            let target_model = schema_model(
+                builder.schema(),
+                relation_field.ty().name(),
+                builder.operation_name(),
+            )?;
+            let (nested_fields, parent_fields) =
+                relation_fields(model, relation_field, target_model)?;
+
+            let nested_alias = builder.next_filter_alias();
+            let nested_filter = compile_filter_sql(builder, target_model, filter, &nested_alias)?;
+            let relation_predicate =
+                relation_predicates(&nested_alias, &nested_fields, table_alias, &parent_fields);
+
+            Ok(format!(
+                "EXISTS (SELECT 1 FROM {} AS \"{}\" WHERE {} AND {})",
+                quoted_ident(target_model.name()),
+                nested_alias,
+                relation_predicate,
+                nested_filter,
+            ))
+        }
     }
 }
 
@@ -148,6 +188,85 @@ fn resolve_filter_value(
             .cloned()
             .ok_or_else(|| schema_error(format!("missing query variable `{name}`"))),
     }
+}
+
+fn model_names_match(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
+fn infer_relation_fields<'a>(
+    model: &'a Model,
+    field: &'a Field,
+    target_model: &'a Model,
+) -> Result<(Vec<&'a str>, Vec<&'a str>), sqlx::Error> {
+    let reverse_relation = target_model
+        .fields()
+        .iter()
+        .find(|candidate| {
+            model_names_match(candidate.ty().name(), model.name()) && candidate.relation().is_some()
+        })
+        .ok_or_else(|| {
+            schema_error(format!(
+                "could not infer relation metadata for `{}.{}`",
+                model.name(),
+                field.name()
+            ))
+        })?;
+
+    let reverse_relation = reverse_relation
+        .relation()
+        .expect("reverse relation existence checked above");
+
+    Ok((
+        reverse_relation
+            .fields()
+            .iter()
+            .map(String::as_str)
+            .collect(),
+        reverse_relation
+            .references()
+            .iter()
+            .map(String::as_str)
+            .collect(),
+    ))
+}
+
+fn relation_fields<'a>(
+    model: &'a Model,
+    field: &'a Field,
+    target_model: &'a Model,
+) -> Result<(Vec<&'a str>, Vec<&'a str>), sqlx::Error> {
+    match field.relation() {
+        Some(relation_info) => Ok((
+            relation_info
+                .references()
+                .iter()
+                .map(String::as_str)
+                .collect(),
+            relation_info.fields().iter().map(String::as_str).collect(),
+        )),
+        None => infer_relation_fields(model, field, target_model),
+    }
+}
+
+fn relation_predicates(
+    nested_alias: &str,
+    nested_fields: &[&str],
+    parent_alias: &str,
+    parent_fields: &[&str],
+) -> String {
+    nested_fields
+        .iter()
+        .zip(parent_fields)
+        .map(|(nested_field, parent_field)| {
+            format!(
+                "\"{nested_alias}\".{} = \"{parent_alias}\".{}",
+                quoted_ident(nested_field),
+                quoted_ident(parent_field),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 fn query_value_matches_field(value: &QueryVariableValue, field: &Field) -> bool {
