@@ -2093,6 +2093,7 @@ dependencies = [
 name = "vitrail-sqlite"
 version = "0.0.12"
 dependencies = [
+ "clap",
  "sqlx",
  "tokio",
  "vitrail-sqlite-core",

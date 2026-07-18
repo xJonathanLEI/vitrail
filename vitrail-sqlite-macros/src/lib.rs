@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 
 use vitrail_macros_core::{
     NativeAttributeKind, NativeAttributeMapping, OperationFamilies, SchemaMacroConfig,
-    expand_schema,
+    expand_embedded_migrations, expand_schema,
 };
 
 fn expand_sqlite_schema(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
@@ -20,10 +20,26 @@ fn expand_sqlite_schema(input: proc_macro2::TokenStream) -> syn::Result<proc_mac
     expand_schema(input, &config)
 }
 
+fn expand_sqlite_embedded_migrations(
+    input: proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let runtime_path: syn::Path = syn::parse_quote!(::vitrail_sqlite);
+    expand_embedded_migrations(input, &runtime_path)
+}
+
 /// Validates a SQLite schema DSL declaration at compile time.
 #[proc_macro]
 pub fn schema(input: TokenStream) -> TokenStream {
     match expand_sqlite_schema(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+/// Embeds a SQLite migration directory into the compiled application.
+#[proc_macro]
+pub fn embed_migrations(input: TokenStream) -> TokenStream {
+    match expand_sqlite_embedded_migrations(input.into()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }

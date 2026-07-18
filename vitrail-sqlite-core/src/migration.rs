@@ -168,7 +168,7 @@ impl SqliteSchema {
         Self::introspect_ignoring(database_url, S::schema().external_tables()).await
     }
 
-    async fn introspect_from_connection(
+    pub(crate) async fn introspect_from_connection(
         connection: &mut SqliteConnection,
         ignored_tables: &[String],
     ) -> Result<Self, sqlx::Error> {
