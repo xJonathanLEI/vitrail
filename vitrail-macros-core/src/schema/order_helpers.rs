@@ -2,16 +2,20 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedModel, ParsedSchema, to_pascal_case};
+use vitrail_core::schema::Dialect;
 
-pub(super) fn generate_order_helper_items(
+use super::{ParsedModel, ParsedSchema, SchemaMacroConfig, to_pascal_case};
+
+pub(super) fn generate_order_helper_items<D: Dialect>(
     schema: &ParsedSchema,
     module_name: &Ident,
     model: &ParsedModel,
     order_path_assert_ident: &Ident,
     order_entries_macro_ident: &Ident,
     order_field_entry_macro_ident: &Ident,
+    config: &SchemaMacroConfig<D>,
 ) -> Result<TokenStream2> {
+    let runtime_path = config.runtime_path();
     let model_name = LitStr::new(&model.name.to_string(), model.name.span());
     let scalar_fields = model.scalar_fields();
     let relation_fields = model.relation_fields();
@@ -96,15 +100,15 @@ pub(super) fn generate_order_helper_items(
 
         quote! {
             ({ #ident : asc $(,)? }) => {
-                ::vitrail_pg::QueryOrder::scalar(
+                #runtime_path::QueryOrder::scalar(
                     ::core::stringify!(#ident),
-                    ::vitrail_pg::QueryOrderDirection::Asc,
+                    #runtime_path::QueryOrderDirection::Asc,
                 )
             };
             ({ #ident : desc $(,)? }) => {
-                ::vitrail_pg::QueryOrder::scalar(
+                #runtime_path::QueryOrder::scalar(
                     ::core::stringify!(#ident),
-                    ::vitrail_pg::QueryOrderDirection::Desc,
+                    #runtime_path::QueryOrderDirection::Desc,
                 )
             };
         }
@@ -145,7 +149,7 @@ pub(super) fn generate_order_helper_items(
 
             Ok(quote! {
                 ({ #ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? } }) => {{
-                    ::vitrail_pg::QueryOrder::relation(
+                    #runtime_path::QueryOrder::relation(
                         ::core::stringify!(#ident),
                         #module_name::#target_order_entries_macro_ident!({
                             $($nested_field : $nested_value),+
@@ -227,10 +231,10 @@ pub(super) fn generate_order_helper_items(
                 ::std::vec![#module_name::#order_field_entry_macro_ident!({ $field : $value })]
             };
             ({}) => {
-                ::std::vec::Vec::<::vitrail_pg::QueryOrder>::new()
+                ::std::vec::Vec::<#runtime_path::QueryOrder>::new()
             };
             ([]) => {
-                ::std::vec::Vec::<::vitrail_pg::QueryOrder>::new()
+                ::std::vec::Vec::<#runtime_path::QueryOrder>::new()
             };
         }
     })

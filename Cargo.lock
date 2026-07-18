@@ -2037,6 +2037,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vitrail-macros-core"
+version = "0.0.12"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "vitrail-core",
+ "vitrail-pg-core",
+]
+
+[[package]]
 name = "vitrail-pg"
 version = "0.0.12"
 dependencies = [
@@ -2073,6 +2084,7 @@ dependencies = [
  "sqlx",
  "syn 2.0.117",
  "trybuild",
+ "vitrail-macros-core",
  "vitrail-pg-core",
 ]
 

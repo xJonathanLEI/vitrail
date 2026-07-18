@@ -139,6 +139,11 @@ impl fmt::Debug for Schema {
 }
 
 impl Schema {
+    #[doc(hidden)]
+    pub fn __macro_dialect() -> impl vitrail_core::schema::Dialect {
+        PostgresDialect::default()
+    }
+
     pub fn builder() -> SchemaBuilder {
         SchemaBuilder::new()
     }

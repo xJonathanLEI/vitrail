@@ -2,17 +2,30 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedModel, ParsedSchema, rust_field_type_tokens, to_pascal_case};
+use vitrail_core::schema::Dialect;
 
-pub(super) fn generate_filter_helper_items(
+use super::{ParsedModel, ParsedSchema, SchemaMacroConfig, rust_field_type_tokens, to_pascal_case};
+
+pub(super) struct FilterHelperIdents<'a> {
+    pub(super) where_path_assert_ident: &'a Ident,
+    pub(super) where_filter_macro_ident: &'a Ident,
+    pub(super) where_field_filter_macro_ident: &'a Ident,
+}
+
+pub(super) fn generate_filter_helper_items<D: Dialect>(
     schema: &ParsedSchema,
     module_name: &Ident,
     model: &ParsedModel,
     operation: &str,
-    where_path_assert_ident: &Ident,
-    where_filter_macro_ident: &Ident,
-    where_field_filter_macro_ident: &Ident,
+    idents: FilterHelperIdents<'_>,
+    config: &SchemaMacroConfig<D>,
 ) -> Result<TokenStream2> {
+    let FilterHelperIdents {
+        where_path_assert_ident,
+        where_filter_macro_ident,
+        where_field_filter_macro_ident,
+    } = idents;
+    let runtime_path = config.runtime_path();
     let model_name = LitStr::new(&model.name.to_string(), model.name.span());
     let scalar_fields = model.scalar_fields();
     let relation_fields = model.relation_fields();
@@ -129,11 +142,11 @@ pub(super) fn generate_filter_helper_items(
                 model.name,
                 ident
             );
-            let eq_ty = rust_field_type_tokens(field)?;
+            let eq_ty = rust_field_type_tokens(field, config)?;
             let in_element_ty = if let Some(rust_ty) = field.rust_type() {
                 quote! { #rust_ty }
-            } else if field.has_db_uuid() {
-                quote! { ::vitrail_pg::uuid::Uuid }
+            } else if field.has_db_uuid(config) {
+                quote! { #runtime_path::uuid::Uuid }
             } else {
                 match field.ty.name.to_string().as_str() {
                     "Int" => quote! { i64 },
@@ -142,13 +155,14 @@ pub(super) fn generate_filter_helper_items(
                     "Boolean" => quote! { bool },
                     "DateTime" => quote! { ::chrono::DateTime<::chrono::Utc> },
                     "Float" => quote! { f64 },
-                    "Decimal" => quote! { ::vitrail_pg::rust_decimal::Decimal },
+                    "Decimal" => quote! { #runtime_path::rust_decimal::Decimal },
                     "Bytes" => quote! { Vec<u8> },
                     other => unreachable!("unsupported scalar field type `{other}`"),
                 }
             };
-            let is_plain_string_field =
-                field.rust_type().is_none() && !field.has_db_uuid() && field.ty.name == "String";
+            let is_plain_string_field = field.rust_type().is_none()
+                && !field.has_db_uuid(config)
+                && field.ty.name == "String";
 
             let eq_impls = if is_plain_string_field {
                 if field.ty.optional {
@@ -294,30 +308,30 @@ pub(super) fn generate_filter_helper_items(
 
         quote! {
             (#ident : null) => {
-                ::vitrail_pg::QueryFilter::is_null(::core::stringify!(#ident))
+                #runtime_path::QueryFilter::is_null(::core::stringify!(#ident))
             };
             (#ident : { eq : $value:expr $(,)? }) => {{
                 #module_name::#where_filter_value_assert_ident!(#ident, eq, $value);
-                ::vitrail_pg::QueryFilter::eq(
+                #runtime_path::QueryFilter::eq(
                     ::core::stringify!(#ident),
-                    ::vitrail_pg::QueryFilterValue::value($value),
+                    #runtime_path::QueryFilterValue::value($value),
                 )
             }};
             (#ident : { in : $value:expr $(,)? }) => {{
                 #module_name::#where_filter_value_assert_ident!(#ident, in, $value);
-                ::vitrail_pg::QueryFilter::r#in(
+                #runtime_path::QueryFilter::r#in(
                     ::core::stringify!(#ident),
-                    ::vitrail_pg::QueryFilterValues::from($value),
+                    #runtime_path::QueryFilterValues::from($value),
                 )
             }};
             (#ident : { not : null $(,)? }) => {
-                ::vitrail_pg::QueryFilter::is_not_null(::core::stringify!(#ident))
+                #runtime_path::QueryFilter::is_not_null(::core::stringify!(#ident))
             };
             (#ident : { not : $value:expr $(,)? }) => {{
                 #module_name::#where_filter_value_assert_ident!(#ident, not, $value);
-                ::vitrail_pg::QueryFilter::ne(
+                #runtime_path::QueryFilter::ne(
                     ::core::stringify!(#ident),
-                    ::vitrail_pg::QueryFilterValue::value($value),
+                    #runtime_path::QueryFilterValue::value($value),
                 )
             }};
             (#ident : { $operator:ident : $value:tt $(,)? }) => {{
@@ -446,7 +460,7 @@ pub(super) fn generate_filter_helper_items(
                     ))
                 }};
                 (#ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
-                    ::vitrail_pg::QueryFilter::relation(
+                    #runtime_path::QueryFilter::relation(
                         ::core::stringify!(#ident),
                         #module_name::#target_where_filter_macro_ident!({
                             $($nested_field : $nested_value),+
@@ -455,7 +469,7 @@ pub(super) fn generate_filter_helper_items(
                     )
                 };
                 (@variable_filter [ $($path:tt)* ] #ident : { $($nested_field:ident : $nested_value:tt),+ $(,)? }) => {
-                    ::vitrail_pg::QueryFilter::relation(
+                    #runtime_path::QueryFilter::relation(
                         ::core::stringify!(#ident),
                         #module_name::#target_where_variable_filter_macro_ident!(
                             @filter_block
@@ -498,31 +512,31 @@ pub(super) fn generate_filter_helper_items(
 
         quote! {
             (@filter [ $($path:tt)* ] #ident : null) => {
-                ::vitrail_pg::QueryFilter::is_null(::core::stringify!(#ident))
+                #runtime_path::QueryFilter::is_null(::core::stringify!(#ident))
             };
             (@filter [ $($path:tt)* ] #ident : { eq : $value:tt $(,)? }) => {{
-                ::vitrail_pg::QueryFilter::eq(
+                #runtime_path::QueryFilter::eq(
                     ::core::stringify!(#ident),
-                    ::vitrail_pg::QueryFilterValue::variable(
+                    #runtime_path::QueryFilterValue::variable(
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::eq")),
                     ),
                 )
             }};
             (@filter [ $($path:tt)* ] #ident : { in : $value:tt $(,)? }) => {{
-                ::vitrail_pg::QueryFilter::r#in(
+                #runtime_path::QueryFilter::r#in(
                     ::core::stringify!(#ident),
-                    ::vitrail_pg::QueryFilterValues::variable(
+                    #runtime_path::QueryFilterValues::variable(
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::in")),
                     ),
                 )
             }};
             (@filter [ $($path:tt)* ] #ident : { not : null $(,)? }) => {
-                ::vitrail_pg::QueryFilter::is_not_null(::core::stringify!(#ident))
+                #runtime_path::QueryFilter::is_not_null(::core::stringify!(#ident))
             };
             (@filter [ $($path:tt)* ] #ident : { not : $value:tt $(,)? }) => {{
-                ::vitrail_pg::QueryFilter::ne(
+                #runtime_path::QueryFilter::ne(
                     ::core::stringify!(#ident),
-                    ::vitrail_pg::QueryFilterValue::variable(
+                    #runtime_path::QueryFilterValue::variable(
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::not")),
                     ),
                 )
@@ -538,14 +552,14 @@ pub(super) fn generate_filter_helper_items(
 
         quote! {
             (@entries [ $($path:tt)* ] #ident : null) => {
-                ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
+                ::std::vec::Vec::<(::std::string::String, #runtime_path::QueryVariableValue)>::new()
             };
             (@entries [ $($path:tt)* ] #ident : { eq : $value:expr $(,)? }) => {
                 ::std::vec![{
                     #module_name::#where_filter_value_assert_ident!(#ident, eq, $value);
                     (
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::eq")),
-                        ::vitrail_pg::QueryScalar::into_query_variable_value($value),
+                        #runtime_path::QueryScalar::into_query_variable_value($value),
                     )
                 }]
             };
@@ -554,25 +568,25 @@ pub(super) fn generate_filter_helper_items(
                     #module_name::#where_filter_value_assert_ident!(#ident, in, $value);
                     (
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::in")),
-                        ::vitrail_pg::QueryScalar::into_query_variable_value($value),
+                        #runtime_path::QueryScalar::into_query_variable_value($value),
                     )
                 }]
             };
             (@entries [ $($path:tt)* ] #ident : { not : null $(,)? }) => {
-                ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
+                ::std::vec::Vec::<(::std::string::String, #runtime_path::QueryVariableValue)>::new()
             };
             (@entries [ $($path:tt)* ] #ident : { not : $value:expr $(,)? }) => {
                 ::std::vec![{
                     #module_name::#where_filter_value_assert_ident!(#ident, not, $value);
                     (
                         ::std::string::String::from(::core::concat!(::core::stringify!($($path)* #ident), "::not")),
-                        ::vitrail_pg::QueryScalar::into_query_variable_value($value),
+                        #runtime_path::QueryScalar::into_query_variable_value($value),
                     )
                 }]
             };
             (@entries [ $($path:tt)* ] #ident : $value:tt) => {{
                 #module_name::#where_field_filter_macro_ident!(#ident : $value);
-                ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
+                ::std::vec::Vec::<(::std::string::String, #runtime_path::QueryVariableValue)>::new()
             }};
         }
     });
@@ -656,7 +670,7 @@ pub(super) fn generate_filter_helper_items(
                             .expect("single filter should exist"),
                     )
                 } else {
-                    Some(::vitrail_pg::QueryFilter::And(__vitrail_filters))
+                    Some(#runtime_path::QueryFilter::And(__vitrail_filters))
                 }
             }};
         }
@@ -698,7 +712,7 @@ pub(super) fn generate_filter_helper_items(
                     { $($rest)+ }
                 ) {
                     match __vitrail_rest_filter {
-                        ::vitrail_pg::QueryFilter::And(mut __vitrail_rest_filters) => {
+                        #runtime_path::QueryFilter::And(mut __vitrail_rest_filters) => {
                             __vitrail_filters.append(&mut __vitrail_rest_filters);
                         }
                         __vitrail_filter => __vitrail_filters.push(__vitrail_filter),
@@ -711,7 +725,7 @@ pub(super) fn generate_filter_helper_items(
                         .next()
                         .expect("single filter should exist")
                 } else {
-                    ::vitrail_pg::QueryFilter::And(__vitrail_filters)
+                    #runtime_path::QueryFilter::And(__vitrail_filters)
                 })
             }};
             (@filter_block [ $($path:tt)* ] { $where_field:ident : $where_value:tt $(,)? }) => {{
@@ -770,7 +784,7 @@ pub(super) fn generate_filter_helper_items(
             #(#relation_where_field_arms)*
             (@entries [ $($path:tt)* ] $other:ident : $value:tt) => {{
                 #module_name::#where_field_filter_macro_ident!($other : $value);
-                ::std::vec::Vec::<(::std::string::String, ::vitrail_pg::QueryVariableValue)>::new()
+                ::std::vec::Vec::<(::std::string::String, #runtime_path::QueryVariableValue)>::new()
             }};
             ($other:tt $($rest:tt)*) => {{
                 compile_error!(concat!(
@@ -796,7 +810,7 @@ pub(super) fn generate_filter_helper_items(
                 ))
             }};
             ({ $($where_field:ident : $where_value:tt),+ $(,)? }) => {{
-                ::vitrail_pg::QueryVariables::from_values(
+                #runtime_path::QueryVariables::from_values(
                     #module_name::#where_variable_entries_macro_ident!(
                         @entries_block
                         [ ]

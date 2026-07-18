@@ -1,24 +1,17 @@
 [package]
-name = "vitrail-pg-macros"
+name = "vitrail-macros-core"
 version.workspace = true
 authors = ["Jonathan LEI <me@xjonathan.dev>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
 repository.workspace = true
-description = "Procedural macros for the vitrail-pg crate"
-
-[lib]
-proc-macro = true
+description = "Backend-neutral macro expansion internals for Vitrail dialect crates"
 
 [dependencies]
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
-vitrail-macros-core.workspace = true
-vitrail-pg-core.workspace = true
+vitrail-core.workspace = true
 
 [dev-dependencies]
-chrono.workspace = true
-sqlx.workspace = true
-trybuild.workspace = true
 vitrail-pg-core.workspace = true

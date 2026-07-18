@@ -4,8 +4,137 @@ use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Error, Result, Token, Type, bracketed, parenthesized};
-use vitrail_pg_core as core;
+use syn::{Error, Path, Result, Token, Type, bracketed, parenthesized};
+use vitrail_core::{schema as core, validation};
+
+/// A native schema attribute understood by the shared schema parser.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeAttributeKind {
+    DbUuid,
+}
+
+/// Maps a dialect-specific native attribute token to shared validation behavior.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeAttributeMapping {
+    namespace: String,
+    name: String,
+    kind: NativeAttributeKind,
+}
+
+impl NativeAttributeMapping {
+    pub fn new(
+        namespace: impl Into<String>,
+        name: impl Into<String>,
+        kind: NativeAttributeKind,
+    ) -> Self {
+        Self {
+            namespace: namespace.into(),
+            name: name.into(),
+            kind,
+        }
+    }
+}
+
+/// Controls which operation helper families a generated schema module exposes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OperationFamilies {
+    query: bool,
+    insert: bool,
+    update: bool,
+    delete: bool,
+}
+
+impl OperationFamilies {
+    pub const fn new(query: bool, insert: bool, update: bool, delete: bool) -> Self {
+        Self {
+            query,
+            insert,
+            update,
+            delete,
+        }
+    }
+
+    pub const fn all() -> Self {
+        Self::new(true, true, true, true)
+    }
+
+    pub const fn none() -> Self {
+        Self::new(false, false, false, false)
+    }
+
+    pub const fn query(self) -> bool {
+        self.query
+    }
+
+    pub const fn insert(self) -> bool {
+        self.insert
+    }
+
+    pub const fn update(self) -> bool {
+        self.update
+    }
+
+    pub const fn delete(self) -> bool {
+        self.delete
+    }
+
+    pub const fn any(self) -> bool {
+        self.query || self.insert || self.update || self.delete
+    }
+}
+
+impl Default for OperationFamilies {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+/// Dialect-specific configuration for shared schema macro expansion.
+pub struct SchemaMacroConfig<D: core::Dialect> {
+    runtime_path: Path,
+    _dialect: D,
+    native_attributes: Vec<NativeAttributeMapping>,
+    operation_families: OperationFamilies,
+}
+
+impl<D: core::Dialect> SchemaMacroConfig<D> {
+    pub fn new(
+        runtime_path: Path,
+        dialect: D,
+        native_attributes: Vec<NativeAttributeMapping>,
+        operation_families: OperationFamilies,
+    ) -> Self {
+        Self {
+            runtime_path,
+            _dialect: dialect,
+            native_attributes,
+            operation_families,
+        }
+    }
+
+    pub fn runtime_path(&self) -> &Path {
+        &self.runtime_path
+    }
+
+    pub const fn operation_families(&self) -> OperationFamilies {
+        self.operation_families
+    }
+
+    fn native_attribute_kind(&self, namespace: &str, name: &str) -> Option<NativeAttributeKind> {
+        self.native_attributes
+            .iter()
+            .find(|mapping| mapping.namespace == namespace && mapping.name == name)
+            .map(|mapping| mapping.kind)
+    }
+}
+
+/// Parses, validates, and expands a schema using the supplied dialect configuration.
+pub fn expand_schema<D: core::Dialect>(
+    input: TokenStream2,
+    config: &SchemaMacroConfig<D>,
+) -> Result<TokenStream2> {
+    syn::parse2::<ParsedSchema>(input)?.expand(config)
+}
 
 mod kw {
     syn::custom_keyword!(model);
@@ -28,7 +157,6 @@ mod update_helpers;
 
 /// Parsed top-level schema definition plus enough source metadata to translate
 /// clean core validation errors back into compiler diagnostics with spans.
-#[derive(Debug)]
 pub(crate) struct ParsedSchema {
     module_name: Ident,
     external_tables: Vec<syn::LitStr>,
@@ -60,7 +188,6 @@ impl Parse for ParsedSchema {
     }
 }
 
-#[derive(Debug)]
 struct ParsedTablesBlock {
     external_tables: Vec<syn::LitStr>,
 }
@@ -90,13 +217,15 @@ impl Parse for ParsedTablesBlock {
 }
 
 impl ParsedSchema {
-    pub(crate) fn expand(&self) -> Result<TokenStream2> {
-        self.validate()?;
-        self.generate_named_schema()
+    fn expand<D: core::Dialect>(&self, config: &SchemaMacroConfig<D>) -> Result<TokenStream2> {
+        self.validate(config)?;
+        self.generate_named_schema(config)
     }
 
-    fn validate(&self) -> Result<()> {
-        match self.to_core() {
+    fn validate<D: core::Dialect>(&self, config: &SchemaMacroConfig<D>) -> Result<()> {
+        self.validate_native_attributes(config)?;
+
+        match self.to_core(config) {
             Ok(_) => Ok(()),
             Err(errors) => {
                 let mut combined = None;
@@ -116,11 +245,49 @@ impl ParsedSchema {
         }
     }
 
-    fn to_core(&self) -> std::result::Result<core::Schema, core::ValidationErrors> {
+    fn validate_native_attributes<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<()> {
+        let mut combined = None;
+
+        for model in &self.models {
+            for field in &model.fields {
+                for attribute in &field.attributes {
+                    let ParsedAttributeKind::Native(native) = &attribute.kind else {
+                        continue;
+                    };
+
+                    if native.kind(config).is_none() {
+                        push_error(
+                            &mut combined,
+                            Error::new(
+                                native.name.span(),
+                                format!(
+                                    "unknown attribute `@{}.{}`",
+                                    native.namespace, native.name
+                                ),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
+        match combined {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn to_core<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> std::result::Result<core::Schema<D>, validation::ValidationErrors> {
         let mut models = Vec::with_capacity(self.models.len());
 
         for model in &self.models {
-            models.push(model.to_core()?);
+            models.push(model.to_core(config)?);
         }
 
         core::Schema::builder()
@@ -134,41 +301,43 @@ impl ParsedSchema {
             .build()
     }
 
-    fn span_for_validation_error(&self, error: &core::ValidationError) -> Span {
+    fn span_for_validation_error(&self, error: &validation::ValidationError) -> Span {
         let message = error.message.as_str();
 
         match &error.location {
-            core::ValidationLocation::Schema => Span::call_site(),
-            core::ValidationLocation::ExternalTable { table } => self.external_table_span(table),
-            core::ValidationLocation::Model { model } => {
+            validation::ValidationLocation::Schema => Span::call_site(),
+            validation::ValidationLocation::ExternalTable { table } => {
+                self.external_table_span(table)
+            }
+            validation::ValidationLocation::Model { model } => {
                 let prefer_first = message == "first declaration of this model";
                 self.model_span(model, prefer_first)
             }
-            core::ValidationLocation::ModelAttribute { model, attribute } => self
+            validation::ValidationLocation::ModelAttribute { model, attribute } => self
                 .model(model, false)
                 .and_then(|model| model.attribute_span(attribute, false))
                 .unwrap_or_else(|| self.model_span(model, false)),
-            core::ValidationLocation::ModelPrimaryKeyField { model, field } => self
+            validation::ValidationLocation::ModelPrimaryKeyField { model, field } => self
                 .model(model, false)
                 .and_then(|model| model.primary_key_field_span(field, false))
                 .unwrap_or_else(|| self.model_span(model, false)),
-            core::ValidationLocation::ModelUniqueField { model, field } => self
+            validation::ValidationLocation::ModelUniqueField { model, field } => self
                 .model(model, false)
                 .and_then(|model| model.unique_field_span(field, false))
                 .unwrap_or_else(|| self.model_span(model, false)),
-            core::ValidationLocation::ModelIndexField { model, field } => self
+            validation::ValidationLocation::ModelIndexField { model, field } => self
                 .model(model, false)
                 .and_then(|model| model.index_field_span(field, false))
                 .unwrap_or_else(|| self.model_span(model, false)),
-            core::ValidationLocation::Field { model, field } => {
+            validation::ValidationLocation::Field { model, field } => {
                 let prefer_first = message == "first declaration of this field";
                 self.field_span(model, field, prefer_first)
             }
-            core::ValidationLocation::FieldType { model, field, .. } => self
+            validation::ValidationLocation::FieldType { model, field, .. } => self
                 .field(model, field, false)
                 .map(|field| field.ty.name.span())
                 .unwrap_or_else(Span::call_site),
-            core::ValidationLocation::Attribute {
+            validation::ValidationLocation::Attribute {
                 model,
                 field,
                 attribute,
@@ -176,12 +345,12 @@ impl ParsedSchema {
                 .field(model, field, false)
                 .and_then(|field| field.attribute_span(attribute, false))
                 .unwrap_or_else(|| self.field_span(model, field, false)),
-            core::ValidationLocation::RelationAttribute { model, field } => self
+            validation::ValidationLocation::RelationAttribute { model, field } => self
                 .field(model, field, false)
                 .and_then(|field| field.relation())
                 .map(|relation| relation.span)
                 .unwrap_or_else(|| self.field_span(model, field, false)),
-            core::ValidationLocation::RelationField {
+            validation::ValidationLocation::RelationField {
                 model,
                 field,
                 relation_field,
@@ -192,7 +361,7 @@ impl ParsedSchema {
                     .and_then(|relation| relation.field_span(relation_field, !prefer_last))
                     .unwrap_or_else(|| self.field_span(model, field, false))
             }
-            core::ValidationLocation::RelationReference {
+            validation::ValidationLocation::RelationReference {
                 model,
                 field,
                 referenced_field,
@@ -258,7 +427,6 @@ impl ParsedSchema {
 }
 
 /// Parsed model declaration.
-#[derive(Debug)]
 struct ParsedModel {
     name: Ident,
     fields: Vec<ParsedField>,
@@ -300,16 +468,19 @@ impl Parse for ParsedModel {
 }
 
 impl ParsedModel {
-    fn to_core(&self) -> std::result::Result<core::Model, core::ValidationErrors> {
+    fn to_core<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> std::result::Result<core::Model<D>, validation::ValidationErrors> {
         let mut fields = Vec::with_capacity(self.fields.len());
 
         for field in &self.fields {
-            fields.push(field.to_core(&self.name.to_string())?);
+            fields.push(field.to_core(&self.name.to_string(), config)?);
         }
 
         let mut attributes = Vec::with_capacity(self.attributes.len());
         for attribute in &self.attributes {
-            attributes.push(attribute.to_core(&self.name.to_string())?);
+            attributes.push(attribute.to_core::<D>(&self.name.to_string())?);
         }
 
         core::Model::builder(self.name.to_string())
@@ -318,21 +489,25 @@ impl ParsedModel {
             .build()
     }
 
-    fn generate_schema_model(&self) -> Result<TokenStream2> {
+    fn generate_schema_model<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let model_name = syn::LitStr::new(&self.name.to_string(), self.name.span());
         let mut fields = Vec::with_capacity(self.fields.len());
 
         for field in &self.fields {
-            fields.push(field.generate_schema_field()?);
+            fields.push(field.generate_schema_field(config)?);
         }
 
         let mut attributes = Vec::with_capacity(self.attributes.len());
         for attribute in &self.attributes {
-            attributes.push(attribute.generate_schema_attribute()?);
+            attributes.push(attribute.generate_schema_attribute(config)?);
         }
 
         Ok(quote! {
-            ::vitrail_pg::Model::builder(#model_name)
+            #runtime_path::Model::builder(#model_name)
                 .fields(vec![#(#fields),*])
                 .attributes(vec![#(#attributes),*])
                 .build()
@@ -412,7 +587,6 @@ impl ParsedModel {
 }
 
 /// Parsed model attribute with its source span.
-#[derive(Debug)]
 struct ParsedModelAttribute {
     kind: ParsedModelAttributeKind,
     span: Span,
@@ -442,36 +616,41 @@ impl Parse for ParsedModelAttribute {
 }
 
 impl ParsedModelAttribute {
-    fn to_core(
+    fn to_core<D: core::Dialect>(
         &self,
         model_name: &str,
-    ) -> std::result::Result<core::ModelAttribute, core::ValidationErrors> {
+    ) -> std::result::Result<core::ModelAttribute<D>, validation::ValidationErrors> {
         match &self.kind {
-            ParsedModelAttributeKind::Id(primary_key) => {
-                Ok(core::ModelAttribute::Id(primary_key.to_core(model_name)?))
-            }
-            ParsedModelAttributeKind::Unique(unique) => {
-                Ok(core::ModelAttribute::Unique(unique.to_core(model_name)?))
-            }
+            ParsedModelAttributeKind::Id(primary_key) => Ok(core::ModelAttribute::Id(
+                primary_key.to_core::<D>(model_name)?,
+            )),
+            ParsedModelAttributeKind::Unique(unique) => Ok(core::ModelAttribute::Unique(
+                unique.to_core::<D>(model_name)?,
+            )),
             ParsedModelAttributeKind::Index(index) => {
-                Ok(core::ModelAttribute::Index(index.to_core(model_name)?))
+                Ok(core::ModelAttribute::Index(index.to_core::<D>(model_name)?))
             }
         }
     }
 
-    fn generate_schema_attribute(&self) -> Result<TokenStream2> {
+    fn generate_schema_attribute<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
+
         Ok(match &self.kind {
             ParsedModelAttributeKind::Id(primary_key) => {
-                let primary_key = primary_key.generate_schema_attribute();
-                quote! { ::vitrail_pg::ModelAttribute::Id(#primary_key) }
+                let primary_key = primary_key.generate_schema_attribute(config);
+                quote! { #runtime_path::ModelAttribute::Id(#primary_key) }
             }
             ParsedModelAttributeKind::Unique(unique) => {
-                let unique = unique.generate_schema_attribute();
-                quote! { ::vitrail_pg::ModelAttribute::Unique(#unique) }
+                let unique = unique.generate_schema_attribute(config);
+                quote! { #runtime_path::ModelAttribute::Unique(#unique) }
             }
             ParsedModelAttributeKind::Index(index) => {
-                let index = index.generate_schema_attribute();
-                quote! { ::vitrail_pg::ModelAttribute::Index(#index) }
+                let index = index.generate_schema_attribute(config);
+                quote! { #runtime_path::ModelAttribute::Index(#index) }
             }
         })
     }
@@ -506,14 +685,12 @@ impl ParsedModelAttribute {
     }
 }
 
-#[derive(Debug)]
 enum ParsedModelAttributeKind {
     Id(ParsedModelIdAttribute),
     Unique(ParsedModelUniqueAttribute),
     Index(ParsedModelIndexAttribute),
 }
 
-#[derive(Debug)]
 struct ParsedModelIdAttribute {
     fields: Vec<Ident>,
 }
@@ -536,16 +713,20 @@ impl Parse for ParsedModelIdAttribute {
 }
 
 impl ParsedModelIdAttribute {
-    fn to_core(
+    fn to_core<D: core::Dialect>(
         &self,
         _model_name: &str,
-    ) -> std::result::Result<core::ModelPrimaryKeyAttribute, core::ValidationErrors> {
+    ) -> std::result::Result<core::ModelPrimaryKeyAttribute<D>, validation::ValidationErrors> {
         core::ModelPrimaryKeyAttribute::builder()
             .fields(self.fields.iter().map(ToString::to_string).collect())
             .build()
     }
 
-    fn generate_schema_attribute(&self) -> TokenStream2 {
+    fn generate_schema_attribute<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> TokenStream2 {
+        let runtime_path = config.runtime_path();
         let fields = self
             .fields
             .iter()
@@ -553,7 +734,7 @@ impl ParsedModelIdAttribute {
             .collect::<Vec<_>>();
 
         quote! {
-            ::vitrail_pg::ModelPrimaryKeyAttribute::builder()
+            #runtime_path::ModelPrimaryKeyAttribute::builder()
                 .fields(vec![#(#fields.to_owned()),*])
                 .build()
                 .expect("model primary key attribute was validated during macro expansion")
@@ -576,7 +757,6 @@ impl ParsedModelIdAttribute {
     }
 }
 
-#[derive(Debug)]
 struct ParsedModelUniqueAttribute {
     fields: Vec<Ident>,
 }
@@ -599,16 +779,20 @@ impl Parse for ParsedModelUniqueAttribute {
 }
 
 impl ParsedModelUniqueAttribute {
-    fn to_core(
+    fn to_core<D: core::Dialect>(
         &self,
         _model_name: &str,
-    ) -> std::result::Result<core::ModelUniqueAttribute, core::ValidationErrors> {
+    ) -> std::result::Result<core::ModelUniqueAttribute<D>, validation::ValidationErrors> {
         core::ModelUniqueAttribute::builder()
             .fields(self.fields.iter().map(ToString::to_string).collect())
             .build()
     }
 
-    fn generate_schema_attribute(&self) -> TokenStream2 {
+    fn generate_schema_attribute<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> TokenStream2 {
+        let runtime_path = config.runtime_path();
         let fields = self
             .fields
             .iter()
@@ -616,7 +800,7 @@ impl ParsedModelUniqueAttribute {
             .collect::<Vec<_>>();
 
         quote! {
-            ::vitrail_pg::ModelUniqueAttribute::builder()
+            #runtime_path::ModelUniqueAttribute::builder()
                 .fields(vec![#(#fields.to_owned()),*])
                 .build()
                 .expect("model unique attribute was validated during macro expansion")
@@ -639,7 +823,6 @@ impl ParsedModelUniqueAttribute {
     }
 }
 
-#[derive(Debug)]
 struct ParsedModelIndexAttribute {
     fields: Vec<Ident>,
 }
@@ -662,16 +845,20 @@ impl Parse for ParsedModelIndexAttribute {
 }
 
 impl ParsedModelIndexAttribute {
-    fn to_core(
+    fn to_core<D: core::Dialect>(
         &self,
         _model_name: &str,
-    ) -> std::result::Result<core::ModelIndexAttribute, core::ValidationErrors> {
+    ) -> std::result::Result<core::ModelIndexAttribute<D>, validation::ValidationErrors> {
         core::ModelIndexAttribute::builder()
             .fields(self.fields.iter().map(ToString::to_string).collect())
             .build()
     }
 
-    fn generate_schema_attribute(&self) -> TokenStream2 {
+    fn generate_schema_attribute<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> TokenStream2 {
+        let runtime_path = config.runtime_path();
         let fields = self
             .fields
             .iter()
@@ -679,7 +866,7 @@ impl ParsedModelIndexAttribute {
             .collect::<Vec<_>>();
 
         quote! {
-            ::vitrail_pg::ModelIndexAttribute::builder()
+            #runtime_path::ModelIndexAttribute::builder()
                 .fields(vec![#(#fields.to_owned()),*])
                 .build()
                 .expect("model index attribute was validated during macro expansion")
@@ -703,7 +890,6 @@ impl ParsedModelIndexAttribute {
 }
 
 /// Parsed field declaration within a model.
-#[derive(Debug)]
 struct ParsedField {
     name: Ident,
     ty: ParsedFieldType,
@@ -739,14 +925,15 @@ impl Parse for ParsedField {
 }
 
 impl ParsedField {
-    fn to_core(
+    fn to_core<D: core::Dialect>(
         &self,
         model_name: &str,
-    ) -> std::result::Result<core::Field, core::ValidationErrors> {
+        config: &SchemaMacroConfig<D>,
+    ) -> std::result::Result<core::Field<D>, validation::ValidationErrors> {
         let mut attributes = Vec::with_capacity(self.attributes.len());
 
         for attribute in &self.attributes {
-            attributes.push(attribute.to_core(model_name, &self.name.to_string())?);
+            attributes.push(attribute.to_core(model_name, &self.name.to_string(), config)?);
         }
 
         core::Field::builder(self.name.to_string(), self.ty.to_core())
@@ -754,17 +941,21 @@ impl ParsedField {
             .build_for_model(model_name)
     }
 
-    fn generate_schema_field(&self) -> Result<TokenStream2> {
+    fn generate_schema_field<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let field_name = syn::LitStr::new(&self.name.to_string(), self.name.span());
-        let ty = self.ty.generate_schema_field_type();
+        let ty = self.ty.generate_schema_field_type(config);
         let mut attributes = Vec::with_capacity(self.attributes.len() + 1);
 
         for attribute in &self.attributes {
-            attributes.push(attribute.generate_schema_attribute()?);
+            attributes.push(attribute.generate_schema_attribute(config)?);
         }
 
         Ok(quote! {
-            ::vitrail_pg::Field::builder(#field_name, #ty)
+            #runtime_path::Field::builder(#field_name, #ty)
                 .attributes(vec![#(#attributes),*])
                 .build()
                 .expect("field was validated during macro expansion")
@@ -789,10 +980,14 @@ impl ParsedField {
             })
     }
 
-    fn has_db_uuid(&self) -> bool {
-        self.attributes
-            .iter()
-            .any(|attribute| matches!(attribute.kind, ParsedAttributeKind::DbUuid))
+    fn has_db_uuid<D: core::Dialect>(&self, config: &SchemaMacroConfig<D>) -> bool {
+        self.attributes.iter().any(|attribute| {
+            matches!(
+                &attribute.kind,
+                ParsedAttributeKind::Native(native)
+                    if native.kind(config) == Some(NativeAttributeKind::DbUuid)
+            )
+        })
     }
 
     fn can_be_omitted_in_insert(&self) -> bool {
@@ -828,7 +1023,6 @@ impl ParsedField {
 }
 
 /// Parsed field type, including optionality and relation cardinality.
-#[derive(Debug)]
 struct ParsedFieldType {
     name: Ident,
     optional: bool,
@@ -887,25 +1081,29 @@ impl ParsedFieldType {
         }
     }
 
-    fn generate_schema_field_type(&self) -> TokenStream2 {
+    fn generate_schema_field_type<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> TokenStream2 {
+        let runtime_path = config.runtime_path();
+
         match scalar_type_from_ident(&self.name) {
             Some(scalar) => {
                 let variant = scalar_type_variant(scalar);
                 let optional = self.optional;
-                quote! { ::vitrail_pg::FieldType::scalar(::vitrail_pg::ScalarType::#variant, #optional) }
+                quote! { #runtime_path::FieldType::scalar(#runtime_path::ScalarType::#variant, #optional) }
             }
             None => {
                 let model = syn::LitStr::new(&self.name.to_string(), self.name.span());
                 let optional = self.optional;
                 let many = self.many;
-                quote! { ::vitrail_pg::FieldType::relation(#model, #optional, #many) }
+                quote! { #runtime_path::FieldType::relation(#model, #optional, #many) }
             }
         }
     }
 }
 
 /// Parsed field attribute with its source span.
-#[derive(Debug)]
 struct ParsedAttribute {
     kind: ParsedAttributeKind,
     span: Span,
@@ -921,15 +1119,10 @@ impl Parse for ParsedAttribute {
             input.parse::<Token![.]>()?;
             let second = input.call(Ident::parse_any)?;
 
-            match (first.to_string().as_str(), second.to_string().as_str()) {
-                ("db", "Uuid") => ParsedAttributeKind::DbUuid,
-                _ => {
-                    return Err(Error::new(
-                        second.span(),
-                        format!("unknown attribute `@{}.{}`", first, second),
-                    ));
-                }
-            }
+            ParsedAttributeKind::Native(ParsedNativeAttribute {
+                namespace: first,
+                name: second,
+            })
         } else {
             match first.to_string().as_str() {
                 "id" => ParsedAttributeKind::Id,
@@ -952,11 +1145,12 @@ impl Parse for ParsedAttribute {
 }
 
 impl ParsedAttribute {
-    fn to_core(
+    fn to_core<D: core::Dialect>(
         &self,
         model_name: &str,
         field_name: &str,
-    ) -> std::result::Result<core::Attribute, core::ValidationErrors> {
+        config: &SchemaMacroConfig<D>,
+    ) -> std::result::Result<core::Attribute<D>, validation::ValidationErrors> {
         match &self.kind {
             ParsedAttributeKind::Id => Ok(core::Attribute::Id),
             ParsedAttributeKind::Unique => Ok(core::Attribute::Unique),
@@ -965,67 +1159,99 @@ impl ParsedAttribute {
                 Ok(core::Attribute::Default(default.to_core()))
             }
             ParsedAttributeKind::Relation(relation) => Ok(core::Attribute::Relation(
-                relation.to_core(model_name, field_name)?,
+                relation.to_core::<D>(model_name, field_name)?,
             )),
-            ParsedAttributeKind::DbUuid => Ok(core::Attribute::DbUuid),
+            ParsedAttributeKind::Native(native) => {
+                match native
+                    .kind(config)
+                    .expect("native attributes were validated before core conversion")
+                {
+                    NativeAttributeKind::DbUuid => Ok(core::Attribute::DbUuid),
+                }
+            }
             ParsedAttributeKind::RustTy(rust_type) => Ok(core::Attribute::RustType(
                 core::RustTypeAttribute::new(rust_type.ty.to_token_stream().to_string()),
             )),
         }
     }
 
-    fn generate_schema_attribute(&self) -> Result<TokenStream2> {
+    fn generate_schema_attribute<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
+
         Ok(match &self.kind {
-            ParsedAttributeKind::Id => quote! { ::vitrail_pg::Attribute::Id },
-            ParsedAttributeKind::Unique => quote! { ::vitrail_pg::Attribute::Unique },
-            ParsedAttributeKind::Index => quote! { ::vitrail_pg::Attribute::Index },
+            ParsedAttributeKind::Id => quote! { #runtime_path::Attribute::Id },
+            ParsedAttributeKind::Unique => quote! { #runtime_path::Attribute::Unique },
+            ParsedAttributeKind::Index => quote! { #runtime_path::Attribute::Index },
             ParsedAttributeKind::Default(default) => {
-                let default = default.generate_schema_default_attribute();
-                quote! { ::vitrail_pg::Attribute::Default(#default) }
+                let default = default.generate_schema_default_attribute(config);
+                quote! { #runtime_path::Attribute::Default(#default) }
             }
             ParsedAttributeKind::Relation(relation) => {
-                let relation = relation.generate_schema_relation_attribute()?;
-                quote! { ::vitrail_pg::Attribute::Relation(#relation) }
+                let relation = relation.generate_schema_relation_attribute(config)?;
+                quote! { #runtime_path::Attribute::Relation(#relation) }
             }
-            ParsedAttributeKind::DbUuid => quote! { ::vitrail_pg::Attribute::DbUuid },
+            ParsedAttributeKind::Native(native) => {
+                match native
+                    .kind(config)
+                    .expect("native attributes were validated before generation")
+                {
+                    NativeAttributeKind::DbUuid => {
+                        quote! { #runtime_path::Attribute::DbUuid }
+                    }
+                }
+            }
             ParsedAttributeKind::RustTy(rust_type) => {
                 let path = syn::LitStr::new(
                     &rust_type.ty.to_token_stream().to_string(),
                     rust_type.ty.span(),
                 );
                 quote! {
-                    ::vitrail_pg::Attribute::RustType(::vitrail_pg::RustTypeAttribute::new(#path))
+                    #runtime_path::Attribute::RustType(#runtime_path::RustTypeAttribute::new(#path))
                 }
             }
         })
     }
 
-    fn name(&self) -> &'static str {
-        match self.kind {
-            ParsedAttributeKind::Id => "@id",
-            ParsedAttributeKind::Unique => "@unique",
-            ParsedAttributeKind::Index => "@index",
-            ParsedAttributeKind::Default(_) => "@default",
-            ParsedAttributeKind::Relation(_) => "@relation",
-            ParsedAttributeKind::DbUuid => "@db.Uuid",
-            ParsedAttributeKind::RustTy(_) => "@rust_ty",
+    fn name(&self) -> String {
+        match &self.kind {
+            ParsedAttributeKind::Id => "@id".to_owned(),
+            ParsedAttributeKind::Unique => "@unique".to_owned(),
+            ParsedAttributeKind::Index => "@index".to_owned(),
+            ParsedAttributeKind::Default(_) => "@default".to_owned(),
+            ParsedAttributeKind::Relation(_) => "@relation".to_owned(),
+            ParsedAttributeKind::Native(native) => {
+                format!("@{}.{}", native.namespace, native.name)
+            }
+            ParsedAttributeKind::RustTy(_) => "@rust_ty".to_owned(),
         }
     }
 }
 
 /// Supported field attributes in the schema DSL.
-#[derive(Debug)]
 enum ParsedAttributeKind {
     Id,
     Unique,
     Index,
     Default(ParsedDefaultAttribute),
     Relation(ParsedRelationAttribute),
-    DbUuid,
+    Native(ParsedNativeAttribute),
     RustTy(ParsedRustTypeAttribute),
 }
 
-#[derive(Debug)]
+struct ParsedNativeAttribute {
+    namespace: Ident,
+    name: Ident,
+}
+
+impl ParsedNativeAttribute {
+    fn kind<D: core::Dialect>(&self, config: &SchemaMacroConfig<D>) -> Option<NativeAttributeKind> {
+        config.native_attribute_kind(&self.namespace.to_string(), &self.name.to_string())
+    }
+}
+
 struct ParsedRustTypeAttribute {
     ty: Type,
 }
@@ -1048,7 +1274,6 @@ impl Parse for ParsedRustTypeAttribute {
 }
 
 /// Parsed `@default(...)` attribute payload.
-#[derive(Debug)]
 struct ParsedDefaultAttribute {
     function: Ident,
 }
@@ -1081,7 +1306,7 @@ impl Parse for ParsedDefaultAttribute {
 }
 
 impl ParsedDefaultAttribute {
-    fn to_core(&self) -> core::DefaultAttribute {
+    fn to_core<D: core::Dialect>(&self) -> core::DefaultAttribute<D> {
         core::DefaultAttribute::new(match self.function.to_string().as_str() {
             "autoincrement" => core::DefaultFunction::Autoincrement,
             "now" => core::DefaultFunction::Now,
@@ -1089,22 +1314,25 @@ impl ParsedDefaultAttribute {
         })
     }
 
-    fn generate_schema_default_attribute(&self) -> TokenStream2 {
+    fn generate_schema_default_attribute<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> TokenStream2 {
+        let runtime_path = config.runtime_path();
         let function = match self.function.to_string().as_str() {
-            "autoincrement" => quote! { ::vitrail_pg::DefaultFunction::Autoincrement },
-            "now" => quote! { ::vitrail_pg::DefaultFunction::Now },
+            "autoincrement" => quote! { #runtime_path::DefaultFunction::Autoincrement },
+            "now" => quote! { #runtime_path::DefaultFunction::Now },
             other => {
                 let other = syn::LitStr::new(other, self.function.span());
-                quote! { ::vitrail_pg::DefaultFunction::Other(#other.to_owned()) }
+                quote! { #runtime_path::DefaultFunction::Other(#other.to_owned()) }
             }
         };
 
-        quote! { ::vitrail_pg::DefaultAttribute::new(#function) }
+        quote! { #runtime_path::DefaultAttribute::new(#function) }
     }
 }
 
 /// Parsed `@relation(...)` attribute payload.
-#[derive(Debug)]
 struct ParsedRelationAttribute {
     fields: Vec<Ident>,
     references: Vec<Ident>,
@@ -1169,18 +1397,22 @@ impl Parse for ParsedRelationAttribute {
 }
 
 impl ParsedRelationAttribute {
-    fn to_core(
+    fn to_core<D: core::Dialect>(
         &self,
         model_name: &str,
         field_name: &str,
-    ) -> std::result::Result<core::RelationAttribute, core::ValidationErrors> {
+    ) -> std::result::Result<core::RelationAttribute<D>, validation::ValidationErrors> {
         core::RelationAttribute::builder()
             .fields(self.fields.iter().map(ToString::to_string).collect())
             .references(self.references.iter().map(ToString::to_string).collect())
             .build_for_field(model_name, field_name)
     }
 
-    fn generate_schema_relation_attribute(&self) -> Result<TokenStream2> {
+    fn generate_schema_relation_attribute<D: core::Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let fields = self
             .fields
             .iter()
@@ -1193,7 +1425,7 @@ impl ParsedRelationAttribute {
             .collect::<Vec<_>>();
 
         Ok(quote! {
-            ::vitrail_pg::RelationAttribute::builder()
+            #runtime_path::RelationAttribute::builder()
                 .fields(vec![#(#fields.to_owned()),*])
                 .references(vec![#(#references.to_owned()),*])
                 .build()
@@ -1256,7 +1488,11 @@ fn scalar_type_from_ident(ident: &Ident) -> Option<core::ScalarType> {
     }
 }
 
-fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
+fn rust_type_tokens<D: core::Dialect>(
+    ty: &ParsedFieldType,
+    config: &SchemaMacroConfig<D>,
+) -> Result<TokenStream2> {
+    let runtime_path = config.runtime_path();
     let base = match ty.name.to_string().as_str() {
         "Int" => quote! { i64 },
         "BigInt" => quote! { i64 },
@@ -1264,7 +1500,7 @@ fn rust_type_tokens(ty: &ParsedFieldType) -> Result<TokenStream2> {
         "Boolean" => quote! { bool },
         "DateTime" => quote! { ::chrono::DateTime<::chrono::Utc> },
         "Float" => quote! { f64 },
-        "Decimal" => quote! { ::vitrail_pg::rust_decimal::Decimal },
+        "Decimal" => quote! { #runtime_path::rust_decimal::Decimal },
         "Bytes" => quote! { Vec<u8> },
         other => {
             return Err(Error::new(
@@ -1323,25 +1559,27 @@ fn rust_type_alias_items(module_name: &Ident, model: &ParsedModel) -> TokenStrea
     }
 }
 
-fn schema_owned_rust_field_type_tokens(
+fn schema_owned_rust_field_type_tokens<D: core::Dialect>(
     module_name: &Ident,
     model: &ParsedModel,
     field: &ParsedField,
+    config: &SchemaMacroConfig<D>,
 ) -> Result<TokenStream2> {
+    let runtime_path = config.runtime_path();
     let dollar_crate = dollar_crate();
     let base = if field.rust_type().is_some() {
         let alias_module_ident = rust_type_alias_module_ident(module_name, &model.name);
         let alias_ident = rust_type_alias_ident(module_name, &model.name, &field.name);
 
         quote! { #dollar_crate::#module_name::#alias_module_ident::#alias_ident }
-    } else if field.has_db_uuid() {
-        quote! { ::vitrail_pg::uuid::Uuid }
+    } else if field.has_db_uuid(config) {
+        quote! { #runtime_path::uuid::Uuid }
     } else {
-        rust_type_tokens(&field.ty)?
+        rust_type_tokens(&field.ty, config)?
     };
 
     Ok(
-        if field.ty.optional && (field.rust_type().is_some() || field.has_db_uuid()) {
+        if field.ty.optional && (field.rust_type().is_some() || field.has_db_uuid(config)) {
             quote! { Option<#base> }
         } else {
             base
@@ -1349,17 +1587,21 @@ fn schema_owned_rust_field_type_tokens(
     )
 }
 
-fn rust_field_type_tokens(field: &ParsedField) -> Result<TokenStream2> {
+fn rust_field_type_tokens<D: core::Dialect>(
+    field: &ParsedField,
+    config: &SchemaMacroConfig<D>,
+) -> Result<TokenStream2> {
+    let runtime_path = config.runtime_path();
     let base = if let Some(rust_ty) = field.rust_type() {
         quote! { #rust_ty }
-    } else if field.has_db_uuid() {
-        quote! { ::vitrail_pg::uuid::Uuid }
+    } else if field.has_db_uuid(config) {
+        quote! { #runtime_path::uuid::Uuid }
     } else {
-        rust_type_tokens(&field.ty)?
+        rust_type_tokens(&field.ty, config)?
     };
 
     Ok(
-        if field.ty.optional && (field.rust_type().is_some() || field.has_db_uuid()) {
+        if field.ty.optional && (field.rust_type().is_some() || field.has_db_uuid(config)) {
             quote! { Option<#base> }
         } else {
             base
@@ -1421,6 +1663,19 @@ mod tests {
         syn::parse2(tokens).expect("schema should parse")
     }
 
+    fn postgres_config() -> SchemaMacroConfig<impl core::Dialect> {
+        SchemaMacroConfig::new(
+            syn::parse_quote!(::vitrail_pg),
+            vitrail_pg_core::Schema::__macro_dialect(),
+            vec![NativeAttributeMapping::new(
+                "db",
+                "Uuid",
+                NativeAttributeKind::DbUuid,
+            )],
+            OperationFamilies::all(),
+        )
+    }
+
     #[test]
     fn accepts_valid_schema_definition() {
         let schema = parse_schema(quote! {
@@ -1451,7 +1706,9 @@ mod tests {
             }
         });
 
-        schema.validate().expect("schema should validate");
+        schema
+            .validate(&postgres_config())
+            .expect("schema should validate");
     }
 
     #[test]
@@ -1477,10 +1734,58 @@ mod tests {
             }
         });
 
-        let generated = schema.expand().expect("schema should expand").to_string();
+        let generated = schema
+            .expand(&postgres_config())
+            .expect("schema should expand")
+            .to_string();
         assert!(generated.contains("pub mod my_schema"));
         assert!(generated.contains("pub fn query < T > ()"));
         assert!(generated.contains("macro_rules ! __vitrail_query_my_schema"));
+    }
+
+    #[test]
+    fn all_operation_helpers_use_configured_runtime_path() {
+        let schema = parse_schema(quote! {
+            name custom_runtime_schema
+
+            model account {
+                id      Int     @id @default(autoincrement())
+                uid     String  @unique @db.Uuid
+                balance Decimal
+            }
+        });
+        let config = SchemaMacroConfig::new(
+            syn::parse_quote!(::custom_runtime),
+            vitrail_pg_core::Schema::__macro_dialect(),
+            vec![NativeAttributeMapping::new(
+                "db",
+                "Uuid",
+                NativeAttributeKind::DbUuid,
+            )],
+            OperationFamilies::all(),
+        );
+
+        let generated = schema
+            .expand(&config)
+            .expect("custom runtime schema should expand")
+            .to_string();
+
+        assert!(!generated.contains("vitrail_pg"));
+
+        for expected in [
+            "custom_runtime :: SchemaAccess",
+            "custom_runtime :: Query",
+            "custom_runtime :: Insert",
+            "custom_runtime :: DeleteMany",
+            "custom_runtime :: UpdateMany",
+            "custom_runtime :: uuid :: Uuid",
+            "custom_runtime :: rust_decimal :: Decimal",
+        ] {
+            assert!(
+                generated.contains(expected),
+                "generated operation support is missing configured runtime path `{expected}`"
+            );
+        }
     }
 
     #[test]
@@ -1494,7 +1799,9 @@ mod tests {
             }
         });
 
-        schema.validate().expect("schema should validate");
+        schema
+            .validate(&postgres_config())
+            .expect("schema should validate");
     }
 
     #[test]
@@ -1516,9 +1823,14 @@ mod tests {
             }
         });
 
-        schema.validate().expect("schema should validate");
+        schema
+            .validate(&postgres_config())
+            .expect("schema should validate");
 
-        let generated = schema.expand().expect("schema should expand").to_string();
+        let generated = schema
+            .expand(&postgres_config())
+            .expect("schema should expand")
+            .to_string();
         assert!(generated.contains("ScalarType :: BigInt"));
         assert!(generated.contains("settled_at"));
         assert!(generated.contains("external_ref"));
@@ -1535,7 +1847,9 @@ mod tests {
             }
         });
 
-        let error = schema.validate().expect_err("schema should fail");
+        let error = schema
+            .validate(&postgres_config())
+            .expect_err("schema should fail");
         assert!(
             error
                 .to_string()
@@ -1561,6 +1875,81 @@ mod tests {
         })
         .expect("schema should parse");
 
-        schema.validate().expect("schema should validate");
+        schema
+            .validate(&postgres_config())
+            .expect("schema should validate");
+    }
+
+    #[test]
+    fn schema_only_generation_uses_runtime_path_and_omits_operation_support() {
+        let schema = parse_schema(quote! {
+            name schema_only
+
+            model user {
+                id          Int    @id @default(autoincrement())
+                postal_code String @rust_ty(PostalCode)
+            }
+        });
+        let config = SchemaMacroConfig::new(
+            syn::parse_quote!(::custom_runtime),
+            vitrail_pg_core::Schema::__macro_dialect(),
+            vec![NativeAttributeMapping::new(
+                "db",
+                "Uuid",
+                NativeAttributeKind::DbUuid,
+            )],
+            OperationFamilies::none(),
+        );
+
+        let generated = schema
+            .expand(&config)
+            .expect("schema-only configuration should expand")
+            .to_string();
+
+        assert!(generated.contains("pub mod schema_only"));
+        assert!(generated.contains("custom_runtime :: Schema"));
+        assert!(generated.contains("custom_runtime :: SchemaAccess"));
+        assert!(!generated.contains("vitrail_pg"));
+
+        for unsupported_item in [
+            "pub fn query <",
+            "pub fn insert <",
+            "pub fn delete_many <",
+            "pub fn update_many <",
+            "__vitrail_query_schema_only",
+            "__vitrail_insert_schema_only",
+            "__vitrail_delete_schema_only",
+            "__vitrail_update_schema_only",
+            "__vitrail_rust_types_schema_only_user",
+        ] {
+            assert!(
+                !generated.contains(unsupported_item),
+                "schema-only generation unexpectedly emitted `{unsupported_item}`"
+            );
+        }
+    }
+
+    #[test]
+    fn native_attribute_mapping_controls_supported_tokens() {
+        let schema = parse_schema(quote! {
+            name native_attributes
+
+            model user {
+                id  Int    @id @default(autoincrement())
+                uid String @unique @db.Uuid
+            }
+        });
+        let config = SchemaMacroConfig::new(
+            syn::parse_quote!(::custom_runtime),
+            vitrail_pg_core::Schema::__macro_dialect(),
+            Vec::new(),
+            OperationFamilies::none(),
+        );
+
+        let error = schema
+            .validate(&config)
+            .expect_err("unmapped native attribute should be rejected");
+
+        assert!(error.to_string().contains("unknown attribute `@db.Uuid`"));
     }
 }

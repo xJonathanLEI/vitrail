@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "vitrail-core",
+    "vitrail-macros-core",
     "vitrail-pg",
     "vitrail-pg-core",
     "vitrail-pg-macros",
@@ -31,6 +32,7 @@ trybuild = "1.0.116"
 url = "2.5.8"
 uuid = "1.23.0"
 vitrail-core = { version = "0.0.12", path = "./vitrail-core" }
+vitrail-macros-core = { version = "0.0.12", path = "./vitrail-macros-core" }
 vitrail-pg-core = { version = "0.0.12", path = "./vitrail-pg-core" }
 vitrail-pg-macros = { version = "0.0.12", path = "./vitrail-pg-macros" }
 vitrail-pg = { version = "0.0.12", path = "./vitrail-pg" }

@@ -2,14 +2,22 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
+use vitrail_core::schema::Dialect;
+
 use super::{
-    ParsedSchema, filter_helpers::generate_filter_helper_items,
-    order_helpers::generate_order_helper_items, rust_field_type_tokens,
-    schema_owned_rust_field_type_tokens, to_pascal_case,
+    ParsedSchema, SchemaMacroConfig,
+    filter_helpers::{FilterHelperIdents, generate_filter_helper_items},
+    order_helpers::generate_order_helper_items,
+    rust_field_type_tokens, schema_owned_rust_field_type_tokens, to_pascal_case,
 };
 
 impl ParsedSchema {
-    pub(super) fn generate_query_helper_macros(&self, module_name: &Ident) -> Result<TokenStream2> {
+    pub(super) fn generate_query_helper_macros<D: Dialect>(
+        &self,
+        module_name: &Ident,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let main_macro_ident = format_ident!("__vitrail_query_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
@@ -82,9 +90,12 @@ impl ParsedSchema {
                 module_name,
                 model,
                 "query",
-                &where_path_assert_ident,
-                &where_filter_macro_ident,
-                &where_field_filter_ident,
+                FilterHelperIdents {
+                    where_path_assert_ident: &where_path_assert_ident,
+                    where_filter_macro_ident: &where_filter_macro_ident,
+                    where_field_filter_macro_ident: &where_field_filter_ident,
+                },
+                config,
             )?;
             let order_helper_items = generate_order_helper_items(
                 self,
@@ -93,6 +104,7 @@ impl ParsedSchema {
                 &order_path_assert_ident,
                 &order_entries_macro_ident,
                 &order_field_entry_macro_ident,
+                config,
             )?;
 
             let query_result_traits = scalar_fields
@@ -104,7 +116,7 @@ impl ParsedSchema {
                         model.name,
                         field.name
                     );
-                    let rust_ty = rust_field_type_tokens(field)?;
+                    let rust_ty = rust_field_type_tokens(field, config)?;
 
                     Ok(quote! {
                         #[allow(non_camel_case_types)]
@@ -139,6 +151,7 @@ impl ParsedSchema {
                                 module_name,
                                 target,
                                 target_field,
+                                config,
                             )?;
                             Ok(quote! { pub #field_ident: #field_ty, })
                         })
@@ -149,7 +162,7 @@ impl ParsedSchema {
                     Ok(quote! {
                         (#ident, $nested_ident:ident, true) => {
                             #[allow(dead_code)]
-                            #[derive(::vitrail_pg::QueryResult)]
+                            #[derive(#runtime_path::QueryResult)]
                             #[vitrail(schema = #module_name::Schema, model = #target_model_name)]
                             struct $nested_ident {
                                 #(#target_scalar_fields)*
@@ -205,7 +218,8 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = schema_owned_rust_field_type_tokens(module_name, model, field)?;
+                    let ty =
+                        schema_owned_rust_field_type_tokens(module_name, model, field, config)?;
                     Ok(quote! {
                         (
                             @struct
@@ -363,13 +377,13 @@ impl ParsedSchema {
                     ) => {{
                         $( #module_name::#select_assert_ident!($select_field); )*
                         $( $( #module_name::#include_assert_ident!($include_field); )* )?
-                        ::vitrail_pg::QuerySelection {
+                        #runtime_path::QuerySelection {
                             model: #model_name,
                             scalar_fields: ::std::vec![$( ::core::stringify!($select_field) ),*],
                             relations: ::std::vec![
                                 $(
                                     $(
-                                        ::vitrail_pg::QueryRelationSelection {
+                                        #runtime_path::QueryRelationSelection {
                                             field: ::core::stringify!($include_field),
                                             selection: #module_name::#include_selection_ident!($include_field, $include_value),
                                         }
@@ -388,11 +402,11 @@ impl ParsedSchema {
                             )?,
                             skip: None $(.or(Some({
                                 let __vitrail_skip: i64 = $skip;
-                                ::vitrail_pg::QueryPagination::value(__vitrail_skip)
+                                #runtime_path::QueryPagination::value(__vitrail_skip)
                             })))?,
                             limit: None $(.or(Some({
                                 let __vitrail_limit: i64 = $limit;
-                                ::vitrail_pg::QueryPagination::value(__vitrail_limit)
+                                #runtime_path::QueryPagination::value(__vitrail_limit)
                             })))?,
                         }
                     }};
@@ -470,7 +484,7 @@ impl ParsedSchema {
                         [ ]
                     ) => {
                         #[allow(dead_code)]
-                        #[derive(::vitrail_pg::QueryResult)]
+                        #[derive(#runtime_path::QueryResult)]
                         #[vitrail(schema = #module_name::Schema, model = #model_name)]
                         $($attrs)*
                         struct $root_ident {
@@ -489,7 +503,7 @@ impl ParsedSchema {
                         $query_body
                     }
 
-                    ::vitrail_pg::Query::<#module_name::Schema, #root_struct_ident>::with_selection(
+                    #runtime_path::Query::<#module_name::Schema, #root_struct_ident>::with_selection(
                         #module_name::#selection_macro_ident! {
                             $query_body
                         }

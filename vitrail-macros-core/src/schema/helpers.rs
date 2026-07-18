@@ -2,37 +2,92 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::Result;
 
-use super::{ParsedSchema, rust_type_alias_items};
+use vitrail_core::schema::Dialect;
+
+use super::{ParsedSchema, SchemaMacroConfig, rust_type_alias_items};
 
 impl ParsedSchema {
-    pub(super) fn generate_named_schema(&self) -> Result<TokenStream2> {
+    pub(super) fn generate_named_schema<D: Dialect>(
+        &self,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
+        let operation_families = config.operation_families();
         let module_name = &self.module_name;
-        let schema = self.generate_schema()?;
-        let query_helper_macros = self.generate_query_helper_macros(module_name)?;
-        let insert_helper_items = self.generate_insert_helper_items(module_name)?;
-        let delete_helper_items = self.generate_delete_helper_items(module_name)?;
-        let update_helper_items = self.generate_update_helper_items(module_name)?;
+        let schema = self.generate_schema(config)?;
+        let query_helper_macros = if operation_families.query() {
+            self.generate_query_helper_macros(module_name, config)?
+        } else {
+            TokenStream2::new()
+        };
+        let insert_helper_items = if operation_families.insert() {
+            self.generate_insert_helper_items(module_name, config)?
+        } else {
+            TokenStream2::new()
+        };
+        let delete_helper_items = if operation_families.delete() {
+            self.generate_delete_helper_items(module_name, config)?
+        } else {
+            TokenStream2::new()
+        };
+        let update_helper_items = if operation_families.update() {
+            self.generate_update_helper_items(module_name, config)?
+        } else {
+            TokenStream2::new()
+        };
         let exported_query_macro_ident = format_ident!("__vitrail_query_{}", module_name);
         let exported_insert_macro_ident = format_ident!("__vitrail_insert_{}", module_name);
         let exported_delete_macro_ident = format_ident!("__vitrail_delete_{}", module_name);
         let exported_update_macro_ident = format_ident!("__vitrail_update_{}", module_name);
-        let rust_type_alias_modules = self
-            .models
-            .iter()
-            .map(|model| rust_type_alias_items(module_name, model));
+        let rust_type_alias_modules = if operation_families.any() {
+            self.models
+                .iter()
+                .map(|model| rust_type_alias_items(module_name, model))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let query_macro_reexport = if operation_families.query() {
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #exported_query_macro_ident;
+            }
+        } else {
+            TokenStream2::new()
+        };
+        let insert_macro_reexport = if operation_families.insert() {
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #exported_insert_macro_ident;
+            }
+        } else {
+            TokenStream2::new()
+        };
+        let delete_macro_reexport = if operation_families.delete() {
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #exported_delete_macro_ident;
+            }
+        } else {
+            TokenStream2::new()
+        };
+        let update_macro_reexport = if operation_families.update() {
+            quote! {
+                #[doc(hidden)]
+                #[allow(unused_imports)]
+                pub use #exported_update_macro_ident;
+            }
+        } else {
+            TokenStream2::new()
+        };
         let top_level_macro_reexports = quote! {
-            #[doc(hidden)]
-            #[allow(unused_imports)]
-            pub use #exported_query_macro_ident;
-            #[doc(hidden)]
-            #[allow(unused_imports)]
-            pub use #exported_insert_macro_ident;
-            #[doc(hidden)]
-            #[allow(unused_imports)]
-            pub use #exported_delete_macro_ident;
-            #[doc(hidden)]
-            #[allow(unused_imports)]
-            pub use #exported_update_macro_ident;
+            #query_macro_reexport
+            #insert_macro_reexport
+            #delete_macro_reexport
+            #update_macro_reexport
         };
         let query_macro_reexports = self.models.iter().map(|model| {
             let select_assert_ident =
@@ -425,6 +480,127 @@ impl ParsedSchema {
             }
         });
 
+        let query_macro_reexports = if operation_families.query() {
+            quote! { #(#query_macro_reexports)* }
+        } else {
+            TokenStream2::new()
+        };
+        let insert_macro_reexports = if operation_families.insert() {
+            quote! { #(#insert_macro_reexports)* }
+        } else {
+            TokenStream2::new()
+        };
+        let delete_macro_reexports = if operation_families.delete() {
+            quote! { #(#delete_macro_reexports)* }
+        } else {
+            TokenStream2::new()
+        };
+        let update_macro_reexports = if operation_families.update() {
+            quote! { #(#update_macro_reexports)* }
+        } else {
+            TokenStream2::new()
+        };
+        let query_trait_reexports = if operation_families.query() {
+            quote! { #(#query_trait_reexports)* }
+        } else {
+            TokenStream2::new()
+        };
+        let insert_trait_reexports = if operation_families.insert() {
+            quote! { #(#insert_trait_reexports)* }
+        } else {
+            TokenStream2::new()
+        };
+        let delete_trait_reexports = if operation_families.delete() {
+            quote! { #(#delete_trait_reexports)* }
+        } else {
+            TokenStream2::new()
+        };
+        let update_trait_reexports = if operation_families.update() {
+            quote! { #(#update_trait_reexports)* }
+        } else {
+            TokenStream2::new()
+        };
+
+        let query_functions = if operation_families.query() {
+            quote! {
+                pub fn query<T>() -> #runtime_path::Query<Schema, T>
+                where
+                    T: #runtime_path::QueryModel<Schema = Schema, Variables = ()> + Sync,
+                {
+                    #runtime_path::Query::new()
+                }
+
+                pub fn query_with_variables<T>(
+                    variables: T::Variables,
+                ) -> #runtime_path::Query<Schema, T, T::Variables>
+                where
+                    T: #runtime_path::QueryModel<Schema = Schema> + Sync,
+                {
+                    #runtime_path::Query::<Schema, T, ()>::new_with_variables(variables)
+                }
+            }
+        } else {
+            TokenStream2::new()
+        };
+
+        let insert_functions = if operation_families.insert() {
+            quote! {
+                pub fn insert<T>(values: T::Values) -> #runtime_path::Insert<Schema, T>
+                where
+                    T: #runtime_path::InsertModel<Schema = Schema>,
+                {
+                    #runtime_path::Insert::new(values)
+                }
+            }
+        } else {
+            TokenStream2::new()
+        };
+
+        let delete_functions = if operation_families.delete() {
+            quote! {
+                pub fn delete_many<T>() -> #runtime_path::DeleteMany<Schema, T>
+                where
+                    T: #runtime_path::DeleteManyModel<Schema = Schema, Variables = ()>,
+                {
+                    #runtime_path::DeleteMany::new()
+                }
+
+                pub fn delete_many_with_variables<T>(
+                    variables: T::Variables,
+                ) -> #runtime_path::DeleteMany<Schema, T, T::Variables>
+                where
+                    T: #runtime_path::DeleteManyModel<Schema = Schema>,
+                {
+                    #runtime_path::DeleteMany::<Schema, T, ()>::new_with_variables(variables)
+                }
+            }
+        } else {
+            TokenStream2::new()
+        };
+
+        let update_functions = if operation_families.update() {
+            quote! {
+                pub fn update_many<T>(values: T::Values) -> #runtime_path::UpdateMany<Schema, T>
+                where
+                    T: #runtime_path::UpdateManyModel<Schema = Schema, Variables = ()>,
+                {
+                    #runtime_path::UpdateMany::new(values)
+                }
+
+                pub fn update_many_with_variables<T>(
+                    variables: T::Variables,
+                    values: T::Values,
+                ) -> #runtime_path::UpdateMany<Schema, T, T::Variables>
+                where
+                    T: #runtime_path::UpdateManyModel<Schema = Schema>,
+                {
+                    #runtime_path::UpdateMany::<Schema, T, ()>::new_with_variables(variables, values)
+                }
+            }
+        } else {
+            TokenStream2::new()
+        };
+
         Ok(quote! {
             #query_helper_macros
             #insert_helper_items
@@ -432,90 +608,40 @@ impl ParsedSchema {
             #update_helper_items
 
             pub mod #module_name {
-                static __SCHEMA: ::std::sync::OnceLock<::vitrail_pg::Schema> =
+                static __SCHEMA: ::std::sync::OnceLock<#runtime_path::Schema> =
                     ::std::sync::OnceLock::new();
 
                 #[derive(Clone, Copy, Debug, Default)]
                 pub struct Schema;
 
-                impl ::vitrail_pg::SchemaAccess for Schema {
-                    fn schema() -> &'static ::vitrail_pg::Schema {
+                impl #runtime_path::SchemaAccess for Schema {
+                    fn schema() -> &'static #runtime_path::Schema {
                         __SCHEMA.get_or_init(|| #schema)
                     }
                 }
 
-                pub fn query<T>() -> ::vitrail_pg::Query<Schema, T>
-                where
-                    T: ::vitrail_pg::QueryModel<Schema = Schema, Variables = ()> + Sync,
-                {
-                    ::vitrail_pg::Query::new()
-                }
-
-                pub fn query_with_variables<T>(
-                    variables: T::Variables,
-                ) -> ::vitrail_pg::Query<Schema, T, T::Variables>
-                where
-                    T: ::vitrail_pg::QueryModel<Schema = Schema> + Sync,
-                {
-                    ::vitrail_pg::Query::<Schema, T, ()>::new_with_variables(variables)
-                }
-
-                pub fn insert<T>(values: T::Values) -> ::vitrail_pg::Insert<Schema, T>
-                where
-                    T: ::vitrail_pg::InsertModel<Schema = Schema>,
-                {
-                    ::vitrail_pg::Insert::new(values)
-                }
-
-                pub fn delete_many<T>() -> ::vitrail_pg::DeleteMany<Schema, T>
-                where
-                    T: ::vitrail_pg::DeleteManyModel<Schema = Schema, Variables = ()>,
-                {
-                    ::vitrail_pg::DeleteMany::new()
-                }
-
-                pub fn delete_many_with_variables<T>(
-                    variables: T::Variables,
-                ) -> ::vitrail_pg::DeleteMany<Schema, T, T::Variables>
-                where
-                    T: ::vitrail_pg::DeleteManyModel<Schema = Schema>,
-                {
-                    ::vitrail_pg::DeleteMany::<Schema, T, ()>::new_with_variables(variables)
-                }
-
-                pub fn update_many<T>(values: T::Values) -> ::vitrail_pg::UpdateMany<Schema, T>
-                where
-                    T: ::vitrail_pg::UpdateManyModel<Schema = Schema, Variables = ()>,
-                {
-                    ::vitrail_pg::UpdateMany::new(values)
-                }
-
-                pub fn update_many_with_variables<T>(
-                    variables: T::Variables,
-                    values: T::Values,
-                ) -> ::vitrail_pg::UpdateMany<Schema, T, T::Variables>
-                where
-                    T: ::vitrail_pg::UpdateManyModel<Schema = Schema>,
-                {
-                    ::vitrail_pg::UpdateMany::<Schema, T, ()>::new_with_variables(variables, values)
-                }
+                #query_functions
+                #insert_functions
+                #delete_functions
+                #update_functions
 
                 #(#rust_type_alias_modules)*
                 #top_level_macro_reexports
-                #(#query_macro_reexports)*
-                #(#insert_macro_reexports)*
-                #(#delete_macro_reexports)*
-                #(#update_macro_reexports)*
-                #(#query_trait_reexports)*
-                #(#insert_trait_reexports)*
-                #(#delete_trait_reexports)*
-                #(#update_trait_reexports)*
+                #query_macro_reexports
+                #insert_macro_reexports
+                #delete_macro_reexports
+                #update_macro_reexports
+                #query_trait_reexports
+                #insert_trait_reexports
+                #delete_trait_reexports
+                #update_trait_reexports
 
             }
         })
     }
 
-    fn generate_schema(&self) -> Result<TokenStream2> {
+    fn generate_schema<D: Dialect>(&self, config: &SchemaMacroConfig<D>) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let mut models = Vec::with_capacity(self.models.len());
         let external_tables = self
             .external_tables
@@ -524,11 +650,11 @@ impl ParsedSchema {
             .collect::<Vec<_>>();
 
         for model in &self.models {
-            models.push(model.generate_schema_model()?);
+            models.push(model.generate_schema_model(config)?);
         }
 
         Ok(quote! {
-            ::vitrail_pg::Schema::builder()
+            #runtime_path::Schema::builder()
                 .models(vec![#(#models),*])
                 .external_tables(vec![#(::std::string::String::from(#external_tables)),*])
                 .build()

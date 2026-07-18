@@ -1,29 +1,51 @@
 use proc_macro::TokenStream;
 
 mod delete;
-mod embedded_migrations;
 mod filter;
 mod insert;
 mod macro_inputs;
 mod order;
 mod query;
-mod schema;
 mod update;
 
 use delete::DeleteManyDerive;
-use embedded_migrations::EmbeddedMigrationsInput;
 use insert::{InsertInputDerive, InsertResultDerive};
 use macro_inputs::{DeleteMacroInput, InsertMacroInput, QueryMacroInput, UpdateMacroInput};
 use query::{QueryResultDerive, QueryVariablesDerive};
-use schema::ParsedSchema;
 use update::{UpdateDataDerive, UpdateManyDerive};
+use vitrail_macros_core::{
+    NativeAttributeKind, NativeAttributeMapping, OperationFamilies, SchemaMacroConfig,
+    expand_embedded_migrations, expand_schema,
+};
+
+fn expand_postgres_schema(
+    input: proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let config = SchemaMacroConfig::new(
+        syn::parse_quote!(::vitrail_pg),
+        vitrail_pg_core::Schema::__macro_dialect(),
+        vec![NativeAttributeMapping::new(
+            "db",
+            "Uuid",
+            NativeAttributeKind::DbUuid,
+        )],
+        OperationFamilies::all(),
+    );
+
+    expand_schema(input, &config)
+}
+
+fn expand_postgres_embedded_migrations(
+    input: proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let runtime_path: syn::Path = syn::parse_quote!(::vitrail_pg);
+    expand_embedded_migrations(input, &runtime_path)
+}
 
 /// Validates a schema DSL declaration at compile time.
 #[proc_macro]
 pub fn schema(input: TokenStream) -> TokenStream {
-    let schema = syn::parse_macro_input!(input as ParsedSchema);
-
-    match schema.expand() {
+    match expand_postgres_schema(input.into()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -55,9 +77,7 @@ pub fn update(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn embed_migrations(input: TokenStream) -> TokenStream {
-    let migrations = syn::parse_macro_input!(input as EmbeddedMigrationsInput);
-
-    match migrations.expand() {
+    match expand_postgres_embedded_migrations(input.into()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -130,5 +150,62 @@ pub fn derive_delete_many(input: TokenStream) -> TokenStream {
     match DeleteManyDerive::parse(input).and_then(|derive| derive.expand()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn postgres_schema_adapter_enables_all_operation_support_items() {
+        let generated = expand_postgres_schema(quote::quote! {
+            name adapter_schema
+
+            model user {
+                id          Int    @id @default(autoincrement())
+                email       String @unique
+                postal_code String @rust_ty(PostalCode)
+            }
+        })
+        .expect("PostgreSQL schema should expand")
+        .to_string();
+
+        for expected in [
+            "pub mod adapter_schema",
+            "vitrail_pg :: SchemaAccess for Schema",
+            "pub fn query < T >",
+            "pub fn query_with_variables < T >",
+            "pub fn insert < T >",
+            "pub fn delete_many < T >",
+            "pub fn delete_many_with_variables < T >",
+            "pub fn update_many < T >",
+            "pub fn update_many_with_variables < T >",
+            "macro_rules ! __vitrail_query_adapter_schema",
+            "macro_rules ! __vitrail_insert_adapter_schema",
+            "macro_rules ! __vitrail_delete_adapter_schema",
+            "macro_rules ! __vitrail_update_adapter_schema",
+            "__vitrail_query_traits_adapter_schema_user",
+            "__vitrail_query_filter_traits_adapter_schema_user",
+            "__vitrail_insert_traits_adapter_schema_user",
+            "__vitrail_delete_traits_adapter_schema_user",
+            "__vitrail_delete_filter_traits_adapter_schema_user",
+            "__vitrail_update_traits_adapter_schema_user",
+            "__vitrail_update_filter_traits_adapter_schema_user",
+            "__vitrail_rust_types_adapter_schema_user",
+            "__VitrailRustType_adapter_schema_user_postal_code",
+        ] {
+            assert!(
+                generated.contains(expected),
+                "generated PostgreSQL schema support is missing `{expected}`"
+            );
+        }
+
+        for internal_path in ["vitrail_core", "vitrail_macros_core"] {
+            assert!(
+                !generated.contains(internal_path),
+                "generated PostgreSQL schema support leaked `{internal_path}`"
+            );
+        }
     }
 }

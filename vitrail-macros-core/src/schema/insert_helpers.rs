@@ -2,12 +2,20 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
+use vitrail_core::schema::Dialect;
+
 use super::{
-    ParsedSchema, rust_field_type_tokens, schema_owned_rust_field_type_tokens, to_pascal_case,
+    ParsedSchema, SchemaMacroConfig, rust_field_type_tokens, schema_owned_rust_field_type_tokens,
+    to_pascal_case,
 };
 
 impl ParsedSchema {
-    pub(super) fn generate_insert_helper_items(&self, module_name: &Ident) -> Result<TokenStream2> {
+    pub(super) fn generate_insert_helper_items<D: Dialect>(
+        &self,
+        module_name: &Ident,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let main_macro_ident = format_ident!("__vitrail_insert_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
@@ -147,7 +155,7 @@ impl ParsedSchema {
                         model.name,
                         field.name
                     );
-                    let rust_ty = rust_field_type_tokens(field)?;
+                    let rust_ty = rust_field_type_tokens(field, config)?;
 
                     Ok(quote! {
                         #[allow(non_camel_case_types)]
@@ -168,7 +176,7 @@ impl ParsedSchema {
                         model.name,
                         field.name
                     );
-                    let rust_ty = rust_field_type_tokens(field)?;
+                    let rust_ty = rust_field_type_tokens(field, config)?;
 
                     Ok(quote! {
                         #[allow(non_camel_case_types)]
@@ -271,7 +279,8 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = schema_owned_rust_field_type_tokens(module_name, model, field)?;
+                    let ty =
+                        schema_owned_rust_field_type_tokens(module_name, model, field, config)?;
 
                     Ok(quote! {
                         (
@@ -295,7 +304,8 @@ impl ParsedSchema {
                 .iter()
                 .map(|field| {
                     let ident = &field.name;
-                    let ty = schema_owned_rust_field_type_tokens(module_name, model, field)?;
+                    let ty =
+                        schema_owned_rust_field_type_tokens(module_name, model, field, config)?;
 
                     Ok(quote! {
                         (
@@ -427,7 +437,7 @@ impl ParsedSchema {
                         [ ]
                     ) => {
                         #[allow(dead_code)]
-                        #[derive(::vitrail_pg::InsertInput)]
+                        #[derive(#runtime_path::InsertInput)]
                         #[vitrail(schema = #module_name::Schema, model = #model_name)]
                         struct $input_ident {
                             $($fields)*
@@ -462,7 +472,7 @@ impl ParsedSchema {
                         [ $input_ident:ident ]
                     ) => {
                         #[allow(dead_code)]
-                        #[derive(::vitrail_pg::InsertResult)]
+                        #[derive(#runtime_path::InsertResult)]
                         #[vitrail(
                             schema = #module_name::Schema,
                             model = #model_name,

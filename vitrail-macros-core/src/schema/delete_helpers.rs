@@ -2,10 +2,21 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{LitStr, Result};
 
-use super::{ParsedSchema, filter_helpers::generate_filter_helper_items, to_pascal_case};
+use vitrail_core::schema::Dialect;
+
+use super::{
+    ParsedSchema, SchemaMacroConfig,
+    filter_helpers::{FilterHelperIdents, generate_filter_helper_items},
+    to_pascal_case,
+};
 
 impl ParsedSchema {
-    pub(super) fn generate_delete_helper_items(&self, module_name: &Ident) -> Result<TokenStream2> {
+    pub(super) fn generate_delete_helper_items<D: Dialect>(
+        &self,
+        module_name: &Ident,
+        config: &SchemaMacroConfig<D>,
+    ) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let main_macro_ident = format_ident!("__vitrail_delete_{}", module_name);
         let mut helpers = TokenStream2::new();
         let mut main_arms = Vec::new();
@@ -48,9 +59,12 @@ impl ParsedSchema {
                 module_name,
                 model,
                 "delete",
-                &where_path_assert_ident,
-                &where_filter_macro_ident,
-                &where_field_filter_macro_ident,
+                FilterHelperIdents {
+                    where_path_assert_ident: &where_path_assert_ident,
+                    where_filter_macro_ident: &where_filter_macro_ident,
+                    where_field_filter_macro_ident: &where_field_filter_macro_ident,
+                },
+                config,
             )?;
 
             helpers.extend(quote! {
@@ -76,17 +90,17 @@ impl ParsedSchema {
                     #[allow(dead_code)]
                     struct #root_delete_ident;
 
-                    impl ::vitrail_pg::DeleteManyModel for #root_delete_ident {
+                    impl #runtime_path::DeleteManyModel for #root_delete_ident {
                         type Schema = #module_name::Schema;
-                        type Variables = ::vitrail_pg::QueryVariables;
+                        type Variables = #runtime_path::QueryVariables;
 
                         fn model_name() -> &'static str {
                             #model_name
                         }
 
                         fn filter_with_variables(
-                            _: &::vitrail_pg::QueryVariables,
-                        ) -> Option<::vitrail_pg::QueryFilter> {
+                            _: &#runtime_path::QueryVariables,
+                        ) -> Option<#runtime_path::QueryFilter> {
                             #module_name::#where_variable_filter_macro_ident!({
                                 $($where_field : $where_value),*
                             })
@@ -106,7 +120,7 @@ impl ParsedSchema {
                     #[allow(dead_code)]
                     struct #root_delete_ident;
 
-                    impl ::vitrail_pg::DeleteManyModel for #root_delete_ident {
+                    impl #runtime_path::DeleteManyModel for #root_delete_ident {
                         type Schema = #module_name::Schema;
                         type Variables = ();
 
