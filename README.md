@@ -3,7 +3,8 @@
 </p>
 
 <p align="center">
-  <a href="https://crates.io/crates/vitrail-pg"><img alt="crates-badge" src="https://img.shields.io/crates/v/vitrail-pg.svg"></a>
+  <a href="https://crates.io/crates/vitrail-pg"><img alt="vitrail-pg crate" src="https://img.shields.io/crates/v/vitrail-pg.svg"></a>
+  <a href="https://crates.io/crates/vitrail-sqlite"><img alt="vitrail-sqlite crate" src="https://img.shields.io/crates/v/vitrail-sqlite.svg"></a>
 </p>
 
 <p align="center">
@@ -14,9 +15,14 @@
 
 > [!NOTE]
 >
-> `vitrail` is under active development. Use at your own risks.
->
-> The library currently only supports Postgres. _Just use Postgres™_.
+> `vitrail` is under active development. Use it with appropriate care while its APIs evolve.
+
+## Database support
+
+`vitrail` exposes separate, dialect-specific crate families:
+
+- PostgreSQL: `vitrail-pg`
+- SQLite: `vitrail-sqlite`
 
 ## Core features
 
