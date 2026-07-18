@@ -123,6 +123,37 @@ fn migration_sql_escapes_programmatic_schema_identifiers() {
 }
 
 #[test]
+fn sqlite_index_debug_output_hides_internal_introspection_state() {
+    let schema = Schema::builder()
+        .model(
+            Model::builder("user")
+                .fields(vec![
+                    Field::builder("id", FieldType::int())
+                        .attribute(Attribute::Id)
+                        .build()
+                        .expect("primary key field should build"),
+                    Field::builder("email", FieldType::string())
+                        .attribute(Attribute::Unique)
+                        .build()
+                        .expect("unique field should build"),
+                ])
+                .build()
+                .expect("model should build"),
+        )
+        .build()
+        .expect("schema should build");
+    let sqlite_schema = schema.to_sqlite_schema();
+    let index = &sqlite_schema.tables()[0].indexes()[0];
+    let debug = format!("{index:?}");
+
+    assert_eq!(
+        debug,
+        "SqliteIndex { name: \"user_email_key\", columns: [\"email\"], unique: true }"
+    );
+    assert!(!debug.contains("definition_supported"));
+}
+
+#[test]
 fn accepts_bigint_without_autoincrement() {
     let schema = Schema::builder()
         .model(

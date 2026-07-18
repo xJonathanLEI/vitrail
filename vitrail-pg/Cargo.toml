@@ -11,7 +11,7 @@ description = "PostgreSQL support for vitrail"
 [dependencies]
 chrono.workspace = true
 clap.workspace = true
-sqlx.workspace = true
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "rust_decimal", "uuid", "any", "macros", "migrate"] }
 tokio.workspace = true
 url.workspace = true
 vitrail-pg-core.workspace = true

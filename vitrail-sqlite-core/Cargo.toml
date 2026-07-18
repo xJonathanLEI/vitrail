@@ -8,4 +8,5 @@ repository.workspace = true
 description = "Core schema and migration types for the vitrail-sqlite crate"
 
 [dependencies]
+sqlx = { workspace = true, features = ["sqlite", "runtime-tokio"] }
 vitrail-core.workspace = true

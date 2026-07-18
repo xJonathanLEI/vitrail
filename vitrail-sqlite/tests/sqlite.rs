@@ -1,3 +1,6 @@
+#[path = "sqlite/support.rs"]
+mod support;
+
 #[path = "sqlite/migrations.rs"]
 mod migrations;
 

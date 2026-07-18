@@ -19,6 +19,6 @@ vitrail-pg-core.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
-sqlx.workspace = true
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "rust_decimal", "uuid"] }
 trybuild.workspace = true
 vitrail-pg-core.workspace = true
