@@ -5,6 +5,18 @@ mod support;
 mod insert;
 pub(crate) use insert::sqlite_insert_schema as insert_schema;
 
+#[path = "sqlite/bytes.rs"]
+mod bytes;
+pub(crate) use bytes::sqlite_bytes_schema as bytes_schema;
+
+#[path = "sqlite/bigint.rs"]
+mod bigint;
+pub(crate) use bigint::sqlite_bigint_schema as bigint_schema;
+
+#[path = "sqlite/custom_types.rs"]
+mod custom_types;
+pub(crate) use custom_types::sqlite_custom_types_schema as custom_types_schema;
+
 #[path = "sqlite/migrations.rs"]
 mod migrations;
 
