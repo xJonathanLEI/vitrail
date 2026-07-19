@@ -4,7 +4,7 @@ use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::{Error, Path, Result, Token, parenthesized};
 
-pub struct RootFilter {
+pub(crate) struct RootFilter {
     path: Vec<Ident>,
     filter: ScalarFilter,
 }
@@ -18,7 +18,7 @@ enum ScalarFilter {
 }
 
 impl RootFilter {
-    pub fn expand(&self, runtime_path: &Path) -> TokenStream2 {
+    pub(crate) fn expand(&self, runtime_path: &Path) -> TokenStream2 {
         let final_field = self.path.last().expect("filter path should never be empty");
 
         let mut filter = match &self.filter {
@@ -57,14 +57,17 @@ impl RootFilter {
         filter
     }
 
-    pub fn validation_tokens(&self, where_path_assert_macro: &impl ToTokens) -> TokenStream2 {
+    pub(crate) fn validation_tokens(
+        &self,
+        where_path_assert_macro: &impl ToTokens,
+    ) -> TokenStream2 {
         let segments = &self.path;
         quote! {
             #where_path_assert_macro!(#(#segments).*);
         }
     }
 
-    pub fn type_validation_tokens(
+    pub(crate) fn type_validation_tokens(
         &self,
         where_filter_value_assert_macro: &impl ToTokens,
     ) -> Option<TokenStream2> {
@@ -84,7 +87,7 @@ impl RootFilter {
         }
     }
 
-    pub fn variable(&self) -> Option<&Ident> {
+    pub(crate) fn variable(&self) -> Option<&Ident> {
         match &self.filter {
             ScalarFilter::Eq { variable }
             | ScalarFilter::In { variable }
@@ -169,7 +172,7 @@ impl Parse for RootFilter {
     }
 }
 
-pub fn parse_root_filter(input: ParseStream<'_>) -> Result<RootFilter> {
+pub(crate) fn parse_root_filter(input: ParseStream<'_>) -> Result<RootFilter> {
     let content;
     parenthesized!(content in input);
     content.parse()

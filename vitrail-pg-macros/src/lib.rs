@@ -1,18 +1,11 @@
 use proc_macro::TokenStream;
 
-mod delete;
-mod insert;
-mod macro_inputs;
-mod update;
-
-use delete::DeleteManyDerive;
-use insert::{InsertInputDerive, InsertResultDerive};
-use macro_inputs::{DeleteMacroInput, InsertMacroInput, UpdateMacroInput};
-use update::{UpdateDataDerive, UpdateManyDerive};
 use vitrail_macros_core::{
     NativeAttributeKind, NativeAttributeMapping, OperationFamilies, QueryMacroConfig,
-    SchemaMacroConfig, expand_embedded_migrations, expand_query, expand_query_result,
-    expand_query_variables, expand_schema,
+    SchemaMacroConfig, WriteMacroConfig, expand_delete, expand_delete_many,
+    expand_embedded_migrations, expand_insert, expand_insert_input, expand_insert_result,
+    expand_query, expand_query_result, expand_query_variables, expand_schema, expand_update,
+    expand_update_data, expand_update_many,
 };
 
 fn expand_postgres_schema(
@@ -34,6 +27,13 @@ fn expand_postgres_schema(
 
 fn postgres_query_macro_config() -> QueryMacroConfig {
     QueryMacroConfig::new(
+        syn::parse_quote!(::vitrail_pg),
+        syn::parse_quote!(::vitrail_pg::sqlx::postgres::PgRow),
+    )
+}
+
+fn postgres_write_macro_config() -> WriteMacroConfig {
+    WriteMacroConfig::new(
         syn::parse_quote!(::vitrail_pg),
         syn::parse_quote!(::vitrail_pg::sqlx::postgres::PgRow),
     )
@@ -65,20 +65,26 @@ pub fn query(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn insert(input: TokenStream) -> TokenStream {
-    let insert = syn::parse_macro_input!(input as InsertMacroInput);
-    insert.expand().into()
+    match expand_insert(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
 #[proc_macro]
 pub fn delete(input: TokenStream) -> TokenStream {
-    let delete = syn::parse_macro_input!(input as DeleteMacroInput);
-    delete.expand().into()
+    match expand_delete(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
 #[proc_macro]
 pub fn update(input: TokenStream) -> TokenStream {
-    let update = syn::parse_macro_input!(input as UpdateMacroInput);
-    update.expand().into()
+    match expand_update(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
 #[proc_macro]
@@ -113,7 +119,7 @@ pub fn derive_query_variables(input: TokenStream) -> TokenStream {
 pub fn derive_insert_input(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
-    match InsertInputDerive::parse(input).and_then(|derive| derive.expand()) {
+    match expand_insert_input(input, &postgres_write_macro_config()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -123,7 +129,7 @@ pub fn derive_insert_input(input: TokenStream) -> TokenStream {
 pub fn derive_insert_result(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
-    match InsertResultDerive::parse(input).and_then(|derive| derive.expand()) {
+    match expand_insert_result(input, &postgres_write_macro_config()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -133,7 +139,7 @@ pub fn derive_insert_result(input: TokenStream) -> TokenStream {
 pub fn derive_update_data(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
-    match UpdateDataDerive::parse(input).and_then(|derive| derive.expand()) {
+    match expand_update_data(input, &postgres_write_macro_config()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -143,7 +149,7 @@ pub fn derive_update_data(input: TokenStream) -> TokenStream {
 pub fn derive_update_many(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
-    match UpdateManyDerive::parse(input).and_then(|derive| derive.expand()) {
+    match expand_update_many(input, &postgres_write_macro_config()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -153,7 +159,7 @@ pub fn derive_update_many(input: TokenStream) -> TokenStream {
 pub fn derive_delete_many(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
-    match DeleteManyDerive::parse(input).and_then(|derive| derive.expand()) {
+    match expand_delete_many(input, &postgres_write_macro_config()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }

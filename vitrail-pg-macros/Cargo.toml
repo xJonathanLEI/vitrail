@@ -12,13 +12,13 @@ proc-macro = true
 
 [dependencies]
 proc-macro2.workspace = true
-quote.workspace = true
 syn.workspace = true
 vitrail-macros-core.workspace = true
 vitrail-pg-core.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
+quote.workspace = true
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "rust_decimal", "uuid"] }
 trybuild.workspace = true
 vitrail-pg-core.workspace = true

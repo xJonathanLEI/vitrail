@@ -1,9 +1,10 @@
+use crate::filter::{RootFilter, parse_root_filter};
+use crate::write::WriteMacroConfig;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use std::collections::HashSet;
 use syn::spanned::Spanned;
 use syn::{Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Type};
-use vitrail_macros_core::{RootFilter, parse_root_filter};
 
 type UpdateDataContainerAttrs = (Path, LitStr);
 type UpdateManyContainerAttrs = (Path, LitStr, Type, Option<Type>, Vec<RootFilter>);
@@ -50,7 +51,8 @@ impl UpdateDataDerive {
         })
     }
 
-    pub(crate) fn expand(self) -> Result<TokenStream2> {
+    pub(crate) fn expand(self, config: &WriteMacroConfig) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let ident = self.ident;
         let mut generics = self.generics;
         let fields = self.fields;
@@ -84,7 +86,7 @@ impl UpdateDataDerive {
             generics
                 .make_where_clause()
                 .predicates
-                .push(syn::parse_quote!(#field_ty: ::vitrail_pg::UpdateScalar));
+                .push(syn::parse_quote!(#field_ty: #runtime_path::UpdateScalar));
         }
 
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -107,7 +109,10 @@ impl UpdateDataDerive {
 
             quote! {
                 __vitrail_values
-                    .push(#field_name, ::vitrail_pg::UpdateScalar::into_update_value(self.#ident))
+                    .push(
+                        #field_name,
+                        #runtime_path::UpdateScalar::into_update_value(self.#ident),
+                    )
                     .expect("update data field names should be unique after derive validation");
             }
         });
@@ -129,13 +134,13 @@ impl UpdateDataDerive {
             {
             }
 
-            impl #impl_generics ::vitrail_pg::UpdateValueSet for #ident #ty_generics
+            impl #impl_generics #runtime_path::UpdateValueSet for #ident #ty_generics
             #where_clause
             {
-                fn into_update_values(self) -> ::vitrail_pg::UpdateValues {
+                fn into_update_values(self) -> #runtime_path::UpdateValues {
                     Self::__vitrail_validate_update_data();
 
-                    let mut __vitrail_values = ::vitrail_pg::UpdateValues::new();
+                    let mut __vitrail_values = #runtime_path::UpdateValues::new();
                     #(#update_values)*
                     __vitrail_values
                 }
@@ -189,7 +194,8 @@ impl UpdateManyDerive {
         })
     }
 
-    pub(crate) fn expand(self) -> Result<TokenStream2> {
+    pub(crate) fn expand(self, config: &WriteMacroConfig) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let ident = self.ident;
         let generics = self.generics;
         let schema_path = self.schema_path;
@@ -197,7 +203,6 @@ impl UpdateManyDerive {
         let data_ty = self.data_ty;
         let variables_ty = self.variables_ty;
         let root_filters = self.root_filters;
-        let runtime_path: Path = syn::parse_quote!(::vitrail_pg);
 
         let schema_module_ident = schema_module_ident(&schema_path, "UpdateMany")?;
         let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
@@ -253,7 +258,7 @@ impl UpdateManyDerive {
                     fn __vitrail_validate_update_many(__vitrail_variables: Option<&#variables_ty>) {
                         #(#root_filter_validation_tokens)*
                         fn __vitrail_assert_update_values<
-                            T: ::vitrail_pg::UpdateValueSet
+                            T: #runtime_path::UpdateValueSet
                                 + #schema_module_path::#model_trait_module_ident::__VitrailUpdateDataModel,
                         >() {
                         }
@@ -274,7 +279,7 @@ impl UpdateManyDerive {
                     fn __vitrail_validate_update_many() {
                         #(#root_filter_validation_tokens)*
                         fn __vitrail_assert_update_values<
-                            T: ::vitrail_pg::UpdateValueSet
+                            T: #runtime_path::UpdateValueSet
                                 + #schema_module_path::#model_trait_module_ident::__VitrailUpdateDataModel,
                         >() {
                         }
@@ -286,7 +291,7 @@ impl UpdateManyDerive {
 
         let filter_exprs = root_filters
             .iter()
-            .map(|filter| filter.expand(&runtime_path))
+            .map(|filter| filter.expand(runtime_path))
             .collect::<Vec<_>>();
 
         let filter_tokens = if filter_exprs.is_empty() {
@@ -295,7 +300,7 @@ impl UpdateManyDerive {
             let filter = &filter_exprs[0];
             quote! { Some(#filter) }
         } else {
-            quote! { Some(::vitrail_pg::QueryFilter::And(vec![#(#filter_exprs),*])) }
+            quote! { Some(#runtime_path::QueryFilter::And(vec![#(#filter_exprs),*])) }
         };
 
         let update_variables_ty = variables_ty
@@ -316,7 +321,7 @@ impl UpdateManyDerive {
         Ok(quote! {
             #typed_validation_fn
 
-            impl #impl_generics ::vitrail_pg::UpdateManyModel for #ident #ty_generics
+            impl #impl_generics #runtime_path::UpdateManyModel for #ident #ty_generics
             #where_clause
             {
                 type Schema = #schema_path;
@@ -328,8 +333,8 @@ impl UpdateManyDerive {
                 }
 
                 fn filter_with_variables(
-                    variables: &::vitrail_pg::QueryVariables,
-                ) -> Option<::vitrail_pg::QueryFilter> {
+                    variables: &#runtime_path::QueryVariables,
+                ) -> Option<#runtime_path::QueryFilter> {
                     let _ = variables;
                     #validation_call
                     #filter_tokens

@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use syn::spanned::Spanned;
 use syn::{Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result, Type};
 
+use crate::write::WriteMacroConfig;
+
 pub(crate) struct InsertInputDerive {
     ident: Ident,
     generics: syn::Generics,
@@ -46,7 +48,8 @@ impl InsertInputDerive {
         })
     }
 
-    pub(crate) fn expand(self) -> Result<TokenStream2> {
+    pub(crate) fn expand(self, config: &WriteMacroConfig) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
         let ident = self.ident;
         let mut generics = self.generics;
         let fields = self.fields;
@@ -87,7 +90,7 @@ impl InsertInputDerive {
             generics
                 .make_where_clause()
                 .predicates
-                .push(syn::parse_quote!(#field_ty: ::vitrail_pg::InsertScalar));
+                .push(syn::parse_quote!(#field_ty: #runtime_path::InsertScalar));
         }
 
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -114,7 +117,10 @@ impl InsertInputDerive {
             let field_name = &field.field_name;
             quote! {
                 __vitrail_values
-                    .push(#field_name, ::vitrail_pg::InsertScalar::into_insert_value(self.#ident))
+                    .push(
+                        #field_name,
+                        #runtime_path::InsertScalar::into_insert_value(self.#ident),
+                    )
                     .expect("insert input field names should be unique after derive validation");
             }
         });
@@ -137,13 +143,13 @@ impl InsertInputDerive {
             {
             }
 
-            impl #impl_generics ::vitrail_pg::InsertValueSet for #ident #ty_generics
+            impl #impl_generics #runtime_path::InsertValueSet for #ident #ty_generics
             #where_clause
             {
-                fn into_insert_values(self) -> ::vitrail_pg::InsertValues {
+                fn into_insert_values(self) -> #runtime_path::InsertValues {
                     Self::__vitrail_validate_insert_input();
 
-                    let mut __vitrail_values = ::vitrail_pg::InsertValues::new();
+                    let mut __vitrail_values = #runtime_path::InsertValues::new();
                     #(#insert_values)*
                     __vitrail_values
                 }
@@ -197,7 +203,9 @@ impl InsertResultDerive {
         })
     }
 
-    pub(crate) fn expand(self) -> Result<TokenStream2> {
+    pub(crate) fn expand(self, config: &WriteMacroConfig) -> Result<TokenStream2> {
+        let runtime_path = config.runtime_path();
+        let row_path = config.row_path();
         let ident = self.ident;
         let generics = self.generics;
         let fields = self.fields;
@@ -251,8 +259,8 @@ impl InsertResultDerive {
 
             quote! {
                 #ident: {
-                    let __vitrail_alias = ::vitrail_pg::alias_name(prefix, #field_name);
-                    ::vitrail_pg::row_value::<#field_ty>(row, __vitrail_alias.as_str())?
+                    let __vitrail_alias = #runtime_path::alias_name(prefix, #field_name);
+                    #runtime_path::row_value::<#field_ty>(row, __vitrail_alias.as_str())?
                 }
             }
         });
@@ -265,7 +273,7 @@ impl InsertResultDerive {
                 fn __vitrail_validate_insert_result() {
                     #(#validation_tokens)*
                     fn __vitrail_assert_insert_values<
-                        T: ::vitrail_pg::InsertValueSet
+                        T: #runtime_path::InsertValueSet
                             + #schema_module_path::#model_trait_module_ident::__VitrailInsertInputModel,
                     >() {
                     }
@@ -273,7 +281,7 @@ impl InsertResultDerive {
                 }
             }
 
-            impl #impl_generics ::vitrail_pg::InsertModel for #ident #ty_generics
+            impl #impl_generics #runtime_path::InsertModel for #ident #ty_generics
             #where_clause
             {
                 type Schema = #schema_path;
@@ -289,10 +297,10 @@ impl InsertResultDerive {
                 }
 
                 fn from_row(
-                    row: &::vitrail_pg::sqlx::postgres::PgRow,
+                    row: &#row_path,
                     prefix: &str,
-                ) -> Result<Self, ::vitrail_pg::sqlx::Error> {
-                    use ::vitrail_pg::sqlx::Row as _;
+                ) -> Result<Self, #runtime_path::sqlx::Error> {
+                    use #runtime_path::sqlx::Row as _;
 
                     Self::__vitrail_validate_insert_result();
 

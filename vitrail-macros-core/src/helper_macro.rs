@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use syn::Path;
 
 /// Expands a dialect facade macro into its schema-generated operation helper.
-pub fn expand_helper_macro(
+pub(crate) fn expand_helper_macro(
     schema_path: Path,
     body: TokenStream2,
     macro_prefix: &str,
