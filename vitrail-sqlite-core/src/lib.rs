@@ -6,6 +6,7 @@ mod migration;
 mod migrator;
 mod query;
 mod schema;
+mod transaction;
 mod update;
 mod validation;
 
@@ -14,8 +15,9 @@ use sqlx::{Sqlite, query::Query as SqlxQuery};
 
 /// Internal execution abstraction for SQLite-backed query and write operations.
 ///
-/// This trait keeps runtime execution independent from the public client while
-/// restricting executors to implementations owned by this crate.
+/// This trait is used by `VitrailClient` and `VitrailTransaction` so runtime
+/// specs can execute against either a pool or an explicit transaction while
+/// sharing the same SQL generation logic.
 #[doc(hidden)]
 pub trait SqliteExecutor: private::Sealed + Send + Sync {
     fn fetch_all<'a>(
@@ -40,6 +42,7 @@ pub trait SqliteExecutor: private::Sealed + Send + Sync {
 }
 
 impl private::Sealed for SqlitePool {}
+impl private::Sealed for transaction::VitrailTransaction {}
 
 impl SqliteExecutor for SqlitePool {
     fn fetch_all<'a>(
@@ -107,6 +110,7 @@ pub use schema::{
     ModelUniqueAttributeBuilder, RelationAttribute, RelationAttributeBuilder, Resolution,
     RustTypeAttribute, ScalarFieldType, ScalarType, Schema, SchemaAccess, SchemaBuilder,
 };
+pub use transaction::{TransactionMode, TransactionOptions, VitrailTransaction};
 pub use update::{
     UpdateFieldValue, UpdateMany, UpdateManyModel, UpdateScalar, UpdateSpec, UpdateValue,
     UpdateValueSet, UpdateValues,
