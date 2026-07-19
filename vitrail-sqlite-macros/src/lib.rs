@@ -2,9 +2,10 @@ use proc_macro::TokenStream;
 
 use vitrail_macros_core::{
     NativeAttributeKind, NativeAttributeMapping, OperationFamilies, QueryMacroConfig,
-    SchemaMacroConfig, WriteMacroConfig, expand_embedded_migrations, expand_insert,
-    expand_insert_input, expand_insert_result, expand_query, expand_query_result,
-    expand_query_variables, expand_schema, expand_update, expand_update_data, expand_update_many,
+    SchemaMacroConfig, WriteMacroConfig, expand_delete, expand_delete_many,
+    expand_embedded_migrations, expand_insert, expand_insert_input, expand_insert_result,
+    expand_query, expand_query_result, expand_query_variables, expand_schema, expand_update,
+    expand_update_data, expand_update_many,
 };
 
 fn expand_sqlite_schema(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
@@ -16,7 +17,7 @@ fn expand_sqlite_schema(input: proc_macro2::TokenStream) -> syn::Result<proc_mac
             "Uuid",
             NativeAttributeKind::DbUuid,
         )],
-        OperationFamilies::new(true, true, true, false),
+        OperationFamilies::all(),
     );
 
     expand_schema(input, &config)
@@ -74,6 +75,15 @@ pub fn insert(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn update(input: TokenStream) -> TokenStream {
     match expand_update(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+/// Expands an ad hoc SQLite bulk delete through its schema-generated helper.
+#[proc_macro]
+pub fn delete(input: TokenStream) -> TokenStream {
+    match expand_delete(input.into()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -154,12 +164,23 @@ pub fn derive_update_many(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Derives a model-first SQLite bulk delete.
+#[proc_macro_derive(DeleteMany, attributes(vitrail))]
+pub fn derive_delete_many(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match expand_delete_many(input, &sqlite_write_macro_config()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn sqlite_schema_adapter_emits_query_insert_and_update_support_items() {
+    fn sqlite_schema_adapter_emits_complete_operation_support() {
         let generated = expand_sqlite_schema(quote::quote! {
             name adapter_schema
 
@@ -189,40 +210,35 @@ mod tests {
             "vitrail_sqlite :: UpdateMany :: new",
             "vitrail_sqlite :: UpdateData",
             "vitrail_sqlite :: UpdateMany",
+            "pub fn delete_many < T >",
+            "pub fn delete_many_with_variables < T >",
+            "vitrail_sqlite :: DeleteManyModel",
+            "vitrail_sqlite :: DeleteMany :: new",
+            "vitrail_sqlite :: DeleteMany",
             "macro_rules ! __vitrail_query_adapter_schema",
             "macro_rules ! __vitrail_insert_adapter_schema",
             "macro_rules ! __vitrail_update_adapter_schema",
+            "macro_rules ! __vitrail_delete_adapter_schema",
             "__vitrail_query_traits_adapter_schema_user",
             "__vitrail_query_filter_traits_adapter_schema_user",
             "__vitrail_insert_traits_adapter_schema_user",
             "__vitrail_update_traits_adapter_schema_user",
             "__vitrail_update_filter_traits_adapter_schema_user",
+            "__vitrail_delete_traits_adapter_schema_user",
+            "__vitrail_delete_filter_traits_adapter_schema_user",
             "__vitrail_rust_types_adapter_schema_user",
             "__VitrailRustType_adapter_schema_user_postal_code",
         ] {
             assert!(
                 generated.contains(expected),
-                "generated SQLite query/insert/update support is missing `{expected}`"
-            );
-        }
-
-        for unsupported_item in [
-            "pub fn delete_many <",
-            "pub fn delete_many_with_variables <",
-            "macro_rules ! __vitrail_delete_adapter_schema",
-            "__vitrail_delete_traits_adapter_schema_user",
-            "__vitrail_delete_filter_traits_adapter_schema_user",
-        ] {
-            assert!(
-                !generated.contains(unsupported_item),
-                "SQLite expansion unexpectedly emitted unsupported operation `{unsupported_item}`"
+                "generated SQLite operation support is missing `{expected}`"
             );
         }
 
         for leaked_path in ["vitrail_pg", "vitrail_core", "vitrail_macros_core"] {
             assert!(
                 !generated.contains(leaked_path),
-                "generated SQLite query/insert/update support leaked `{leaked_path}`"
+                "generated SQLite operation support leaked `{leaked_path}`"
             );
         }
     }

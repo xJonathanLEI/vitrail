@@ -1,4 +1,5 @@
 mod client;
+mod delete;
 mod filter;
 mod insert;
 mod migration;
@@ -77,6 +78,7 @@ mod private {
 }
 
 pub use client::VitrailClient;
+pub use delete::{DeleteMany, DeleteManyModel, DeleteSpec};
 pub use insert::{
     Insert, InsertFieldValue, InsertModel, InsertScalar, InsertSpec, InsertValue, InsertValueSet,
     InsertValues,

@@ -3,9 +3,15 @@ use crate::update::{schema_module_ident, schema_module_path};
 use crate::write::WriteMacroConfig;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use syn::{Attribute, Data, DataStruct, Error, Fields, LitStr, Path, Result};
+use syn::{Attribute, Data, DataStruct, Error, Expr, Fields, LitStr, Path, Result};
 
-type DeleteManyContainerAttrs = (Path, LitStr, Option<syn::Type>, Vec<RootFilter>);
+type DeleteManyContainerAttrs = (
+    Path,
+    LitStr,
+    Option<syn::Type>,
+    Vec<RootFilter>,
+    Option<Expr>,
+);
 
 pub(crate) struct DeleteManyDerive {
     ident: Ident,
@@ -14,13 +20,16 @@ pub(crate) struct DeleteManyDerive {
     model_name: LitStr,
     variables_ty: Option<syn::Type>,
     root_filters: Vec<RootFilter>,
+    // Bridges schema-generated helper filters into this derive so helper macros
+    // do not implement `DeleteManyModel` directly.
+    helper_filter: Option<Expr>,
 }
 
 impl DeleteManyDerive {
     pub(crate) fn parse(input: syn::DeriveInput) -> Result<Self> {
         let ident = input.ident;
         let generics = input.generics;
-        let (schema_path, model_name, variables_ty, root_filters) =
+        let (schema_path, model_name, variables_ty, root_filters, helper_filter) =
             parse_delete_many_container_attrs(&input.attrs)?;
 
         match input.data {
@@ -47,6 +56,7 @@ impl DeleteManyDerive {
             model_name,
             variables_ty,
             root_filters,
+            helper_filter,
         })
     }
 
@@ -58,6 +68,7 @@ impl DeleteManyDerive {
         let model_name = self.model_name;
         let variables_ty = self.variables_ty;
         let root_filters = self.root_filters;
+        let helper_filter = self.helper_filter;
 
         let schema_module_ident = schema_module_ident(&schema_path, "DeleteMany")?;
         let model_ident = syn::parse_str::<Ident>(&model_name.value()).map_err(|_| {
@@ -147,7 +158,9 @@ impl DeleteManyDerive {
             .map(|filter| filter.expand(runtime_path))
             .collect::<Vec<_>>();
 
-        let filter_tokens = if filter_exprs.is_empty() {
+        let filter_tokens = if let Some(helper_filter) = helper_filter {
+            quote! { #helper_filter }
+        } else if filter_exprs.is_empty() {
             quote! { None }
         } else if filter_exprs.len() == 1 {
             let filter = &filter_exprs[0];
@@ -207,6 +220,7 @@ fn parse_delete_many_container_attrs(attrs: &[Attribute]) -> Result<DeleteManyCo
     let mut model_name = None;
     let mut variables_ty = None;
     let mut root_filters = Vec::new();
+    let mut helper_filter: Option<Expr> = None;
 
     for attribute in attrs {
         if !attribute.path().is_ident("vitrail") {
@@ -236,6 +250,10 @@ fn parse_delete_many_container_attrs(attrs: &[Attribute]) -> Result<DeleteManyCo
                 root_filters.push(parse_root_filter(meta.input)?);
                 return Ok(());
             }
+            if meta.path.is_ident("__helper_filter") {
+                helper_filter = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
             Err(meta.error("unsupported `#[vitrail(...)]` container attribute"))
         })?;
     }
@@ -253,5 +271,27 @@ fn parse_delete_many_container_attrs(attrs: &[Attribute]) -> Result<DeleteManyCo
         )
     })?;
 
-    Ok((schema_path, model_name, variables_ty, root_filters))
+    if let Some(helper_filter) = &helper_filter {
+        if !root_filters.is_empty() {
+            return Err(Error::new_spanned(
+                helper_filter,
+                "`#[vitrail(__helper_filter = ...)]` cannot be combined with `where(...)`",
+            ));
+        }
+
+        if variables_ty.is_none() {
+            return Err(Error::new_spanned(
+                helper_filter,
+                "`#[vitrail(__helper_filter = ...)]` requires `#[vitrail(variables = ...)]`",
+            ));
+        }
+    }
+
+    Ok((
+        schema_path,
+        model_name,
+        variables_ty,
+        root_filters,
+        helper_filter,
+    ))
 }

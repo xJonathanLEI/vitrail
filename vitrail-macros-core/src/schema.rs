@@ -1789,6 +1789,15 @@ mod tests {
         }
 
         assert!(
+            generated.contains("derive (:: custom_runtime :: DeleteMany)"),
+            "generated delete helpers must delegate operation implementations to `DeleteMany`"
+        );
+        assert!(
+            !generated
+                .contains("impl :: custom_runtime :: DeleteManyModel for __VitrailDeleteAccount"),
+            "generated delete helpers must not implement `DeleteManyModel` directly"
+        );
+        assert!(
             generated.contains("derive (:: custom_runtime :: UpdateMany)"),
             "generated update helpers must delegate operation implementations to `UpdateMany`"
         );

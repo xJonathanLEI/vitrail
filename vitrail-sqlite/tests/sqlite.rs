@@ -36,6 +36,10 @@ pub(crate) use statements::sqlite_statements_schema as statements_schema;
 mod update;
 pub(crate) use update::sqlite_update_schema as update_schema;
 
+#[path = "sqlite/delete.rs"]
+mod delete;
+pub(crate) use delete::sqlite_delete_schema as delete_schema;
+
 vitrail_sqlite::schema! {
     name sqlite_facade_schema
 

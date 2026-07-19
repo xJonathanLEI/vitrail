@@ -88,24 +88,16 @@ impl ParsedSchema {
                     }
                 ) => {{
                     #[allow(dead_code)]
+                    #[derive(#runtime_path::DeleteMany)]
+                    #[vitrail(
+                        schema = #module_name::Schema,
+                        model = #model_name,
+                        variables = #runtime_path::QueryVariables,
+                        __helper_filter = #module_name::#where_variable_filter_macro_ident!({
+                            $($where_field : $where_value),*
+                        })
+                    )]
                     struct #root_delete_ident;
-
-                    impl #runtime_path::DeleteManyModel for #root_delete_ident {
-                        type Schema = #module_name::Schema;
-                        type Variables = #runtime_path::QueryVariables;
-
-                        fn model_name() -> &'static str {
-                            #model_name
-                        }
-
-                        fn filter_with_variables(
-                            _: &#runtime_path::QueryVariables,
-                        ) -> Option<#runtime_path::QueryFilter> {
-                            #module_name::#where_variable_filter_macro_ident!({
-                                $($where_field : $where_value),*
-                            })
-                        }
-                    }
 
                     #module_name::delete_many_with_variables::<#root_delete_ident>(
                         #module_name::#where_variables_macro_ident!({
@@ -118,16 +110,12 @@ impl ParsedSchema {
                     #model_ident { $(,)? }
                 ) => {{
                     #[allow(dead_code)]
+                    #[derive(#runtime_path::DeleteMany)]
+                    #[vitrail(
+                        schema = #module_name::Schema,
+                        model = #model_name
+                    )]
                     struct #root_delete_ident;
-
-                    impl #runtime_path::DeleteManyModel for #root_delete_ident {
-                        type Schema = #module_name::Schema;
-                        type Variables = ();
-
-                        fn model_name() -> &'static str {
-                            #model_name
-                        }
-                    }
 
                     #module_name::delete_many::<#root_delete_ident>()
                 }};

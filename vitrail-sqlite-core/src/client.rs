@@ -1,6 +1,6 @@
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
-use crate::{InsertSpec, QuerySpec, SqliteExecutor, UpdateSpec};
+use crate::{DeleteSpec, InsertSpec, QuerySpec, SqliteExecutor, UpdateSpec};
 
 /// SQLite client entry point.
 #[derive(Clone, Debug)]
@@ -59,6 +59,14 @@ impl VitrailClient {
     {
         let executor: &dyn SqliteExecutor = &self.pool;
         update.execute(executor).await
+    }
+
+    pub async fn delete_many<D>(&self, delete: D) -> Result<D::Output, sqlx::Error>
+    where
+        D: DeleteSpec,
+    {
+        let executor: &dyn SqliteExecutor = &self.pool;
+        delete.execute(executor).await
     }
 
     pub async fn close(&self) {
