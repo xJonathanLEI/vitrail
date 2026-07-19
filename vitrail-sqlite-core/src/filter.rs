@@ -20,6 +20,14 @@ pub(crate) trait FilterBuilder<'a> {
     fn operation_name(&self) -> &'static str;
 }
 
+pub(crate) fn filter_binding_expr(placeholder: &str, scalar: ScalarType) -> String {
+    match scalar {
+        ScalarType::DateTime => format!("julianday({placeholder})"),
+        ScalarType::Json => format!("json({placeholder})"),
+        _ => placeholder.to_owned(),
+    }
+}
+
 pub(crate) fn schema_model<'a>(
     schema: &'a Schema,
     requested: &str,

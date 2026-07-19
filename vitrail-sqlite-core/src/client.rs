@@ -1,6 +1,6 @@
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
-use crate::{InsertSpec, QuerySpec, SqliteExecutor};
+use crate::{InsertSpec, QuerySpec, SqliteExecutor, UpdateSpec};
 
 /// SQLite client entry point.
 #[derive(Clone, Debug)]
@@ -51,6 +51,14 @@ impl VitrailClient {
     {
         let executor: &dyn SqliteExecutor = &self.pool;
         insert.execute(executor).await
+    }
+
+    pub async fn update_many<U>(&self, update: U) -> Result<U::Output, sqlx::Error>
+    where
+        U: UpdateSpec,
+    {
+        let executor: &dyn SqliteExecutor = &self.pool;
+        update.execute(executor).await
     }
 
     pub async fn close(&self) {

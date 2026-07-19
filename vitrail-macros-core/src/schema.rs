@@ -1787,6 +1787,16 @@ mod tests {
                 "generated operation support is missing configured runtime path `{expected}`"
             );
         }
+
+        assert!(
+            generated.contains("derive (:: custom_runtime :: UpdateMany)"),
+            "generated update helpers must delegate operation implementations to `UpdateMany`"
+        );
+        assert!(
+            !generated
+                .contains("impl :: custom_runtime :: UpdateManyModel for __VitrailUpdateAccount"),
+            "generated update helpers must not implement `UpdateManyModel` directly"
+        );
     }
 
     #[test]

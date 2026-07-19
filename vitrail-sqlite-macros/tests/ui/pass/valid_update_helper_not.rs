@@ -1,6 +1,6 @@
-pub use vitrail_pg_core::*;
-pub use vitrail_pg_macros::{UpdateData, UpdateMany, schema, update};
-extern crate self as vitrail_pg;
+pub use vitrail_sqlite_core::*;
+pub use vitrail_sqlite_macros::{UpdateData, UpdateMany, schema, update};
+extern crate self as vitrail_sqlite;
 
 schema! {
     name update_helper_not_schema

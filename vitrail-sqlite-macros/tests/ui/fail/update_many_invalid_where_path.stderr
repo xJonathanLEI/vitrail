@@ -1,0 +1,15 @@
+error: scalar field `email` cannot be traversed in update `where(...)` for model `user`
+  --> tests/ui/fail/update_many_invalid_where_path.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name update_schema
+ 7 | |
+ 8 | |     model user {
+...  |
+21 | | }
+   | |_^
+...
+34 |   #[derive(UpdateMany)]
+   |            ---------- in this derive macro expansion
+   |
+   = note: this error originates in the macro `update_schema::__vitrail_assert_update_where_path_update_schema_user` which comes from the expansion of the derive macro `UpdateMany` (in Nightly builds, run with -Z macro-backtrace for more info)

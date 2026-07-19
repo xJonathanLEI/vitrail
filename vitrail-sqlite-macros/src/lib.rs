@@ -4,7 +4,7 @@ use vitrail_macros_core::{
     NativeAttributeKind, NativeAttributeMapping, OperationFamilies, QueryMacroConfig,
     SchemaMacroConfig, WriteMacroConfig, expand_embedded_migrations, expand_insert,
     expand_insert_input, expand_insert_result, expand_query, expand_query_result,
-    expand_query_variables, expand_schema,
+    expand_query_variables, expand_schema, expand_update, expand_update_data, expand_update_many,
 };
 
 fn expand_sqlite_schema(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
@@ -16,7 +16,7 @@ fn expand_sqlite_schema(input: proc_macro2::TokenStream) -> syn::Result<proc_mac
             "Uuid",
             NativeAttributeKind::DbUuid,
         )],
-        OperationFamilies::new(true, true, false, false),
+        OperationFamilies::new(true, true, true, false),
     );
 
     expand_schema(input, &config)
@@ -65,6 +65,15 @@ pub fn query(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn insert(input: TokenStream) -> TokenStream {
     match expand_insert(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+/// Expands an ad hoc SQLite bulk update through its schema-generated helper.
+#[proc_macro]
+pub fn update(input: TokenStream) -> TokenStream {
+    match expand_update(input.into()) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -123,12 +132,34 @@ pub fn derive_insert_result(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Derives a model-first SQLite update data input.
+#[proc_macro_derive(UpdateData, attributes(vitrail))]
+pub fn derive_update_data(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match expand_update_data(input, &sqlite_write_macro_config()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+/// Derives a model-first SQLite bulk update.
+#[proc_macro_derive(UpdateMany, attributes(vitrail))]
+pub fn derive_update_many(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    match expand_update_many(input, &sqlite_write_macro_config()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn sqlite_schema_adapter_emits_query_and_insert_support_items() {
+    fn sqlite_schema_adapter_emits_query_insert_and_update_support_items() {
         let generated = expand_sqlite_schema(quote::quote! {
             name adapter_schema
 
@@ -152,31 +183,35 @@ mod tests {
             "vitrail_sqlite :: Insert :: new",
             "vitrail_sqlite :: InsertInput",
             "vitrail_sqlite :: InsertResult",
+            "pub fn update_many < T >",
+            "pub fn update_many_with_variables < T >",
+            "vitrail_sqlite :: UpdateManyModel",
+            "vitrail_sqlite :: UpdateMany :: new",
+            "vitrail_sqlite :: UpdateData",
+            "vitrail_sqlite :: UpdateMany",
             "macro_rules ! __vitrail_query_adapter_schema",
             "macro_rules ! __vitrail_insert_adapter_schema",
+            "macro_rules ! __vitrail_update_adapter_schema",
             "__vitrail_query_traits_adapter_schema_user",
             "__vitrail_query_filter_traits_adapter_schema_user",
             "__vitrail_insert_traits_adapter_schema_user",
+            "__vitrail_update_traits_adapter_schema_user",
+            "__vitrail_update_filter_traits_adapter_schema_user",
             "__vitrail_rust_types_adapter_schema_user",
             "__VitrailRustType_adapter_schema_user_postal_code",
         ] {
             assert!(
                 generated.contains(expected),
-                "generated SQLite query/insert support is missing `{expected}`"
+                "generated SQLite query/insert/update support is missing `{expected}`"
             );
         }
 
         for unsupported_item in [
             "pub fn delete_many <",
             "pub fn delete_many_with_variables <",
-            "pub fn update_many <",
-            "pub fn update_many_with_variables <",
             "macro_rules ! __vitrail_delete_adapter_schema",
-            "macro_rules ! __vitrail_update_adapter_schema",
             "__vitrail_delete_traits_adapter_schema_user",
             "__vitrail_delete_filter_traits_adapter_schema_user",
-            "__vitrail_update_traits_adapter_schema_user",
-            "__vitrail_update_filter_traits_adapter_schema_user",
         ] {
             assert!(
                 !generated.contains(unsupported_item),
@@ -187,7 +222,7 @@ mod tests {
         for leaked_path in ["vitrail_pg", "vitrail_core", "vitrail_macros_core"] {
             assert!(
                 !generated.contains(leaked_path),
-                "generated SQLite query/insert support leaked `{leaked_path}`"
+                "generated SQLite query/insert/update support leaked `{leaked_path}`"
             );
         }
     }

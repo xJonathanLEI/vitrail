@@ -1,0 +1,1347 @@
+use crate::support::{TestDatabase, apply_schema};
+use sqlx::sqlite::SqlitePoolOptions;
+use vitrail_sqlite::{
+    QueryFilter, QueryFilterValue, QueryVariableValue, QueryVariables, SqliteSchema, UpdateData,
+    UpdateMany, UpdateManyModel, UpdateValue, UpdateValues, VitrailClient, schema, update,
+};
+
+schema! {
+    name update_schema
+
+    model user {
+        id        Int    @id @default(autoincrement())
+        email     String @unique
+        name      String
+        age       Int
+        posts     post[]
+    }
+
+    model post {
+        id         Int       @id @default(autoincrement())
+        title      String
+        body       String?
+        published  Boolean
+        updated_at DateTime?
+        author_id  Int
+        author     user      @relation(fields: [author_id], references: [id])
+        comments   comment[]
+    }
+
+    model comment {
+        id       Int     @id @default(autoincrement())
+        body     String
+        reviewed Boolean
+        post_id  Int
+        post     post    @relation(fields: [post_id], references: [id])
+    }
+}
+
+pub(crate) use self::update_schema as sqlite_update_schema;
+
+#[derive(UpdateData)]
+#[vitrail(schema = crate::update_schema::Schema, model = post)]
+struct PublishPostsData {
+    published: bool,
+}
+
+#[derive(UpdateData)]
+#[vitrail(schema = crate::update_schema::Schema, model = comment)]
+struct ReviewCommentsData {
+    reviewed: bool,
+}
+
+#[derive(QueryVariables)]
+struct AuthorAgeVariables {
+    author_age: i64,
+}
+
+#[derive(QueryVariables)]
+struct AuthorAgeAndPublishedVariables {
+    author_age: i64,
+    was_published: bool,
+}
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData
+)]
+struct DerivedPublishAllPosts;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = AuthorAgeVariables,
+    where(author.age = eq(author_age))
+)]
+struct DerivedPublishPostsByAuthorAge;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = comment,
+    data = ReviewCommentsData,
+    variables = AuthorAgeVariables,
+    where(post.author.age = eq(author_age))
+)]
+struct DerivedReviewCommentsByPostAuthorAge;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = AuthorAgeAndPublishedVariables,
+    where(author.age = eq(author_age)),
+    where(published = eq(was_published))
+)]
+struct DerivedPublishUnpublishedPostsByAuthorAge;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    where(body = null)
+)]
+struct DerivedPublishPostsWithNullBody;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    where(body = not(null))
+)]
+struct DerivedPublishPostsWithNonNullBody;
+
+#[derive(QueryVariables)]
+struct ExcludedPostBodyVariables {
+    excluded_body: String,
+}
+
+#[derive(QueryVariables)]
+struct PostIdsVariables {
+    post_ids: Vec<i64>,
+}
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = ExcludedPostBodyVariables,
+    where(body = not(excluded_body))
+)]
+struct DerivedPublishPostsByExcludedBody;
+
+#[derive(UpdateMany)]
+#[vitrail(
+    schema = crate::update_schema::Schema,
+    model = post,
+    data = PublishPostsData,
+    variables = PostIdsVariables,
+    where(id = in(post_ids))
+)]
+struct DerivedPublishPostsByIds;
+
+struct PublishUnpublishedPosts;
+
+impl UpdateManyModel for PublishUnpublishedPosts {
+    type Schema = crate::update_schema::Schema;
+    type Values = UpdateValues;
+    type Variables = ();
+
+    fn model_name() -> &'static str {
+        "post"
+    }
+
+    fn filter() -> Option<QueryFilter> {
+        Some(QueryFilter::eq("published", false))
+    }
+}
+
+struct PublishPostsByAuthorAge;
+
+impl UpdateManyModel for PublishPostsByAuthorAge {
+    type Schema = crate::update_schema::Schema;
+    type Values = UpdateValues;
+    type Variables = QueryVariables;
+
+    fn model_name() -> &'static str {
+        "post"
+    }
+
+    fn filter_with_variables(_variables: &QueryVariables) -> Option<QueryFilter> {
+        Some(QueryFilter::relation(
+            "author",
+            QueryFilter::eq("age", QueryFilterValue::variable("author_age")),
+        ))
+    }
+}
+
+struct ReviewCommentsByPostAuthorAge;
+
+impl UpdateManyModel for ReviewCommentsByPostAuthorAge {
+    type Schema = crate::update_schema::Schema;
+    type Values = UpdateValues;
+    type Variables = QueryVariables;
+
+    fn model_name() -> &'static str {
+        "comment"
+    }
+
+    fn filter_with_variables(_variables: &QueryVariables) -> Option<QueryFilter> {
+        Some(QueryFilter::relation(
+            "post",
+            QueryFilter::relation(
+                "author",
+                QueryFilter::eq("age", QueryFilterValue::variable("author_age")),
+            ),
+        ))
+    }
+}
+
+async fn setup_database(database_url: &str) {
+    apply_schema(
+        database_url,
+        &SqliteSchema::from_schema_access::<crate::update_schema::Schema>(),
+    )
+    .await;
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let alice_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO "user" ("email", "name", "age")
+        VALUES ('alice@example.com', 'Alice', 35)
+        RETURNING "id"
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should insert alice");
+
+    let bob_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO "user" ("email", "name", "age")
+        VALUES ('bob@example.com', 'Bob', 28)
+        RETURNING "id"
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should insert bob");
+
+    let alice_post_1: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO "post" ("title", "body", "published", "author_id")
+        VALUES ('Alice draft 1', 'Alice draft body 1', false, ?1)
+        RETURNING "id"
+        "#,
+    )
+    .bind(alice_id)
+    .fetch_one(&pool)
+    .await
+    .expect("should insert alice post 1");
+
+    let alice_post_2: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO "post" ("title", "body", "published", "author_id")
+        VALUES ('Alice draft 2', NULL, false, ?1)
+        RETURNING "id"
+        "#,
+    )
+    .bind(alice_id)
+    .fetch_one(&pool)
+    .await
+    .expect("should insert alice post 2");
+
+    let bob_post: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO "post" ("title", "body", "published", "author_id")
+        VALUES ('Bob already published', 'Bob published body', true, ?1)
+        RETURNING "id"
+        "#,
+    )
+    .bind(bob_id)
+    .fetch_one(&pool)
+    .await
+    .expect("should insert bob post");
+
+    for (body, reviewed, post_id) in [
+        ("Alice comment 1", false, alice_post_1),
+        ("Alice comment 2", false, alice_post_2),
+        ("Bob comment", false, bob_post),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO "comment" ("body", "reviewed", "post_id")
+            VALUES (?1, ?2, ?3)
+            "#,
+        )
+        .bind(body)
+        .bind(reviewed)
+        .bind(post_id)
+        .execute(&pool)
+        .await
+        .expect("should insert comment");
+    }
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn update_many_updates_multiple_rows_and_returns_count() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(UpdateMany::<
+            crate::update_schema::Schema,
+            PublishUnpublishedPosts,
+        >::new(UpdateValues::from_values(vec![(
+            "published",
+            UpdateValue::from(true),
+        )])))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let published_count: i64 =
+        sqlx::query_scalar(r#"SELECT COUNT(*) FROM "post" WHERE "published" = true"#)
+            .fetch_one(&pool)
+            .await
+            .expect("should count published posts");
+
+    assert_eq!(published_count, 3);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn update_many_supports_nested_to_one_relation_filters() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(UpdateMany::<
+            crate::update_schema::Schema,
+            PublishPostsByAuthorAge,
+        >::new_with_variables(
+            QueryVariables::from_values(vec![("author_age", QueryVariableValue::from(35_i64))]),
+            UpdateValues::from_values(vec![("published", UpdateValue::from(true))]),
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let alice_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'alice@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count alice posts");
+
+    let bob_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob posts");
+
+    assert_eq!(alice_published, 2);
+    assert_eq!(bob_published, 1);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn update_many_supports_deeply_nested_relation_filters() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(UpdateMany::<
+            crate::update_schema::Schema,
+            ReviewCommentsByPostAuthorAge,
+        >::new_with_variables(
+            QueryVariables::from_values(vec![("author_age", QueryVariableValue::from(35_i64))]),
+            UpdateValues::from_values(vec![("reviewed", UpdateValue::from(true))]),
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let reviewed_comments: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "comment"
+        WHERE "reviewed" = true
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count reviewed comments");
+
+    let bob_reviewed: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "comment"
+        WHERE "reviewed" = true
+          AND "post_id" IN (
+            SELECT "id"
+            FROM "post"
+            WHERE "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob reviewed comments");
+
+    assert_eq!(reviewed_comments, 2);
+    assert_eq!(bob_reviewed, 0);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn derived_update_many_updates_rows_and_returns_count() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(crate::update_schema::update_many::<DerivedPublishAllPosts>(
+            PublishPostsData { published: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 3);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let published_count: i64 =
+        sqlx::query_scalar(r#"SELECT COUNT(*) FROM "post" WHERE "published" = true"#)
+            .fetch_one(&pool)
+            .await
+            .expect("should count published posts");
+
+    assert_eq!(published_count, 3);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn derived_update_many_supports_nested_relation_filters() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(crate::update_schema::update_many_with_variables::<
+            DerivedPublishPostsByAuthorAge,
+        >(
+            AuthorAgeVariables { author_age: 35 },
+            PublishPostsData { published: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let alice_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'alice@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count alice posts");
+
+    let bob_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob posts");
+
+    assert_eq!(alice_published, 2);
+    assert_eq!(bob_published, 1);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn derived_update_many_supports_deeply_nested_relation_filters() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(crate::update_schema::update_many_with_variables::<
+            DerivedReviewCommentsByPostAuthorAge,
+        >(
+            AuthorAgeVariables { author_age: 35 },
+            ReviewCommentsData { reviewed: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let reviewed_comments: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "comment"
+        WHERE "reviewed" = true
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count reviewed comments");
+
+    let bob_reviewed: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "comment"
+        WHERE "reviewed" = true
+          AND "post_id" IN (
+            SELECT "id"
+            FROM "post"
+            WHERE "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob reviewed comments");
+
+    assert_eq!(reviewed_comments, 2);
+    assert_eq!(bob_reviewed, 0);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn derived_update_many_combines_multiple_where_clauses_with_and() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(crate::update_schema::update_many_with_variables::<
+            DerivedPublishUnpublishedPostsByAuthorAge,
+        >(
+            AuthorAgeAndPublishedVariables {
+                author_age: 35,
+                was_published: false,
+            },
+            PublishPostsData { published: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let alice_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'alice@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count alice posts");
+
+    let bob_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob posts");
+
+    assert_eq!(alice_published, 2);
+    assert_eq!(bob_published, 1);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn helper_update_many_updates_rows_and_returns_count() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(update! {
+            crate::update_schema,
+            post {
+                data: {
+                    published: true,
+                },
+            }
+        })
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 3);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let published_count: i64 =
+        sqlx::query_scalar(r#"SELECT COUNT(*) FROM "post" WHERE "published" = true"#)
+            .fetch_one(&pool)
+            .await
+            .expect("should count published posts");
+
+    assert_eq!(published_count, 3);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn helper_update_many_supports_nested_relation_filters() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(update! {
+            crate::update_schema,
+            post {
+                data: {
+                    published: true,
+                },
+                where: {
+                    author: {
+                        age: {
+                            eq: 35
+                        }
+                    },
+                },
+            }
+        })
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let alice_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'alice@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count alice posts");
+
+    let bob_published: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "published" = true
+          AND "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob posts");
+
+    assert_eq!(alice_published, 2);
+    assert_eq!(bob_published, 1);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn helper_update_many_supports_deeply_nested_relation_filters() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let count = client
+        .update_many(update! {
+            crate::update_schema,
+            comment {
+                data: {
+                    reviewed: true,
+                },
+                where: {
+                    post: {
+                        author: {
+                            age: {
+                                eq: 35
+                            }
+                        }
+                    },
+                },
+            }
+        })
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(count, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let reviewed_comments: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "comment"
+        WHERE "reviewed" = true
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count reviewed comments");
+
+    let bob_reviewed: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "comment"
+        WHERE "reviewed" = true
+          AND "post_id" IN (
+            SELECT "id"
+            FROM "post"
+            WHERE "author_id" = (SELECT "id" FROM "user" WHERE "email" = 'bob@example.com')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count bob reviewed comments");
+
+    assert_eq!(reviewed_comments, 2);
+    assert_eq!(bob_reviewed, 0);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[test]
+fn update_many_generates_expected_sql_for_nested_relation_filter() {
+    let sql =
+        UpdateMany::<crate::update_schema::Schema, PublishPostsByAuthorAge>::new_with_variables(
+            QueryVariables::from_values(vec![("author_age", QueryVariableValue::from(35_i64))]),
+            UpdateValues::from_values(vec![("published", UpdateValue::from(true))]),
+        )
+        .to_sql()
+        .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = ?1"#,
+            r#"WHERE EXISTS (SELECT 1 FROM "user" AS "t1" WHERE "t1"."id" = "t0"."author_id" AND "t1"."age" = ?2)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[tokio::test]
+async fn update_many_updates_rows_matching_null_filter() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let updated = client
+        .update_many(crate::update_schema::update_many::<
+            DerivedPublishPostsWithNullBody,
+        >(PublishPostsData { published: true }))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(updated, 1);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let null_body_published_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "body" IS NULL AND "published" = TRUE
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count published posts with null body");
+
+    let non_null_body_unpublished_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "body" IS NOT NULL AND "published" = FALSE
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count unpublished posts with non-null body");
+
+    assert_eq!(null_body_published_count, 1);
+    assert_eq!(non_null_body_unpublished_count, 1);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn update_many_updates_rows_matching_not_null_filter() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let updated = client
+        .update_many(crate::update_schema::update_many::<
+            DerivedPublishPostsWithNonNullBody,
+        >(PublishPostsData { published: true }))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(updated, 2);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let non_null_body_unpublished_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "body" IS NOT NULL AND "published" = FALSE
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count unpublished posts with non-null body");
+
+    let null_body_unpublished_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM "post"
+        WHERE "body" IS NULL AND "published" = FALSE
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should count unpublished posts with null body");
+
+    assert_eq!(non_null_body_unpublished_count, 0);
+    assert_eq!(null_body_unpublished_count, 1);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[tokio::test]
+async fn update_many_updates_rows_matching_not_equal_filter() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let updated = client
+        .update_many(crate::update_schema::update_many_with_variables::<
+            DerivedPublishPostsByExcludedBody,
+        >(
+            ExcludedPostBodyVariables {
+                excluded_body: "Bob published body".to_owned(),
+            },
+            PublishPostsData { published: true },
+        ))
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(updated, 1);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let alice_post_1_published: bool = sqlx::query_scalar(
+        r#"
+        SELECT "published"
+        FROM "post"
+        WHERE "body" = 'Alice draft body 1'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch alice post 1");
+
+    let bob_post_published: bool = sqlx::query_scalar(
+        r#"
+        SELECT "published"
+        FROM "post"
+        WHERE "body" = 'Bob published body'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch bob post");
+
+    let null_body_post_published: bool = sqlx::query_scalar(
+        r#"
+        SELECT "published"
+        FROM "post"
+        WHERE "body" IS NULL
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch null body post");
+
+    assert!(alice_post_1_published);
+    assert!(bob_post_published);
+    assert!(!null_body_post_published);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[test]
+fn update_many_generates_expected_sql_for_null_filter() {
+    let sql =
+        crate::update_schema::update_many::<DerivedPublishPostsWithNullBody>(PublishPostsData {
+            published: true,
+        })
+        .to_sql()
+        .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = ?1"#,
+            r#"WHERE "t0"."body" IS NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_many_generates_expected_sql_for_not_null_filter() {
+    let sql =
+        crate::update_schema::update_many::<DerivedPublishPostsWithNonNullBody>(PublishPostsData {
+            published: true,
+        })
+        .to_sql()
+        .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = ?1"#,
+            r#"WHERE "t0"."body" IS NOT NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_many_generates_expected_sql_for_not_equal_filter() {
+    let sql =
+        crate::update_schema::update_many_with_variables::<DerivedPublishPostsByExcludedBody>(
+            ExcludedPostBodyVariables {
+                excluded_body: "Bob published body".to_owned(),
+            },
+            PublishPostsData { published: true },
+        )
+        .to_sql()
+        .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = ?1"#,
+            r#"WHERE "t0"."body" <> ?2"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_many_generates_expected_sql_for_in_filter() {
+    let sql = crate::update_schema::update_many_with_variables::<DerivedPublishPostsByIds>(
+        PostIdsVariables {
+            post_ids: vec![1, 3],
+        },
+        PublishPostsData { published: true },
+    )
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = ?1"#,
+            r#"WHERE "t0"."id" IN (?2, ?3)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_helper_generates_expected_sql_for_not_null_filter() {
+    let sql = update! {
+        crate::update_schema,
+        post {
+            data: {
+                published: true,
+            },
+            where: {
+                body: {
+                    not: null
+                },
+            },
+        }
+    }
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = ?1"#,
+            r#"WHERE "t0"."body" IS NOT NULL"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_helper_generates_expected_sql_for_not_equal_filter() {
+    let sql = update! {
+        crate::update_schema,
+        post {
+            data: {
+                published: true,
+            },
+            where: {
+                body: {
+                    not: "Bob published body".to_owned()
+                },
+            },
+        }
+    }
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = ?1"#,
+            r#"WHERE "t0"."body" <> ?2"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[test]
+fn update_helper_generates_expected_sql_for_in_filter() {
+    let sql = update! {
+        crate::update_schema,
+        post {
+            data: {
+                published: true,
+            },
+            where: {
+                id: {
+                    in: vec![1_i64, 3_i64]
+                },
+            },
+        }
+    }
+    .to_sql()
+    .expect("sql generation should succeed");
+
+    assert_eq!(
+        sql,
+        [
+            r#"UPDATE "post" AS "t0""#,
+            r#"SET "published" = ?1"#,
+            r#"WHERE "t0"."id" IN (?2, ?3)"#,
+        ]
+        .join(" ")
+    );
+}
+
+#[tokio::test]
+async fn update_many_supports_nullable_datetime_assignments() {
+    let database = TestDatabase::new();
+    let database_url = database.url().to_owned();
+    setup_database(&database_url).await;
+
+    let client = VitrailClient::new(&database_url)
+        .await
+        .expect("should create vitrail client");
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("should connect to SQLite");
+
+    let post_id: i64 = sqlx::query_scalar(
+        r#"
+        UPDATE "post"
+        SET "updated_at" = CURRENT_TIMESTAMP
+        WHERE "title" = 'Alice draft 1'
+        RETURNING "id"
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("should update post timestamp");
+
+    let updated = client
+        .update_many(update! {
+            crate::update_schema,
+            post {
+                data: {
+                    updated_at: None::<chrono::DateTime<chrono::Utc>>,
+                },
+                where: {
+                    id: {
+                        eq: post_id
+                    },
+                },
+            }
+        })
+        .await
+        .expect("update should support null datetime assignments");
+
+    assert_eq!(updated, 1);
+
+    let updated_at: Option<chrono::NaiveDateTime> = sqlx::query_scalar(
+        r#"
+        SELECT "updated_at"
+        FROM "post"
+        WHERE "id" = ?1
+        "#,
+    )
+    .bind(post_id)
+    .fetch_one(&pool)
+    .await
+    .expect("should fetch updated post");
+
+    assert_eq!(updated_at, None);
+
+    pool.close().await;
+    client.close().await;
+    database.cleanup();
+}
+
+#[test]
+fn update_many_rejects_relation_field_write() {
+    let error = UpdateMany::<crate::update_schema::Schema, PublishUnpublishedPosts>::with_values(
+        UpdateValues::from_values(vec![("author", UpdateValue::from(1_i64))]),
+    )
+    .to_sql()
+    .expect_err("update should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("relation field `author` cannot be written in update for model `post`")
+    );
+}
+
+#[test]
+fn update_many_rejects_empty_update_payload() {
+    let error = UpdateMany::<crate::update_schema::Schema, PublishUnpublishedPosts>::with_values(
+        UpdateValues::new(),
+    )
+    .to_sql()
+    .expect_err("update should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("update on model `post` must write at least one scalar field")
+    );
+}

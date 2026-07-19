@@ -5,9 +5,10 @@ mod migration;
 mod migrator;
 mod query;
 mod schema;
+mod update;
 mod validation;
 
-use sqlx::sqlite::{SqliteArguments, SqlitePool, SqliteRow};
+use sqlx::sqlite::{SqliteArguments, SqlitePool, SqliteQueryResult, SqliteRow};
 use sqlx::{Sqlite, query::Query as SqlxQuery};
 
 /// Internal execution abstraction for SQLite-backed query and write operations.
@@ -30,6 +31,11 @@ pub trait SqliteExecutor: private::Sealed + Send + Sync {
         &'a self,
         query: SqlxQuery<'a, Sqlite, SqliteArguments<'a>>,
     ) -> futures_util::future::BoxFuture<'a, Result<SqliteRow, sqlx::Error>>;
+
+    fn execute<'a>(
+        &'a self,
+        query: SqlxQuery<'a, Sqlite, SqliteArguments<'a>>,
+    ) -> futures_util::future::BoxFuture<'a, Result<SqliteQueryResult, sqlx::Error>>;
 }
 
 impl private::Sealed for SqlitePool {}
@@ -54,6 +60,13 @@ impl SqliteExecutor for SqlitePool {
         query: SqlxQuery<'a, Sqlite, SqliteArguments<'a>>,
     ) -> futures_util::future::BoxFuture<'a, Result<SqliteRow, sqlx::Error>> {
         Box::pin(async move { query.fetch_one(self).await })
+    }
+
+    fn execute<'a>(
+        &'a self,
+        query: SqlxQuery<'a, Sqlite, SqliteArguments<'a>>,
+    ) -> futures_util::future::BoxFuture<'a, Result<SqliteQueryResult, sqlx::Error>> {
+        Box::pin(async move { query.execute(self).await })
     }
 }
 
@@ -91,6 +104,10 @@ pub use schema::{
     ModelPrimaryKeyAttribute, ModelPrimaryKeyAttributeBuilder, ModelUniqueAttribute,
     ModelUniqueAttributeBuilder, RelationAttribute, RelationAttributeBuilder, Resolution,
     RustTypeAttribute, ScalarFieldType, ScalarType, Schema, SchemaAccess, SchemaBuilder,
+};
+pub use update::{
+    UpdateFieldValue, UpdateMany, UpdateManyModel, UpdateScalar, UpdateSpec, UpdateValue,
+    UpdateValueSet, UpdateValues,
 };
 pub use validation::{ValidationError, ValidationErrors, ValidationLocation};
 

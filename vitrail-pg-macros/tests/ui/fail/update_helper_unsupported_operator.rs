@@ -1,5 +1,5 @@
 pub use vitrail_pg_core::*;
-pub use vitrail_pg_macros::{UpdateData, schema, update};
+pub use vitrail_pg_macros::{UpdateData, UpdateMany, schema, update};
 extern crate self as vitrail_pg;
 
 schema! {

@@ -379,25 +379,17 @@ impl ParsedSchema {
                     }
 
                     #[allow(dead_code)]
+                    #[derive(#runtime_path::UpdateMany)]
+                    #[vitrail(
+                        schema = #module_name::Schema,
+                        model = #model_name,
+                        data = #root_data_ident,
+                        variables = #runtime_path::QueryVariables,
+                        __helper_filter = #module_name::#where_variable_filter_macro_ident!({
+                            $($where_field : $where_value),*
+                        })
+                    )]
                     struct #root_update_ident;
-
-                    impl #runtime_path::UpdateManyModel for #root_update_ident {
-                        type Schema = #module_name::Schema;
-                        type Values = #root_data_ident;
-                        type Variables = #runtime_path::QueryVariables;
-
-                        fn model_name() -> &'static str {
-                            #model_name
-                        }
-
-                        fn filter_with_variables(
-                            _: &#runtime_path::QueryVariables,
-                        ) -> Option<#runtime_path::QueryFilter> {
-                            #module_name::#where_variable_filter_macro_ident!({
-                                $($where_field : $where_value),*
-                            })
-                        }
-                    }
 
                     #module_name::update_many_with_variables::<#root_update_ident>(
                         #module_name::#where_variables_macro_ident!({
@@ -424,17 +416,13 @@ impl ParsedSchema {
                     }
 
                     #[allow(dead_code)]
+                    #[derive(#runtime_path::UpdateMany)]
+                    #[vitrail(
+                        schema = #module_name::Schema,
+                        model = #model_name,
+                        data = #root_data_ident
+                    )]
                     struct #root_update_ident;
-
-                    impl #runtime_path::UpdateManyModel for #root_update_ident {
-                        type Schema = #module_name::Schema;
-                        type Values = #root_data_ident;
-                        type Variables = ();
-
-                        fn model_name() -> &'static str {
-                            #model_name
-                        }
-                    }
 
                     #module_name::update_many::<#root_update_ident>(#module_name::#data_value_macro_ident! {
                         #root_data_ident;

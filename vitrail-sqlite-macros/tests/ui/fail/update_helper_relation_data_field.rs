@@ -1,6 +1,6 @@
-pub use vitrail_pg_core::*;
-pub use vitrail_pg_macros::{UpdateData, UpdateMany, schema, update};
-extern crate self as vitrail_pg;
+pub use vitrail_sqlite_core::*;
+pub use vitrail_sqlite_macros::{UpdateData, UpdateMany, schema, update};
+extern crate self as vitrail_sqlite;
 
 schema! {
     name update_helper_schema
@@ -26,14 +26,7 @@ fn main() {
         crate::update_helper_schema,
         post {
             data: {
-                published: true,
-            },
-            where: {
-                author: {
-                    unknown: {
-                        eq: 30
-                    }
-                },
+                author: 1,
             },
         }
     };

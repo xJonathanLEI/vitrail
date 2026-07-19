@@ -8,7 +8,9 @@ use sqlx::{Row as _, Sqlite, ValueRef as _};
 pub use futures_util::future::BoxFuture;
 
 use crate::SqliteExecutor;
-use crate::filter::{FilterBuilder, compile_filter_sql, schema_model as resolve_schema_model};
+use crate::filter::{
+    FilterBuilder, compile_filter_sql, filter_binding_expr, schema_model as resolve_schema_model,
+};
 use crate::schema::{FieldType, Model, ScalarType, Schema, SchemaAccess};
 
 /// Runtime contract implemented by executable query values.
@@ -1668,11 +1670,7 @@ impl<'a> SqlBuilder<'a> {
         self.bindings.push(value);
         let placeholder = format!("?{}", self.bindings.len());
 
-        match scalar {
-            ScalarType::DateTime => Ok(format!("julianday({placeholder})")),
-            ScalarType::Json => Ok(format!("json({placeholder})")),
-            _ => Ok(placeholder),
-        }
+        Ok(filter_binding_expr(&placeholder, scalar))
     }
 }
 

@@ -20,6 +20,10 @@ mod statements;
 pub(crate) use statements::sqlite_compound_statements_schema as compound_statements_schema;
 pub(crate) use statements::sqlite_statements_schema as statements_schema;
 
+#[path = "sqlite/update.rs"]
+mod update;
+pub(crate) use update::sqlite_update_schema as update_schema;
+
 vitrail_sqlite::schema! {
     name sqlite_facade_schema
 
