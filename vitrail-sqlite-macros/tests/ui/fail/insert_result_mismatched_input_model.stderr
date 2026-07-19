@@ -1,0 +1,28 @@
+error[E0277]: the trait bound `NewPost: __vitrail_insert_traits_insert_schema_user::__VitrailInsertInputModel` is not satisfied
+  --> tests/ui/fail/insert_result_mismatched_input_model.rs:26:72
+   |
+26 | #[vitrail(schema = crate::insert_schema::Schema, model = user, input = NewPost)]
+   |                                                                        ^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `__vitrail_insert_traits_insert_schema_user::__VitrailInsertInputModel` is not implemented for `NewPost`
+  --> tests/ui/fail/insert_result_mismatched_input_model.rs:21:1
+   |
+21 | struct NewPost {
+   | ^^^^^^^^^^^^^^
+   = note: `NewPost` implements similarly named trait `__vitrail_insert_traits_insert_schema_post::__VitrailInsertInputModel`, but not `__vitrail_insert_traits_insert_schema_user::__VitrailInsertInputModel`
+help: this trait has no implementations, consider adding one
+  --> tests/ui/fail/insert_result_mismatched_input_model.rs:5:1
+   |
+ 5 | / schema! {
+ 6 | |     name insert_schema
+ 7 | |
+ 8 | |     model user {
+...  |
+17 | | }
+   | |_^
+note: required by a bound in `__vitrail_assert_insert_values`
+  --> tests/ui/fail/insert_result_mismatched_input_model.rs:25:10
+   |
+25 | #[derive(InsertResult)]
+   |          ^^^^^^^^^^^^ required by this bound in `__vitrail_assert_insert_values`
+   = note: this error originates in the macro `schema` which comes from the expansion of the derive macro `InsertResult` (in Nightly builds, run with -Z macro-backtrace for more info)

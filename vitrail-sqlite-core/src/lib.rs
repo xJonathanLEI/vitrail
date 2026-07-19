@@ -1,5 +1,6 @@
 mod client;
 mod filter;
+mod insert;
 mod migration;
 mod migrator;
 mod query;
@@ -9,9 +10,9 @@ mod validation;
 use sqlx::sqlite::{SqliteArguments, SqlitePool, SqliteRow};
 use sqlx::{Sqlite, query::Query as SqlxQuery};
 
-/// Internal execution abstraction for SQLite-backed read operations.
+/// Internal execution abstraction for SQLite-backed query and write operations.
 ///
-/// This trait keeps query execution independent from the public client while
+/// This trait keeps runtime execution independent from the public client while
 /// restricting executors to implementations owned by this crate.
 #[doc(hidden)]
 pub trait SqliteExecutor: private::Sealed + Send + Sync {
@@ -24,6 +25,11 @@ pub trait SqliteExecutor: private::Sealed + Send + Sync {
         &'a self,
         query: SqlxQuery<'a, Sqlite, SqliteArguments<'a>>,
     ) -> futures_util::future::BoxFuture<'a, Result<Option<SqliteRow>, sqlx::Error>>;
+
+    fn fetch_one<'a>(
+        &'a self,
+        query: SqlxQuery<'a, Sqlite, SqliteArguments<'a>>,
+    ) -> futures_util::future::BoxFuture<'a, Result<SqliteRow, sqlx::Error>>;
 }
 
 impl private::Sealed for SqlitePool {}
@@ -42,6 +48,13 @@ impl SqliteExecutor for SqlitePool {
     ) -> futures_util::future::BoxFuture<'a, Result<Option<SqliteRow>, sqlx::Error>> {
         Box::pin(async move { query.fetch_optional(self).await })
     }
+
+    fn fetch_one<'a>(
+        &'a self,
+        query: SqlxQuery<'a, Sqlite, SqliteArguments<'a>>,
+    ) -> futures_util::future::BoxFuture<'a, Result<SqliteRow, sqlx::Error>> {
+        Box::pin(async move { query.fetch_one(self).await })
+    }
 }
 
 mod private {
@@ -51,6 +64,10 @@ mod private {
 }
 
 pub use client::VitrailClient;
+pub use insert::{
+    Insert, InsertFieldValue, InsertModel, InsertScalar, InsertSpec, InsertValue, InsertValueSet,
+    InsertValues,
+};
 pub use migration::{
     ColumnDefault, ColumnType, ForeignKeyAction, SqliteColumn, SqliteForeignKey, SqliteIndex,
     SqliteMigration, SqlitePrimaryKey, SqliteSchema, SqliteTable,

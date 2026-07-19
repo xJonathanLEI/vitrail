@@ -1,5 +1,7 @@
 pub use vitrail_sqlite_core::*;
-pub use vitrail_sqlite_macros::{QueryResult, QueryVariables, schema};
+pub use vitrail_sqlite_macros::{
+    InsertInput, InsertResult, QueryResult, QueryVariables, schema,
+};
 extern crate self as vitrail_sqlite;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,6 +26,23 @@ schema! {
     }
 }
 
+#[derive(InsertInput)]
+#[vitrail(schema = crate::custom_string_rust_type_schema::Schema, model = address)]
+struct NewAddress {
+    postal_code: PostalCode,
+}
+
+#[derive(InsertResult)]
+#[vitrail(
+    schema = crate::custom_string_rust_type_schema::Schema,
+    model = address,
+    input = NewAddress
+)]
+struct InsertedAddress {
+    id: i64,
+    postal_code: PostalCode,
+}
+
 #[derive(QueryVariables)]
 struct AddressVariables {
     postal_code: PostalCode,
@@ -42,6 +61,9 @@ struct AddressSummary {
 }
 
 fn main() {
+    let _ = crate::custom_string_rust_type_schema::insert::<InsertedAddress>(NewAddress {
+        postal_code: PostalCode("75001".to_owned()),
+    });
     let _ = crate::custom_string_rust_type_schema::query_with_variables::<AddressSummary>(
         AddressVariables {
             postal_code: PostalCode("75001".to_owned()),

@@ -1,6 +1,10 @@
 #[path = "sqlite/support.rs"]
 mod support;
 
+#[path = "sqlite/insert.rs"]
+mod insert;
+pub(crate) use insert::sqlite_insert_schema as insert_schema;
+
 #[path = "sqlite/migrations.rs"]
 mod migrations;
 
