@@ -15,6 +15,11 @@ mod migrator;
 mod query;
 pub(crate) use query::sqlite_query_schema as query_schema;
 
+#[path = "sqlite/statements.rs"]
+mod statements;
+pub(crate) use statements::sqlite_compound_statements_schema as compound_statements_schema;
+pub(crate) use statements::sqlite_statements_schema as statements_schema;
+
 vitrail_sqlite::schema! {
     name sqlite_facade_schema
 
