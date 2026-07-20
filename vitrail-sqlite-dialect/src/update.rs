@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use serde_json::Value as JsonValue;
 
-use crate::filter::{
-    FilterBuilder, compile_filter_sql, filter_binding_expr, schema_model as resolve_schema_model,
-};
+use crate::filter::{FilterBuilder, compile_filter_sql, schema_model as resolve_schema_model};
+use crate::flavor::{SqliteFamilyCapabilities, SqliteFamilyFlavor};
 use crate::query::{QueryFilter, QueryVariableValue, QueryVariables, quoted_ident, schema_error};
 use crate::schema::{Field, FieldType, Model, ScalarType, Schema};
 use crate::{BindingValue, CompileError, CompiledStatement, OperationKind};
@@ -163,6 +162,25 @@ pub fn compile_update_many(
     filter: Option<&QueryFilter>,
     variables: &QueryVariables,
 ) -> Result<CompiledStatement, CompileError> {
+    compile_update_many_with_flavor(
+        schema,
+        model_name,
+        values,
+        filter,
+        variables,
+        SqliteFamilyFlavor::Native,
+    )
+}
+
+#[doc(hidden)]
+pub fn compile_update_many_with_flavor(
+    schema: &Schema,
+    model_name: &str,
+    values: &UpdateValues,
+    filter: Option<&QueryFilter>,
+    variables: &QueryVariables,
+    flavor: SqliteFamilyFlavor,
+) -> Result<CompiledStatement, CompileError> {
     let model = resolve_schema_model(schema, model_name, "update")?;
 
     validate_update_values(model, values)?;
@@ -171,6 +189,7 @@ pub fn compile_update_many(
     let mut builder = UpdateSqlBuilder {
         schema,
         variables,
+        capabilities: flavor.capabilities(),
         bindings: Vec::new(),
         next_alias: 1,
     };
@@ -212,12 +231,13 @@ pub fn compile_update_many(
             .unwrap_or_default(),
     );
 
-    Ok(CompiledStatement::new(
+    CompiledStatement::new(
+        flavor,
         sql,
         builder.bindings,
         Vec::new(),
         OperationKind::UpdateMany,
-    ))
+    )
 }
 
 fn validate_update_values(model: &Model, values: &UpdateValues) -> Result<(), CompileError> {
@@ -280,6 +300,7 @@ fn ordered_update_values<'a>(
 struct UpdateSqlBuilder<'a> {
     schema: &'a Schema,
     variables: &'a QueryVariables,
+    capabilities: SqliteFamilyCapabilities,
     bindings: Vec<BindingValue>,
     next_alias: usize,
 }
@@ -303,10 +324,7 @@ impl<'a> UpdateSqlBuilder<'a> {
 
         let placeholder = format!("?{}", self.bindings.len());
 
-        match scalar {
-            ScalarType::Json => Ok(format!("json({placeholder})")),
-            _ => Ok(placeholder),
-        }
+        Ok(self.capabilities.write_parameter_expr(&placeholder, scalar))
     }
 
     fn push_query_binding(
@@ -318,7 +336,9 @@ impl<'a> UpdateSqlBuilder<'a> {
 
         let placeholder = format!("?{}", self.bindings.len());
 
-        Ok(filter_binding_expr(&placeholder, scalar))
+        Ok(self
+            .capabilities
+            .comparison_parameter_expr(&placeholder, scalar))
     }
 }
 
@@ -329,6 +349,10 @@ impl<'a> FilterBuilder<'a> for UpdateSqlBuilder<'a> {
 
     fn variables(&self) -> &'a QueryVariables {
         self.variables
+    }
+
+    fn capabilities(&self) -> SqliteFamilyCapabilities {
+        self.capabilities
     }
 
     fn push_filter_binding(

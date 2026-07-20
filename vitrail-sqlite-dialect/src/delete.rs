@@ -1,6 +1,5 @@
-use crate::filter::{
-    FilterBuilder, compile_filter_sql, filter_binding_expr, schema_model as resolve_schema_model,
-};
+use crate::filter::{FilterBuilder, compile_filter_sql, schema_model as resolve_schema_model};
+use crate::flavor::{SqliteFamilyCapabilities, SqliteFamilyFlavor};
 use crate::query::{QueryFilter, QueryVariableValue, QueryVariables, quoted_ident};
 use crate::schema::{Model, ScalarType, Schema};
 use crate::{BindingValue, CompileError, CompiledStatement, OperationKind};
@@ -11,10 +10,28 @@ pub fn compile_delete_many(
     filter: Option<&QueryFilter>,
     variables: &QueryVariables,
 ) -> Result<CompiledStatement, CompileError> {
+    compile_delete_many_with_flavor(
+        schema,
+        model_name,
+        filter,
+        variables,
+        SqliteFamilyFlavor::Native,
+    )
+}
+
+#[doc(hidden)]
+pub fn compile_delete_many_with_flavor(
+    schema: &Schema,
+    model_name: &str,
+    filter: Option<&QueryFilter>,
+    variables: &QueryVariables,
+    flavor: SqliteFamilyFlavor,
+) -> Result<CompiledStatement, CompileError> {
     let model = resolve_schema_model(schema, model_name, "delete")?;
     let mut builder = DeleteSqlBuilder {
         schema,
         variables,
+        capabilities: flavor.capabilities(),
         bindings: Vec::new(),
         next_alias: 1,
     };
@@ -31,17 +48,19 @@ pub fn compile_delete_many(
             .unwrap_or_default(),
     );
 
-    Ok(CompiledStatement::new(
+    CompiledStatement::new(
+        flavor,
         sql,
         builder.bindings,
         Vec::new(),
         OperationKind::DeleteMany,
-    ))
+    )
 }
 
 struct DeleteSqlBuilder<'a> {
     schema: &'a Schema,
     variables: &'a QueryVariables,
+    capabilities: SqliteFamilyCapabilities,
     bindings: Vec<BindingValue>,
     next_alias: usize,
 }
@@ -75,7 +94,9 @@ impl<'a> DeleteSqlBuilder<'a> {
             }
         });
         let placeholder = format!("?{}", self.bindings.len());
-        Ok(filter_binding_expr(&placeholder, scalar))
+        Ok(self
+            .capabilities
+            .comparison_parameter_expr(&placeholder, scalar))
     }
 }
 
@@ -86,6 +107,10 @@ impl<'a> FilterBuilder<'a> for DeleteSqlBuilder<'a> {
 
     fn variables(&self) -> &'a QueryVariables {
         self.variables
+    }
+
+    fn capabilities(&self) -> SqliteFamilyCapabilities {
+        self.capabilities
     }
 
     fn push_filter_binding(

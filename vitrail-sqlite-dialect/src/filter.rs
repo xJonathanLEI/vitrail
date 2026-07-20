@@ -1,7 +1,8 @@
 use crate::CompileError;
+use crate::flavor::SqliteFamilyCapabilities;
 use crate::query::{
     QueryFilter, QueryFilterValue, QueryFilterValues, QueryVariableValue, QueryVariables,
-    column_expr, quoted_ident, schema_error,
+    quoted_ident, schema_error,
 };
 use crate::schema::{Field, FieldType, Model, Resolution, ScalarType, Schema};
 
@@ -9,6 +10,8 @@ pub(crate) trait FilterBuilder<'a> {
     fn schema(&self) -> &'a Schema;
 
     fn variables(&self) -> &'a QueryVariables;
+
+    fn capabilities(&self) -> SqliteFamilyCapabilities;
 
     fn push_filter_binding(
         &mut self,
@@ -19,14 +22,6 @@ pub(crate) trait FilterBuilder<'a> {
     fn next_filter_alias(&mut self) -> String;
 
     fn operation_name(&self) -> &'static str;
-}
-
-pub(crate) fn filter_binding_expr(placeholder: &str, scalar: ScalarType) -> String {
-    match scalar {
-        ScalarType::DateTime => format!("julianday({placeholder})"),
-        ScalarType::Json => format!("json({placeholder})"),
-        _ => placeholder.to_owned(),
-    }
 }
 
 pub(crate) fn schema_model<'a>(
@@ -122,17 +117,23 @@ pub(crate) fn compile_filter_sql<'a>(
                 }
                 QueryFilter::Eq { .. } => {
                     let placeholder = builder.push_filter_binding(binding, scalar)?;
+                    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field.name()));
                     Ok(format!(
                         "{} = {}",
-                        column_expr(table_alias, field.name(), scalar),
+                        builder
+                            .capabilities()
+                            .stored_column_expr(&column_sql, scalar),
                         placeholder
                     ))
                 }
                 QueryFilter::Ne { .. } => {
                     let placeholder = builder.push_filter_binding(binding, scalar)?;
+                    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field.name()));
                     Ok(format!(
                         "{} <> {}",
-                        column_expr(table_alias, field.name(), scalar),
+                        builder
+                            .capabilities()
+                            .stored_column_expr(&column_sql, scalar),
                         placeholder
                     ))
                 }
@@ -197,9 +198,12 @@ pub(crate) fn compile_filter_sql<'a>(
                 .map(|binding| builder.push_filter_binding(binding, scalar))
                 .collect::<Result<Vec<_>, _>>()?;
 
+            let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field.name()));
             Ok(format!(
                 "{} IN ({})",
-                column_expr(table_alias, field.name(), scalar),
+                builder
+                    .capabilities()
+                    .stored_column_expr(&column_sql, scalar),
                 placeholders.join(", ")
             ))
         }

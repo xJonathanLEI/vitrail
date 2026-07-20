@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value as JsonValue;
 
-use crate::query::{alias_name, quoted_ident, schema_error, select_expr};
+use crate::flavor::{SqliteFamilyCapabilities, SqliteFamilyFlavor};
+use crate::query::{alias_name, quoted_ident, schema_error};
 use crate::schema::{
     Attribute, DefaultFunction, Field, FieldType, Model, Resolution, ScalarType, Schema,
 };
@@ -161,6 +162,24 @@ pub fn compile_insert(
     values: &InsertValues,
     returning_fields: &[&'static str],
 ) -> Result<CompiledStatement, CompileError> {
+    compile_insert_with_flavor(
+        schema,
+        model_name,
+        values,
+        returning_fields,
+        SqliteFamilyFlavor::Native,
+    )
+}
+
+#[doc(hidden)]
+pub fn compile_insert_with_flavor(
+    schema: &Schema,
+    model_name: &str,
+    values: &InsertValues,
+    returning_fields: &[&'static str],
+    flavor: SqliteFamilyFlavor,
+) -> Result<CompiledStatement, CompileError> {
+    let capabilities = flavor.capabilities();
     let model = schema_model(schema, model_name)?;
 
     validate_insert_values(model, values)?;
@@ -168,7 +187,7 @@ pub fn compile_insert(
 
     let ordered_values = ordered_insert_values(model, values);
     let (returning_clause, result_columns) =
-        build_returning_clause(model, returning_fields, model_name)?;
+        build_returning_clause(model, returning_fields, model_name, capabilities)?;
 
     let sql = if ordered_values.is_empty() {
         format!(
@@ -186,13 +205,11 @@ pub fn compile_insert(
             .enumerate()
             .map(|(index, (field, _))| {
                 let placeholder = format!("?{}", index + 1);
+                let FieldType::Scalar(scalar) = field.ty() else {
+                    unreachable!("validated insert values cannot contain relation fields")
+                };
 
-                match field.ty() {
-                    FieldType::Scalar(scalar) if scalar.scalar() == ScalarType::Json => {
-                        format!("json({placeholder})")
-                    }
-                    _ => placeholder,
-                }
+                capabilities.write_parameter_expr(&placeholder, scalar.scalar())
             })
             .collect::<Vec<_>>();
 
@@ -219,12 +236,7 @@ pub fn compile_insert(
         })
         .collect();
 
-    Ok(CompiledStatement::new(
-        sql,
-        bindings,
-        result_columns,
-        OperationKind::Insert,
-    ))
+    CompiledStatement::new(flavor, sql, bindings, result_columns, OperationKind::Insert)
 }
 
 fn validate_insert_values(model: &Model, values: &InsertValues) -> Result<(), CompileError> {
@@ -334,6 +346,7 @@ fn build_returning_clause(
     model: &Model,
     returning_fields: &[&'static str],
     prefix: &str,
+    capabilities: SqliteFamilyCapabilities,
 ) -> Result<(Vec<String>, Vec<ResultColumn>), CompileError> {
     let mut selections = Vec::with_capacity(returning_fields.len());
     let mut result_columns = Vec::with_capacity(returning_fields.len());
@@ -359,7 +372,9 @@ fn build_returning_clause(
             scalar,
             field.ty().is_optional(),
         ));
-        selections.push(select_expr(model.name(), field_name, scalar, &alias));
+        let column_sql = format!("\"{}\".{}", model.name(), quoted_ident(field_name));
+        let expression = capabilities.result_column_expr(&column_sql, scalar);
+        selections.push(format!("{expression} AS \"{alias}\""));
     }
 
     Ok((selections, result_columns))

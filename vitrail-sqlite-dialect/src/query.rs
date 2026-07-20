@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use serde_json::Value as JsonValue;
 
-use crate::filter::{
-    FilterBuilder, compile_filter_sql, filter_binding_expr, schema_model as resolve_schema_model,
-};
+use crate::filter::{FilterBuilder, compile_filter_sql, schema_model as resolve_schema_model};
+use crate::flavor::{SqliteFamilyCapabilities, SqliteFamilyFlavor};
 use crate::schema::{Field, FieldType, Model, ScalarType, Schema};
 use crate::{BindingValue, CompileError, CompiledStatement, OperationKind, ResultColumn};
 
@@ -308,11 +307,22 @@ pub fn compile_query(
     selection: &QuerySelection,
     variables: &QueryVariables,
 ) -> Result<CompiledStatement, CompileError> {
+    compile_query_with_flavor(schema, selection, variables, SqliteFamilyFlavor::Native)
+}
+
+#[doc(hidden)]
+pub fn compile_query_with_flavor(
+    schema: &Schema,
+    selection: &QuerySelection,
+    variables: &QueryVariables,
+    flavor: SqliteFamilyFlavor,
+) -> Result<CompiledStatement, CompileError> {
     let root_model = resolve_schema_model(schema, selection.model, "query")?;
 
     let mut builder = SqlBuilder {
         schema,
         variables,
+        capabilities: flavor.capabilities(),
         bindings: Vec::new(),
         result_columns: Vec::new(),
         next_alias: 1,
@@ -349,12 +359,13 @@ pub fn compile_query(
         pagination_clause,
     );
 
-    Ok(CompiledStatement::new(
+    CompiledStatement::new(
+        flavor,
         sql,
         builder.bindings,
         builder.result_columns,
         OperationKind::Query,
-    ))
+    )
 }
 
 fn model_names_match(left: &str, right: &str) -> bool {
@@ -401,6 +412,7 @@ fn infer_relation_fields<'a>(
 struct SqlBuilder<'a> {
     schema: &'a Schema,
     variables: &'a QueryVariables,
+    capabilities: SqliteFamilyCapabilities,
     bindings: Vec<BindingValue>,
     result_columns: Vec<ResultColumn>,
     next_alias: usize,
@@ -454,7 +466,9 @@ impl<'a> SqlBuilder<'a> {
                 scalar,
                 field.ty().is_optional(),
             ));
-            selects.push(select_expr(table_alias, field.name(), scalar, &alias));
+            let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field.name()));
+            let expression = self.capabilities.result_column_expr(&column_sql, scalar);
+            selects.push(format!("{expression} AS \"{alias}\""));
         }
 
         for relation in &selection.relations {
@@ -631,7 +645,11 @@ impl<'a> SqlBuilder<'a> {
                 }
             };
 
-            items.push(json_column_expr(table_alias, field.name(), scalar));
+            let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field.name()));
+            items.push(
+                self.capabilities
+                    .nested_json_column_expr(&column_sql, scalar),
+            );
         }
 
         for relation in &selection.relations {
@@ -645,7 +663,7 @@ impl<'a> SqlBuilder<'a> {
             )));
         }
 
-        Ok(format!("json_array({})", items.join(", ")))
+        Ok(self.capabilities.json_array_expr(&items))
     }
 
     fn nested_relation_json_expr(
@@ -839,9 +857,10 @@ impl<'a> SqlBuilder<'a> {
                     }
                 };
 
+                let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field.name()));
                 items.push(format!(
                     "{} {}",
-                    column_expr(table_alias, field.name(), scalar),
+                    self.capabilities.stored_column_expr(&column_sql, scalar),
                     match direction {
                         QueryOrderDirection::Asc => "ASC",
                         QueryOrderDirection::Desc => "DESC",
@@ -956,7 +975,9 @@ impl<'a> SqlBuilder<'a> {
         });
         let placeholder = format!("?{}", self.bindings.len());
 
-        Ok(filter_binding_expr(&placeholder, scalar))
+        Ok(self
+            .capabilities
+            .comparison_parameter_expr(&placeholder, scalar))
     }
 }
 
@@ -967,6 +988,10 @@ impl<'a> FilterBuilder<'a> for SqlBuilder<'a> {
 
     fn variables(&self) -> &'a QueryVariables {
         self.variables
+    }
+
+    fn capabilities(&self) -> SqliteFamilyCapabilities {
+        self.capabilities
     }
 
     fn push_filter_binding(
@@ -1038,46 +1063,6 @@ fn relation_predicates(
 
 pub(crate) fn quoted_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
-}
-
-pub(crate) fn column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> String {
-    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
-
-    match scalar {
-        ScalarType::DateTime => format!("julianday({column_sql})"),
-        ScalarType::Json => format!("json({column_sql})"),
-        _ => column_sql,
-    }
-}
-
-pub(crate) fn json_column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> String {
-    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
-
-    match scalar {
-        ScalarType::Boolean => format!(
-            "json(CASE WHEN {column_sql} IS NULL THEN NULL WHEN {column_sql} THEN 'true' ELSE 'false' END)"
-        ),
-        ScalarType::Bytes => {
-            format!("CASE WHEN {column_sql} IS NULL THEN NULL ELSE hex({column_sql}) END")
-        }
-        ScalarType::Json => format!("json({column_sql})"),
-        _ => column_sql,
-    }
-}
-
-pub(crate) fn select_expr(
-    table_alias: &str,
-    field_name: &str,
-    scalar: ScalarType,
-    alias: &str,
-) -> String {
-    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
-    let expr = if scalar == ScalarType::Json {
-        format!("json({column_sql})")
-    } else {
-        column_sql
-    };
-    format!("{expr} AS \"{alias}\"")
 }
 
 pub(crate) fn schema_error(message: impl Into<String>) -> CompileError {

@@ -15,6 +15,9 @@ use vitrail_core::schema::{
     RustTypeAttribute as SharedRustTypeAttribute, Schema as SharedSchema,
     SchemaBuilder as SharedSchemaBuilder,
 };
+use vitrail_core::validation::{ValidationError, ValidationErrors, ValidationLocation};
+
+use crate::flavor::D1_MAX_COLUMNS;
 
 pub use vitrail_core::schema::{
     DefaultFunction, FieldKind, FieldType, ScalarFieldType, ScalarType,
@@ -172,9 +175,48 @@ impl Schema {
     }
 }
 
+/// Validates Cloudflare D1's per-table scalar-column limit for an existing schema.
+pub fn validate_d1_schema(schema: &Schema) -> Result<(), ValidationErrors> {
+    validate_d1_schema_for_macro(&schema.inner)
+}
+
+#[doc(hidden)]
+pub fn validate_d1_schema_for_macro<D: vitrail_core::schema::Dialect>(
+    schema: &SharedSchema<D>,
+) -> Result<(), ValidationErrors> {
+    let mut errors = ValidationErrors::new();
+
+    for model in schema.models() {
+        let column_count = model
+            .fields()
+            .iter()
+            .filter(|field| field.kind().is_scalar())
+            .count();
+
+        if column_count > D1_MAX_COLUMNS {
+            errors.push(ValidationError::new(
+                ValidationLocation::Model {
+                    model: model.name().to_owned(),
+                },
+                format!(
+                    "model `{}` defines {column_count} scalar database columns, exceeding Cloudflare D1's limit of {D1_MAX_COLUMNS} columns per table",
+                    model.name(),
+                ),
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct SchemaBuilder {
     inner: SharedSchemaBuilder<SqliteDialect>,
+    validate_d1_platform_limits: bool,
 }
 
 impl fmt::Debug for SchemaBuilder {
@@ -186,6 +228,12 @@ impl fmt::Debug for SchemaBuilder {
 impl SchemaBuilder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[doc(hidden)]
+    pub fn with_d1_platform_limits(mut self) -> Self {
+        self.validate_d1_platform_limits = true;
+        self
     }
 
     pub fn model(mut self, model: Model) -> Self {
@@ -209,7 +257,13 @@ impl SchemaBuilder {
     }
 
     pub fn build(self) -> Result<Schema, crate::ValidationErrors> {
-        self.inner.build().map(|inner| Schema { inner })
+        let inner = self.inner.build()?;
+
+        if self.validate_d1_platform_limits {
+            validate_d1_schema_for_macro(&inner)?;
+        }
+
+        Ok(Schema { inner })
     }
 }
 

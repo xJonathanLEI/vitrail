@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use crate::flavor::SqliteFamilyFlavor;
 use crate::{
     Attribute, CompileError, DefaultFunction, Field, FieldType, Resolution, ScalarType, Schema,
     SchemaAccess,
@@ -754,6 +755,15 @@ impl SqliteMigration {
     }
 
     pub fn to_sql(&self) -> String {
+        self.render(SqliteFamilyFlavor::Native)
+    }
+
+    #[doc(hidden)]
+    pub fn to_d1_sql(&self) -> String {
+        self.render(SqliteFamilyFlavor::D1)
+    }
+
+    fn render(&self, flavor: SqliteFamilyFlavor) -> String {
         if self.steps.is_empty() {
             return String::new();
         }
@@ -761,11 +771,22 @@ impl SqliteMigration {
         let rendered = self
             .steps
             .iter()
-            .map(MigrationStep::render)
+            .map(|step| step.render(flavor))
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        format!("{rendered}\n\n")
+        if flavor == SqliteFamilyFlavor::D1
+            && self
+                .steps
+                .iter()
+                .any(MigrationStep::requires_deferred_foreign_keys)
+        {
+            format!(
+                "PRAGMA defer_foreign_keys=ON;\n\n{rendered}\n\nPRAGMA defer_foreign_keys=OFF;\n\n"
+            )
+        } else {
+            format!("{rendered}\n\n")
+        }
     }
 }
 
@@ -794,7 +815,11 @@ enum MigrationStep {
 }
 
 impl MigrationStep {
-    fn render(&self) -> String {
+    fn requires_deferred_foreign_keys(&self) -> bool {
+        matches!(self, Self::DropTable { .. } | Self::RedefineTables { .. })
+    }
+
+    fn render(&self, flavor: SqliteFamilyFlavor) -> String {
         match self {
             Self::DropIndex { name } => {
                 format!("-- DropIndex\nDROP INDEX {};", quoted_identifier(name))
@@ -814,10 +839,15 @@ impl MigrationStep {
 
                 format!("-- AlterTable\n{statements}")
             }
-            Self::DropTable { name } => format!(
-                "-- DropTable\nPRAGMA foreign_keys=off;\nDROP TABLE {};\nPRAGMA foreign_keys=on;",
-                quoted_identifier(name)
-            ),
+            Self::DropTable { name } => match flavor {
+                SqliteFamilyFlavor::Native => format!(
+                    "-- DropTable\nPRAGMA foreign_keys=off;\nDROP TABLE {};\nPRAGMA foreign_keys=on;",
+                    quoted_identifier(name)
+                ),
+                SqliteFamilyFlavor::D1 => {
+                    format!("-- DropTable\nDROP TABLE {};", quoted_identifier(name))
+                }
+            },
             Self::CreateTable { table } => {
                 format!(
                     "-- CreateTable\n{}",
@@ -825,11 +855,12 @@ impl MigrationStep {
                 )
             }
             Self::RedefineTables { tables } => {
-                let mut lines = vec![
-                    "-- RedefineTables".to_owned(),
-                    "PRAGMA defer_foreign_keys=ON;".to_owned(),
-                    "PRAGMA foreign_keys=OFF;".to_owned(),
-                ];
+                let mut lines = vec!["-- RedefineTables".to_owned()];
+
+                if flavor == SqliteFamilyFlavor::Native {
+                    lines.push("PRAGMA defer_foreign_keys=ON;".to_owned());
+                    lines.push("PRAGMA foreign_keys=OFF;".to_owned());
+                }
 
                 for redefined in tables {
                     let replacement_name = format!("new_{}", redefined.table.name);
@@ -859,8 +890,11 @@ impl MigrationStep {
                     }
                 }
 
-                lines.push("PRAGMA foreign_keys=ON;".to_owned());
-                lines.push("PRAGMA defer_foreign_keys=OFF;".to_owned());
+                if flavor == SqliteFamilyFlavor::Native {
+                    lines.push("PRAGMA foreign_keys=ON;".to_owned());
+                    lines.push("PRAGMA defer_foreign_keys=OFF;".to_owned());
+                }
+
                 lines.join("\n")
             }
             Self::CreateIndex { table, index } => {

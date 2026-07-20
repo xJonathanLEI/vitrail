@@ -95,6 +95,12 @@ pub struct SchemaMacroConfig<D: core::Dialect> {
     _dialect: D,
     native_attributes: Vec<NativeAttributeMapping>,
     operation_families: OperationFamilies,
+    platform_limit_validation: Option<PlatformLimitValidation<D>>,
+}
+
+struct PlatformLimitValidation<D: core::Dialect> {
+    validator: fn(&core::Schema<D>) -> std::result::Result<(), validation::ValidationErrors>,
+    builder_method: Ident,
 }
 
 impl<D: core::Dialect> SchemaMacroConfig<D> {
@@ -109,6 +115,7 @@ impl<D: core::Dialect> SchemaMacroConfig<D> {
             _dialect: dialect,
             native_attributes,
             operation_families,
+            platform_limit_validation: None,
         }
     }
 
@@ -116,8 +123,30 @@ impl<D: core::Dialect> SchemaMacroConfig<D> {
         &self.runtime_path
     }
 
+    /// Configures backend-specific platform-limit validation.
+    ///
+    /// The validator runs during macro expansion, while `builder_method` names
+    /// the equivalent schema-builder setting emitted into generated code.
+    pub fn with_platform_limit_validation(
+        mut self,
+        validator: fn(&core::Schema<D>) -> std::result::Result<(), validation::ValidationErrors>,
+        builder_method: Ident,
+    ) -> Self {
+        self.platform_limit_validation = Some(PlatformLimitValidation {
+            validator,
+            builder_method,
+        });
+        self
+    }
+
     pub const fn operation_families(&self) -> OperationFamilies {
         self.operation_families
+    }
+
+    pub(super) fn platform_limit_builder_method(&self) -> Option<&Ident> {
+        self.platform_limit_validation
+            .as_ref()
+            .map(|validation| &validation.builder_method)
     }
 
     fn native_attribute_kind(&self, namespace: &str, name: &str) -> Option<NativeAttributeKind> {
@@ -225,24 +254,34 @@ impl ParsedSchema {
     fn validate<D: core::Dialect>(&self, config: &SchemaMacroConfig<D>) -> Result<()> {
         self.validate_native_attributes(config)?;
 
-        match self.to_core(config) {
-            Ok(_) => Ok(()),
-            Err(errors) => {
-                let mut combined = None;
+        let schema = match self.to_core(config) {
+            Ok(schema) => schema,
+            Err(errors) => return Err(self.validation_errors_to_syn(errors)),
+        };
 
-                for validation_error in errors.iter() {
-                    push_error(
-                        &mut combined,
-                        Error::new(
-                            self.span_for_validation_error(validation_error),
-                            validation_error.message.clone(),
-                        ),
-                    );
-                }
-
-                Err(combined.expect("validation should emit at least one error"))
-            }
+        if let Some(platform_validation) = &config.platform_limit_validation
+            && let Err(errors) = (platform_validation.validator)(&schema)
+        {
+            return Err(self.validation_errors_to_syn(errors));
         }
+
+        Ok(())
+    }
+
+    fn validation_errors_to_syn(&self, errors: validation::ValidationErrors) -> Error {
+        let mut combined = None;
+
+        for validation_error in errors.iter() {
+            push_error(
+                &mut combined,
+                Error::new(
+                    self.span_for_validation_error(validation_error),
+                    validation_error.message.clone(),
+                ),
+            );
+        }
+
+        combined.expect("validation should emit at least one error")
     }
 
     fn validate_native_attributes<D: core::Dialect>(
@@ -1675,6 +1714,98 @@ mod tests {
             )],
             OperationFamilies::all(),
         )
+    }
+
+    fn validate_single_scalar_column<D: core::Dialect>(
+        schema: &core::Schema<D>,
+    ) -> std::result::Result<(), validation::ValidationErrors> {
+        let mut errors = validation::ValidationErrors::new();
+
+        for model in schema.models() {
+            let column_count = model
+                .fields()
+                .iter()
+                .filter(|field| field.kind().is_scalar())
+                .count();
+
+            if column_count > 1 {
+                errors.push(validation::ValidationError::new(
+                    validation::ValidationLocation::Model {
+                        model: model.name().to_owned(),
+                    },
+                    format!(
+                        "test platform allows at most one scalar database column; model `{}` defines {column_count}",
+                        model.name(),
+                    ),
+                ));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    #[test]
+    fn applies_configured_platform_limit_validation() {
+        let schema = parse_schema(quote! {
+            name limited_schema
+
+            model user {
+                id   Int    @id @default(autoincrement())
+                name String
+            }
+        });
+        let config = postgres_config().with_platform_limit_validation(
+            validate_single_scalar_column,
+            syn::parse_quote!(with_test_platform_limits),
+        );
+
+        let error = schema
+            .validate(&config)
+            .expect_err("configured platform validation should reject the schema");
+
+        assert!(
+            error
+                .to_string()
+                .contains("test platform allows at most one scalar database column")
+        );
+        assert!(error.to_string().contains("model `user` defines 2"));
+    }
+
+    #[test]
+    fn emits_configured_platform_limit_builder_setting() {
+        let schema = parse_schema(quote! {
+            name limited_schema
+
+            model user {
+                id Int @id @default(autoincrement())
+            }
+        });
+        let config = postgres_config().with_platform_limit_validation(
+            validate_single_scalar_column,
+            syn::parse_quote!(with_test_platform_limits),
+        );
+
+        let generated = schema
+            .expand(&config)
+            .expect("schema with configured platform limits should expand")
+            .to_string();
+        let default_generated = schema
+            .expand(&postgres_config())
+            .expect("schema without platform limits should expand")
+            .to_string();
+
+        assert!(
+            generated.contains("Schema :: builder () . with_test_platform_limits ()"),
+            "configured schema builder setting was not emitted"
+        );
+        assert!(
+            !default_generated.contains("with_test_platform_limits"),
+            "unconfigured schema expansion unexpectedly emitted a platform-limit setting"
+        );
     }
 
     #[test]

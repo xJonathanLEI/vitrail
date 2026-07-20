@@ -1,11 +1,16 @@
 use serde_json::Value as JsonValue;
 
-use crate::ScalarType;
+use crate::flavor::SqliteFamilyFlavor;
+use crate::{CompileError, ScalarType};
 
 /// A normalized value bound to a compiled SQLite-family statement.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BindingValue {
     Null,
+    /// A signed 64-bit integer.
+    ///
+    /// D1 executors bind this value as decimal text; D1-flavored SQL casts the
+    /// corresponding parameter to `INTEGER` to preserve the full `i64` range.
     Int(i64),
     String(String),
     Bool(bool),
@@ -80,17 +85,23 @@ pub struct CompiledStatement {
 
 impl CompiledStatement {
     pub(crate) fn new(
+        flavor: SqliteFamilyFlavor,
         sql: impl Into<String>,
         bindings: Vec<BindingValue>,
         result_columns: Vec<ResultColumn>,
         operation: OperationKind,
-    ) -> Self {
-        Self {
-            sql: sql.into(),
+    ) -> Result<Self, CompileError> {
+        let sql = sql.into();
+        flavor
+            .capabilities()
+            .validate_statement(operation, &sql, bindings.len())?;
+
+        Ok(Self {
+            sql,
             bindings,
             result_columns,
             operation,
-        }
+        })
     }
 
     pub fn sql(&self) -> &str {

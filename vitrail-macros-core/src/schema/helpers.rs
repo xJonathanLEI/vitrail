@@ -642,6 +642,10 @@ impl ParsedSchema {
 
     fn generate_schema<D: Dialect>(&self, config: &SchemaMacroConfig<D>) -> Result<TokenStream2> {
         let runtime_path = config.runtime_path();
+        let platform_limit_builder_setting = config
+            .platform_limit_builder_method()
+            .map(|method| quote!(.#method()))
+            .unwrap_or_default();
         let mut models = Vec::with_capacity(self.models.len());
         let external_tables = self
             .external_tables
@@ -655,6 +659,7 @@ impl ParsedSchema {
 
         Ok(quote! {
             #runtime_path::Schema::builder()
+                #platform_limit_builder_setting
                 .models(vec![#(#models),*])
                 .external_tables(vec![#(::std::string::String::from(#external_tables)),*])
                 .build()
