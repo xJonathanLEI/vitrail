@@ -24,6 +24,21 @@ schema! {
         metadata   Json
         note       String?
     }
+
+    model author {
+        id    Int    @id @default(autoincrement())
+        name  String
+        posts post[]
+    }
+
+    model post {
+        id        Int    @id @default(autoincrement())
+        title     String
+        author_id Int
+        author    author @relation(fields: [author_id], references: [id])
+
+        @@index([author_id])
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,15 +267,56 @@ fn record_json(record: ScalarRecord) -> JsonValue {
 }
 
 #[cfg(feature = "integration-test")]
+fn d1_binding_setup_sql(migration: &str) -> String {
+    let mut statements = Vec::new();
+    let mut statement = String::new();
+
+    for line in migration.lines() {
+        let line = line.trim();
+
+        if line.is_empty() || line.starts_with("--") {
+            continue;
+        }
+
+        if !statement.is_empty() {
+            statement.push(' ');
+        }
+
+        statement.push_str(line);
+
+        if line.ends_with(';') {
+            statements.push(std::mem::take(&mut statement));
+        }
+    }
+
+    if !statement.is_empty() {
+        statements.push(statement);
+    }
+
+    statements.join("\n")
+}
+
+#[cfg(feature = "integration-test")]
 async fn setup_test_schema(env: &Env) -> WorkerResult<Response> {
+    const INITIAL_MIGRATION: &str =
+        include_str!("../migrations/20260701000000_initial_schema/migration.sql");
+    const REQUIRE_POST_TITLE_MIGRATION: &str =
+        include_str!("../migrations/20260701000001_require_post_title/migration.sql");
+
     let database = env.d1("DB")?;
 
     database
         .exec(
-            r#"DROP TABLE IF EXISTS "scalar_record";
-CREATE TABLE "scalar_record" ("id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "min_value" INTEGER NOT NULL, "max_value" BIGINT NOT NULL, "active" BOOLEAN NOT NULL, "score" REAL NOT NULL, "label" TEXT NOT NULL, "payload" BLOB NOT NULL, "created_at" DATETIME NOT NULL, "metadata" JSONB NOT NULL, "note" TEXT);
-CREATE UNIQUE INDEX "scalar_record_label_key" ON "scalar_record"("label");"#,
+            r#"DROP TABLE IF EXISTS "post";
+DROP TABLE IF EXISTS "author";
+DROP TABLE IF EXISTS "scalar_record";"#,
         )
+        .await?;
+    database
+        .exec(&d1_binding_setup_sql(INITIAL_MIGRATION))
+        .await?;
+    database
+        .exec(&d1_binding_setup_sql(REQUIRE_POST_TITLE_MIGRATION))
         .await?;
 
     Response::from_json(&json!({ "ok": true }))

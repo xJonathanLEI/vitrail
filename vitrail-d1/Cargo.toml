@@ -12,3 +12,17 @@ serde_json.workspace = true
 vitrail-d1-core.workspace = true
 vitrail-d1-macros.workspace = true
 worker.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap.workspace = true
+vitrail-core.workspace = true
+vitrail-sqlite-core.workspace = true
+vitrail-sqlite-dialect.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+chrono.workspace = true
+tokio.workspace = true
+
+[[example]]
+name = "d1_migration_cli"
+path = "../examples/d1_migration_cli.rs"

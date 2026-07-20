@@ -86,6 +86,8 @@ pub use insert::{
     Insert, InsertFieldValue, InsertModel, InsertScalar, InsertSpec, InsertValue, InsertValueSet,
     InsertValues,
 };
+#[doc(hidden)]
+pub use migration::introspect_atomic_shadow_schema;
 pub use migration::{
     ColumnDefault, ColumnType, ForeignKeyAction, SqliteColumn, SqliteForeignKey, SqliteIndex,
     SqliteMigration, SqlitePrimaryKey, SqliteSchema, SqliteTable,

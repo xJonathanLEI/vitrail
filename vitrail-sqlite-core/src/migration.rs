@@ -387,6 +387,47 @@ impl Schema {
     }
 }
 
+/// Applies migration scripts atomically to an in-memory SQLite database and
+/// returns its runtime-neutral introspected schema.
+///
+/// Each script executes in its own transaction so host migration tooling can
+/// model runtimes that apply individual migration files atomically.
+#[doc(hidden)]
+pub async fn introspect_atomic_shadow_schema<I, S>(
+    migration_scripts: I,
+    ignored_tables: &[String],
+) -> Result<vitrail_sqlite_dialect::SqliteSchema, sqlx::Error>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut connection = SqliteConnection::connect("sqlite::memory:").await?;
+
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut connection)
+        .await?;
+
+    for migration_sql in migration_scripts {
+        let migration_sql = migration_sql.as_ref();
+
+        if migration_sql.trim().is_empty() {
+            continue;
+        }
+
+        let mut transaction = connection.begin().await?;
+
+        sqlx::raw_sql(migration_sql)
+            .execute(&mut *transaction)
+            .await?;
+
+        transaction.commit().await?;
+    }
+
+    let schema = SqliteSchema::introspect_from_connection(&mut connection, ignored_tables).await?;
+
+    Ok(schema.inner)
+}
+
 struct PendingForeignKey {
     columns: Vec<String>,
     referenced_table: String,

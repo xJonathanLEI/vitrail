@@ -2142,9 +2142,15 @@ dependencies = [
 name = "vitrail-d1"
 version = "0.0.12"
 dependencies = [
+ "chrono",
+ "clap",
  "serde_json",
+ "tokio",
+ "vitrail-core",
  "vitrail-d1-core",
  "vitrail-d1-macros",
+ "vitrail-sqlite-core",
+ "vitrail-sqlite-dialect",
  "worker",
 ]
 
