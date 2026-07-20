@@ -1,0 +1,14 @@
+[package]
+name = "vitrail-d1"
+version.workspace = true
+authors = ["Jonathan LEI <me@xjonathan.dev>"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+repository.workspace = true
+description = "Cloudflare D1 support for Vitrail"
+
+[dependencies]
+serde_json.workspace = true
+vitrail-d1-core.workspace = true
+vitrail-d1-macros.workspace = true
+worker.workspace = true

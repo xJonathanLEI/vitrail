@@ -1,0 +1,5 @@
+error: model `oversized` defines 101 scalar database columns, exceeding Cloudflare D1's limit of 100 columns per table
+ --> tests/ui/fail/too_many_columns.rs:8:11
+  |
+8 |     model oversized {
+  |           ^^^^^^^^^

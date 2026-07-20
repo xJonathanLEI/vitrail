@@ -27,6 +27,7 @@ fn sqlite_query_macro_config() -> QueryMacroConfig {
     QueryMacroConfig::new(
         syn::parse_quote!(::vitrail_sqlite),
         syn::parse_quote!(::vitrail_sqlite::sqlx::sqlite::SqliteRow),
+        syn::parse_quote!(::vitrail_sqlite::sqlx::Error),
     )
 }
 
@@ -34,6 +35,7 @@ fn sqlite_write_macro_config() -> WriteMacroConfig {
     WriteMacroConfig::new(
         syn::parse_quote!(::vitrail_sqlite),
         syn::parse_quote!(::vitrail_sqlite::sqlx::sqlite::SqliteRow),
+        syn::parse_quote!(::vitrail_sqlite::sqlx::Error),
     )
 }
 

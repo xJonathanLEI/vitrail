@@ -11,13 +11,15 @@ use crate::update::{UpdateDataDerive, UpdateManyDerive};
 pub struct WriteMacroConfig {
     runtime_path: Path,
     row_path: Path,
+    error_path: Path,
 }
 
 impl WriteMacroConfig {
-    pub fn new(runtime_path: Path, row_path: Path) -> Self {
+    pub fn new(runtime_path: Path, row_path: Path, error_path: Path) -> Self {
         Self {
             runtime_path,
             row_path,
+            error_path,
         }
     }
 
@@ -27,6 +29,10 @@ impl WriteMacroConfig {
 
     pub fn row_path(&self) -> &Path {
         &self.row_path
+    }
+
+    pub fn error_path(&self) -> &Path {
+        &self.error_path
     }
 }
 
@@ -118,6 +124,7 @@ mod tests {
         WriteMacroConfig::new(
             syn::parse_quote!(::custom_facade),
             syn::parse_quote!(::custom_backend::CustomRow),
+            syn::parse_quote!(::custom_backend::CustomError),
         )
     }
 
@@ -213,9 +220,8 @@ mod tests {
             "custom_facade :: InsertModel",
             "custom_facade :: alias_name",
             "custom_facade :: row_value",
-            "custom_facade :: sqlx :: Error",
-            "custom_facade :: sqlx :: Row",
             "custom_backend :: CustomRow",
+            "custom_backend :: CustomError",
         ] {
             assert!(
                 generated.contains(expected),
@@ -226,6 +232,10 @@ mod tests {
         assert!(
             !generated.contains("PgRow"),
             "generated insert expansion leaked `PgRow`"
+        );
+        assert!(
+            !generated.contains("sqlx"),
+            "generated insert expansion unexpectedly depends on SQLx"
         );
         assert_no_dialect_path_leaks(&generated);
     }

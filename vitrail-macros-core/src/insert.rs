@@ -206,6 +206,7 @@ impl InsertResultDerive {
     pub(crate) fn expand(self, config: &WriteMacroConfig) -> Result<TokenStream2> {
         let runtime_path = config.runtime_path();
         let row_path = config.row_path();
+        let error_path = config.error_path();
         let ident = self.ident;
         let generics = self.generics;
         let fields = self.fields;
@@ -299,9 +300,7 @@ impl InsertResultDerive {
                 fn from_row(
                     row: &#row_path,
                     prefix: &str,
-                ) -> Result<Self, #runtime_path::sqlx::Error> {
-                    use #runtime_path::sqlx::Row as _;
-
+                ) -> Result<Self, #error_path> {
                     Self::__vitrail_validate_insert_result();
 
                     Ok(Self {

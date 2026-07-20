@@ -135,6 +135,12 @@ jobs:
       - name: "Checkout source code"
         uses: "actions/checkout@v6"
 
+      - name: "Setup Node.js"
+        uses: "actions/setup-node@v6"
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+
       - name: "Setup toolchain"
         uses: "actions-rs/toolchain@v1"
         with:
@@ -142,10 +148,25 @@ jobs:
           components: "clippy"
           override: true
 
+      - name: "Add WebAssembly target"
+        run: |
+          rustup target add wasm32-unknown-unknown
+
       - name: "Use Rust cache"
         uses: "Swatinem/rust-cache@v2"
         with:
           cache-on-failure: true
+
+      - name: "Install cargo-binstall"
+        uses: "cargo-bins/cargo-binstall@main"
+
+      - name: "Install dependencies"
+        run: |
+          npm ci
+
+      - name: "Install worker-build"
+        run: |
+          cargo binstall worker-build@0.8.5
 
       - name: "Install nexttest"
         uses: "taiki-e/install-action@nextest"
@@ -156,3 +177,11 @@ jobs:
           VITRAIL_POSTGRES_URL: "postgres://postgres:postgres@127.0.0.1:5432/vitrail"
         run: |
           cargo nextest run
+
+      - name: "Check D1 WebAssembly target"
+        run: |
+          cargo check -p vitrail-d1 --target wasm32-unknown-unknown
+
+      - name: "Run local D1 integration tests"
+        run: |
+          npm run test:d1:direct

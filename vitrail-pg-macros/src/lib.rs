@@ -29,6 +29,7 @@ fn postgres_query_macro_config() -> QueryMacroConfig {
     QueryMacroConfig::new(
         syn::parse_quote!(::vitrail_pg),
         syn::parse_quote!(::vitrail_pg::sqlx::postgres::PgRow),
+        syn::parse_quote!(::vitrail_pg::sqlx::Error),
     )
 }
 
@@ -36,6 +37,7 @@ fn postgres_write_macro_config() -> WriteMacroConfig {
     WriteMacroConfig::new(
         syn::parse_quote!(::vitrail_pg),
         syn::parse_quote!(::vitrail_pg::sqlx::postgres::PgRow),
+        syn::parse_quote!(::vitrail_pg::sqlx::Error),
     )
 }
 

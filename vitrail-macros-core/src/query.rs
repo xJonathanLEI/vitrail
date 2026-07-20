@@ -15,13 +15,15 @@ use crate::order::{RootOrder, parse_root_orders};
 pub struct QueryMacroConfig {
     runtime_path: Path,
     row_path: Path,
+    error_path: Path,
 }
 
 impl QueryMacroConfig {
-    pub fn new(runtime_path: Path, row_path: Path) -> Self {
+    pub fn new(runtime_path: Path, row_path: Path, error_path: Path) -> Self {
         Self {
             runtime_path,
             row_path,
+            error_path,
         }
     }
 
@@ -31,6 +33,10 @@ impl QueryMacroConfig {
 
     pub fn row_path(&self) -> &Path {
         &self.row_path
+    }
+
+    pub fn error_path(&self) -> &Path {
+        &self.error_path
     }
 }
 
@@ -142,6 +148,7 @@ impl QueryResultDerive {
     pub(crate) fn expand(self, config: &QueryMacroConfig) -> Result<TokenStream2> {
         let runtime_path = config.runtime_path();
         let row_path = config.row_path();
+        let error_path = config.error_path();
         let ident = self.ident;
         let generics = self.generics;
         let schema_path = self.schema_path;
@@ -598,7 +605,7 @@ impl QueryResultDerive {
             {
                 fn from_json(
                     value: &#runtime_path::serde_json::Value,
-                ) -> Result<Self, #runtime_path::sqlx::Error> {
+                ) -> Result<Self, #error_path> {
                     Ok(Self {
                         #(#json_decode_fields),*
                     })
@@ -638,7 +645,7 @@ impl QueryResultDerive {
                 fn from_row(
                     row: &#row_path,
                     prefix: &str,
-                ) -> Result<Self, #runtime_path::sqlx::Error> {
+                ) -> Result<Self, #error_path> {
                     Ok(Self {
                         #(#decode_fields),*
                     })
@@ -1219,6 +1226,7 @@ mod tests {
         QueryMacroConfig::new(
             syn::parse_quote!(::custom_facade),
             syn::parse_quote!(::custom_backend::CustomRow),
+            syn::parse_quote!(::custom_backend::CustomError),
         )
     }
 
@@ -1259,6 +1267,7 @@ mod tests {
             "custom_facade :: row_optional_relation_json",
             "custom_facade :: row_relation_json",
             "custom_backend :: CustomRow",
+            "custom_backend :: CustomError",
         ] {
             assert!(
                 generated.contains(expected),
@@ -1286,6 +1295,11 @@ mod tests {
                 "nested JSON fields should decode scalars before relations: {from_json}"
             );
         }
+
+        assert!(
+            !generated.contains("sqlx"),
+            "generated query result unexpectedly depends on SQLx"
+        );
 
         for hardcoded_facade in ["vitrail_pg", "vitrail_sqlite"] {
             assert!(

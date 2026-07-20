@@ -1,7 +1,10 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
 	"files": {
-		"includes": ["scripts/**/*.mjs"]
+		"includes": [
+			"scripts/**/*.mjs",
+			"examples/workspace/d1-worker/tests/**/*.mjs"
+		]
 	},
 	"formatter": {
 		"enabled": true,
