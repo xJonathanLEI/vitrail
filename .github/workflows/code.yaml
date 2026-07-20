@@ -186,3 +186,4 @@ jobs:
         run: |
           npm run test:d1:direct
           npm run test:d1:sessions
+          npm run test:d1:batches

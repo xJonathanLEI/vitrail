@@ -3,8 +3,8 @@ use std::sync::Arc;
 use worker::d1::{D1Database, D1SessionConstraint};
 
 use crate::{
-    D1Executor, DeleteSpec, Error, InsertSpec, QuerySpec, SessionConstraint, UpdateSpec,
-    VitrailSession,
+    AtomicBatch, D1Executor, DeleteSpec, Error, InsertSpec, QuerySpec, SessionConstraint,
+    UpdateSpec, VitrailSession,
 };
 
 /// Cloudflare D1 client entry point.
@@ -45,6 +45,14 @@ impl VitrailClient {
         };
 
         Ok(VitrailSession::new(session))
+    }
+
+    /// Creates a typed atomic batch backed by this client's primary D1 binding.
+    ///
+    /// The queued operations are submitted together through one D1 `batch()`
+    /// call when [`AtomicBatch::execute`] is invoked.
+    pub fn atomic_batch(&self) -> AtomicBatch<'_> {
+        AtomicBatch::for_database(self.database.as_ref())
     }
 
     pub async fn find_many<Q>(&self, query: Q) -> Result<Vec<Q::Output>, Error>

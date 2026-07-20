@@ -72,6 +72,64 @@ impl D1Row {
         })
     }
 
+    pub(crate) fn from_named_raw(
+        raw: JsValue,
+        metadata: Arc<D1RowMetadata>,
+        columns: &[ResultColumn],
+    ) -> Result<Self, Error> {
+        if raw.is_null() || raw.is_undefined() || Array::is_array(&raw) || !raw.is_object() {
+            return Err(Error::decode(format!(
+                "expected a named D1 batch result row object, got {}",
+                js_type_name(&raw),
+            )));
+        }
+
+        let keys = Reflect::own_keys(&raw)
+            .map_err(|_| Error::decode("could not inspect properties on a D1 batch result row"))?;
+        let actual = keys.length() as usize;
+        let expected = metadata.len();
+
+        if actual != expected {
+            return Err(Error::decode(format!(
+                "D1 batch result row contains {actual} fields but the compiled statement describes {expected} columns",
+            )));
+        }
+
+        if columns.len() != expected {
+            return Err(Error::decode(format!(
+                "compiled D1 result metadata contains {expected} aliases but describes {} ordered columns",
+                columns.len(),
+            )));
+        }
+
+        let mut values = Vec::with_capacity(expected);
+
+        for column in columns {
+            let alias = column.alias();
+            let key = JsValue::from_str(alias);
+            let present = Reflect::has(&raw, &key).map_err(|_| {
+                Error::decode(format!(
+                    "could not inspect compiled column alias `{alias}` on a D1 batch result row",
+                ))
+            })?;
+
+            if !present {
+                return Err(Error::decode(format!(
+                    "D1 batch result row is missing compiled column alias `{alias}`",
+                )));
+            }
+
+            let value = Reflect::get(&raw, &key).map_err(|_| {
+                Error::decode(format!(
+                    "could not read compiled column alias `{alias}` from a D1 batch result row",
+                ))
+            })?;
+            values.push(value);
+        }
+
+        Ok(Self { metadata, values })
+    }
+
     pub(crate) fn value(&self, alias: &str) -> Result<&JsValue, Error> {
         self.metadata
             .index(alias)

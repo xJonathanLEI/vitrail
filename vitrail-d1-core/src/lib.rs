@@ -1,3 +1,4 @@
+mod batch;
 mod client;
 mod delete;
 mod error;
@@ -9,6 +10,7 @@ mod session;
 mod statement;
 mod update;
 
+pub use batch::{AtomicBatch, BatchHandle, BatchResults};
 pub use client::VitrailClient;
 pub use delete::{DeleteMany, DeleteManyModel, DeleteSpec};
 pub use error::{DecodeError, Error, decode_error};
@@ -33,6 +35,8 @@ pub use update::{
     UpdateFieldValue, UpdateMany, UpdateManyModel, UpdateScalar, UpdateSpec, UpdateValue,
     UpdateValueSet, UpdateValues,
 };
+#[doc(hidden)]
+pub use vitrail_sqlite_dialect::CompiledStatement;
 pub use vitrail_sqlite_dialect::{
     Attribute, DefaultAttribute, DefaultFunction, Field, FieldBuilder, FieldKind, FieldType, Model,
     ModelAttribute, ModelBuilder, ModelIndexAttribute, ModelIndexAttributeBuilder,

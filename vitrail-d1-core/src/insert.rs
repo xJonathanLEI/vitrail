@@ -13,6 +13,12 @@ pub trait InsertSpec: Send + Sync {
     type Output: Send + 'static;
 
     #[doc(hidden)]
+    fn compile_batch_insert(&self) -> Result<CompiledStatement, Error>;
+
+    #[doc(hidden)]
+    fn decode_batch_insert(&self, rows: Vec<D1Row>) -> Result<Self::Output, Error>;
+
+    #[doc(hidden)]
     fn execute<'a>(
         &'a self,
         executor: &'a dyn D1Executor,
@@ -321,6 +327,27 @@ where
     T: InsertModel<Schema = S> + Sync,
 {
     type Output = T;
+
+    fn compile_batch_insert(&self) -> Result<CompiledStatement, Error> {
+        compile_insert_statement(
+            S::schema(),
+            T::model_name(),
+            &self.values,
+            T::returning_fields(),
+        )
+    }
+
+    fn decode_batch_insert(&self, rows: Vec<D1Row>) -> Result<Self::Output, Error> {
+        if rows.len() != 1 {
+            return Err(Error::decode(format!(
+                "D1 insert returning result contains {} rows; expected exactly one",
+                rows.len(),
+            )));
+        }
+
+        let row = rows.into_iter().next().ok_or(Error::RowNotFound)?;
+        T::from_row(&row, T::model_name())
+    }
 
     fn execute<'a>(
         &'a self,

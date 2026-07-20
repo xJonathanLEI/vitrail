@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chrono::SecondsFormat;
 use vitrail_sqlite_dialect::{BindingValue, CompiledStatement, OperationKind};
-use worker::d1::D1PreparedStatement;
+use worker::d1::{D1PreparedStatement, D1Result};
 use worker::js_sys::Uint8Array;
 use worker::wasm_bindgen::JsValue;
 
@@ -31,6 +31,13 @@ pub(crate) async fn execute_changes(
 ) -> Result<u64, Error> {
     let prepared = prepare_statement(executor, statement)?;
     let result = prepared.run().await?;
+    changes_from_result(&result, statement)
+}
+
+pub(crate) fn changes_from_result(
+    result: &D1Result,
+    statement: &CompiledStatement,
+) -> Result<u64, Error> {
     let metadata = result.meta()?.ok_or(Error::MissingWriteMetadata {
         operation: operation_name(statement.operation()),
     })?;
@@ -46,7 +53,7 @@ pub(crate) async fn execute_changes(
     })
 }
 
-fn prepare_statement(
+pub(crate) fn prepare_statement(
     executor: &dyn D1Executor,
     statement: &CompiledStatement,
 ) -> Result<D1PreparedStatement, Error> {

@@ -15,6 +15,12 @@ pub trait DeleteSpec: Send + Sync {
     type Output: Send + 'static;
 
     #[doc(hidden)]
+    fn compile_batch_delete(&self) -> Result<CompiledStatement, Error>;
+
+    #[doc(hidden)]
+    fn decode_batch_delete(&self, changes: u64) -> Result<Self::Output, Error>;
+
+    #[doc(hidden)]
     fn execute<'a>(
         &'a self,
         executor: &'a dyn D1Executor,
@@ -115,6 +121,21 @@ where
     V: QueryVariableSet + Sync,
 {
     type Output = u64;
+
+    fn compile_batch_delete(&self) -> Result<CompiledStatement, Error> {
+        let filter = self.filter();
+
+        compile_delete_statement(
+            S::schema(),
+            T::model_name(),
+            filter.as_ref(),
+            &self.variables,
+        )
+    }
+
+    fn decode_batch_delete(&self, changes: u64) -> Result<Self::Output, Error> {
+        Ok(changes)
+    }
 
     fn execute<'a>(
         &'a self,

@@ -4,7 +4,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use worker::d1::D1DatabaseSession;
 
-use crate::{D1Executor, DeleteSpec, Error, InsertSpec, QuerySpec, UpdateSpec};
+use crate::{AtomicBatch, D1Executor, DeleteSpec, Error, InsertSpec, QuerySpec, UpdateSpec};
 
 /// An opaque, non-empty Cloudflare D1 session bookmark.
 ///
@@ -104,6 +104,14 @@ pub struct VitrailSession {
 impl VitrailSession {
     pub(crate) fn new(session: D1DatabaseSession) -> Self {
         Self { session }
+    }
+
+    /// Creates a typed atomic batch backed by this logical D1 session.
+    ///
+    /// The queued operations are submitted together through one session
+    /// `batch()` call when [`AtomicBatch::execute`] is invoked.
+    pub fn atomic_batch(&self) -> AtomicBatch<'_> {
+        AtomicBatch::for_session(&self.session)
     }
 
     pub async fn find_many<Q>(&self, query: Q) -> Result<Vec<Q::Output>, Error>

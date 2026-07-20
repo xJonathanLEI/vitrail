@@ -9,7 +9,8 @@
     "generate:prisma-fixtures:postgres": "node scripts/prisma-fixtures.mjs postgres",
     "generate:prisma-fixtures:sqlite": "node scripts/prisma-fixtures.mjs sqlite",
     "test:d1:direct": "node --test examples/workspace/d1-worker/tests/direct-crud.mjs",
-    "test:d1:sessions": "node --test examples/workspace/d1-worker/tests/sessions.mjs"
+    "test:d1:sessions": "node --test examples/workspace/d1-worker/tests/sessions.mjs",
+    "test:d1:batches": "node --test examples/workspace/d1-worker/tests/atomic-batches.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",

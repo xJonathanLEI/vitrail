@@ -13,6 +13,15 @@ pub trait QuerySpec: Send + Sync {
     type Output: Send + 'static;
 
     #[doc(hidden)]
+    fn compile_batch_many(&self) -> Result<CompiledStatement, Error>;
+
+    #[doc(hidden)]
+    fn compile_batch_single(&self) -> Result<CompiledStatement, Error>;
+
+    #[doc(hidden)]
+    fn decode_batch_rows(&self, rows: Vec<D1Row>) -> Result<Vec<Self::Output>, Error>;
+
+    #[doc(hidden)]
     fn fetch_many<'a>(
         &'a self,
         executor: &'a dyn D1Executor,
@@ -633,6 +642,30 @@ where
     V: QueryVariableSet + Sync,
 {
     type Output = T;
+
+    fn compile_batch_many(&self) -> Result<CompiledStatement, Error> {
+        let selection = self.selection();
+        compile_query_statement(S::schema(), &selection, &self.variables)
+    }
+
+    fn compile_batch_single(&self) -> Result<CompiledStatement, Error> {
+        let mut selection = self.selection();
+        selection.limit = Some(QueryPagination::value(1));
+
+        compile_query_statement(S::schema(), &selection, &self.variables)
+    }
+
+    fn decode_batch_rows(&self, rows: Vec<D1Row>) -> Result<Vec<Self::Output>, Error> {
+        let selection = self.selection();
+        let root_prefix = selection.model;
+        let mut values = Vec::with_capacity(rows.len());
+
+        for row in rows {
+            values.push(T::from_row(&row, root_prefix)?);
+        }
+
+        Ok(values)
+    }
 
     fn fetch_many<'a>(
         &'a self,
