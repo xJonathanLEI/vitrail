@@ -2,16 +2,14 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use serde_json::Value as JsonValue;
-use sqlx::sqlite::{SqliteArguments, SqliteRow};
-use sqlx::{Row as _, Sqlite, ValueRef as _};
+use sqlx::sqlite::SqliteRow;
+use sqlx::{Row as _, ValueRef as _};
 
 pub use futures_util::future::BoxFuture;
 
 use crate::SqliteExecutor;
-use crate::filter::{
-    FilterBuilder, compile_filter_sql, filter_binding_expr, schema_model as resolve_schema_model,
-};
-use crate::schema::{FieldType, Model, ScalarType, Schema, SchemaAccess};
+use crate::schema::{Schema, SchemaAccess};
+use crate::statement::{bind_statement, map_compile_error};
 
 /// Runtime contract implemented by executable query values.
 pub trait QuerySpec: Send + Sync {
@@ -44,66 +42,10 @@ pub trait QuerySpec: Send + Sync {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct QuerySelection {
-    pub model: &'static str,
-    pub scalar_fields: Vec<&'static str>,
-    pub relations: Vec<QueryRelationSelection>,
-    pub filter: Option<QueryFilter>,
-    pub order_by: Vec<QueryOrder>,
-    pub skip: Option<QueryPagination>,
-    pub limit: Option<QueryPagination>,
-}
+pub use vitrail_sqlite_dialect::{QueryOrder, QueryOrderDirection, QueryPagination, alias_name};
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct QueryRelationSelection {
-    pub field: &'static str,
-    pub selection: QuerySelection,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum QueryOrderDirection {
-    Asc,
-    Desc,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum QueryOrder {
-    Scalar {
-        field: &'static str,
-        direction: QueryOrderDirection,
-    },
-    Relation {
-        field: &'static str,
-        orders: Vec<QueryOrder>,
-    },
-}
-
-impl QueryOrder {
-    pub fn scalar(field: &'static str, direction: QueryOrderDirection) -> Self {
-        Self::Scalar { field, direction }
-    }
-
-    pub fn relation(field: &'static str, orders: Vec<QueryOrder>) -> Self {
-        Self::Relation { field, orders }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum QueryPagination {
-    Value(i64),
-    Variable(&'static str),
-}
-
-impl QueryPagination {
-    pub fn value(value: i64) -> Self {
-        Self::Value(value)
-    }
-
-    pub fn variable(name: &'static str) -> Self {
-        Self::Variable(name)
-    }
-}
+pub type QuerySelection = vitrail_sqlite_dialect::QuerySelection<QueryFilter>;
+pub type QueryRelationSelection = vitrail_sqlite_dialect::QueryRelationSelection<QueryFilter>;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QueryVariables {
@@ -703,7 +645,7 @@ where
             let selection = self.selection();
             let (sql, bindings) = build_query_sql(S::schema(), &selection, &self.variables)?;
             let rows = executor
-                .fetch_all(bind_query(sqlx::query(&sql), &bindings))
+                .fetch_all(bind_statement(sqlx::query(&sql), &bindings))
                 .await?;
             let mut values = Vec::with_capacity(rows.len());
             let root_prefix = selection.model;
@@ -726,7 +668,7 @@ where
 
             let (sql, bindings) = build_query_sql(S::schema(), &selection, &self.variables)?;
             let row = executor
-                .fetch_optional(bind_query(sqlx::query(&sql), &bindings))
+                .fetch_optional(bind_statement(sqlx::query(&sql), &bindings))
                 .await?;
             let root_prefix = selection.model;
 
@@ -762,10 +704,6 @@ fn selection_is_null(
     }
 
     Ok(true)
-}
-
-pub fn alias_name(prefix: &str, field: &str) -> String {
-    format!("{prefix}__{field}")
 }
 
 pub fn json_array_field(value: &JsonValue, index: usize) -> Result<&JsonValue, sqlx::Error> {
@@ -1046,775 +984,132 @@ fn build_query_sql(
     schema: &Schema,
     selection: &QuerySelection,
     variables: &QueryVariables,
-) -> Result<(String, Vec<QueryVariableValue>), sqlx::Error> {
-    let root_model = resolve_schema_model(schema, selection.model, "query")?;
-
-    let mut builder = SqlBuilder {
-        schema,
-        variables,
-        bindings: Vec::new(),
-        next_alias: 1,
-    };
-
-    let selects = builder.root_selects(root_model, selection, selection.model, "t0")?;
-    let where_clause = selection
-        .filter
-        .as_ref()
-        .map(|filter| builder.filter_sql(root_model, filter, "t0"))
-        .transpose()?;
-
-    let mut order_joins = Vec::new();
-    let order_by_clause =
-        builder.order_by_sql(root_model, &selection.order_by, "t0", &mut order_joins)?;
-    let pagination_clause =
-        builder.pagination_clause(selection.skip.as_ref(), selection.limit.as_ref())?;
-
-    let sql = format!(
-        "SELECT {} FROM {} AS \"t0\"{}{}{}{}",
-        selects.join(", "),
-        quoted_ident(root_model.name()),
-        if order_joins.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", order_joins.join(" "))
-        },
-        where_clause
-            .map(|where_clause| format!(" WHERE {where_clause}"))
-            .unwrap_or_default(),
-        order_by_clause
-            .map(|order_by_clause| format!(" ORDER BY {order_by_clause}"))
-            .unwrap_or_default(),
-        pagination_clause,
-    );
-
-    Ok((sql, builder.bindings))
+) -> Result<(String, Vec<vitrail_sqlite_dialect::BindingValue>), sqlx::Error> {
+    let selection = dialect_selection(selection);
+    let variables = dialect_variables(variables)?;
+    let statement =
+        vitrail_sqlite_dialect::compile_query(schema.as_dialect(), &selection, &variables)
+            .map_err(map_compile_error)?;
+    let (sql, bindings, _, _) = statement.into_parts();
+    Ok((sql, bindings))
 }
 
-fn model_names_match(left: &str, right: &str) -> bool {
-    left.eq_ignore_ascii_case(right)
-}
-
-fn infer_relation_fields<'a>(
-    model: &'a Model,
-    field: &'a crate::Field,
-    target_model: &'a Model,
-) -> Result<(Vec<&'a str>, Vec<&'a str>), sqlx::Error> {
-    let reverse_relation = target_model
-        .fields()
-        .iter()
-        .find(|candidate| {
-            model_names_match(candidate.ty().name(), model.name()) && candidate.relation().is_some()
-        })
-        .ok_or_else(|| {
-            schema_error(format!(
-                "could not infer relation metadata for `{}.{}`",
-                model.name(),
-                field.name()
-            ))
-        })?;
-
-    let reverse_relation = reverse_relation
-        .relation()
-        .expect("reverse relation existence checked above");
-
-    Ok((
-        reverse_relation
-            .fields()
+fn dialect_selection(selection: &QuerySelection) -> vitrail_sqlite_dialect::QuerySelection {
+    vitrail_sqlite_dialect::QuerySelection {
+        model: selection.model,
+        scalar_fields: selection.scalar_fields.clone(),
+        relations: selection
+            .relations
             .iter()
-            .map(String::as_str)
-            .collect(),
-        reverse_relation
-            .references()
-            .iter()
-            .map(String::as_str)
-            .collect(),
-    ))
-}
-
-struct SqlBuilder<'a> {
-    schema: &'a Schema,
-    variables: &'a QueryVariables,
-    bindings: Vec<QueryVariableValue>,
-    next_alias: usize,
-}
-
-struct RelationSql<'a> {
-    many: bool,
-    source_model_name: &'a str,
-    relation_field_name: &'a str,
-    target_model: &'a Model,
-    selection: QuerySelection,
-    parent_table_alias: String,
-    nested_alias: String,
-    nested_fields: Vec<&'a str>,
-    parent_fields: Vec<&'a str>,
-}
-
-impl<'a> SqlBuilder<'a> {
-    fn root_selects(
-        &mut self,
-        model: &'a Model,
-        selection: &QuerySelection,
-        prefix: &str,
-        table_alias: &str,
-    ) -> Result<Vec<String>, sqlx::Error> {
-        let mut selects = Vec::with_capacity(selection.scalar_fields.len());
-
-        for field_name in &selection.scalar_fields {
-            let field = model.field_named(field_name).ok_or_else(|| {
-                schema_error(format!(
-                    "unknown field `{}.{}` in query selection",
-                    model.name(),
-                    field_name
-                ))
-            })?;
-
-            let scalar = match field.ty() {
-                FieldType::Scalar(scalar) => scalar.scalar(),
-                FieldType::Relation { .. } => {
-                    return Err(schema_error(format!(
-                        "field `{}.{}` is not scalar and cannot appear in `select`",
-                        model.name(),
-                        field_name
-                    )));
-                }
-            };
-
-            selects.push(select_expr(
-                table_alias,
-                field.name(),
-                scalar,
-                &alias_name(prefix, field.name()),
-            ));
-        }
-
-        for relation in &selection.relations {
-            selects.push(self.relation_select(model, relation, prefix, table_alias)?);
-        }
-
-        if selects.is_empty() {
-            return Err(schema_error(format!(
-                "query selection for model `{}` must contain at least one field",
-                model.name()
-            )));
-        }
-
-        Ok(selects)
-    }
-
-    fn relation_select(
-        &mut self,
-        model: &'a Model,
-        relation: &QueryRelationSelection,
-        prefix: &str,
-        table_alias: &str,
-    ) -> Result<String, sqlx::Error> {
-        let field = model.field_named(relation.field).ok_or_else(|| {
-            schema_error(format!(
-                "unknown relation `{}.{}` in query include",
-                model.name(),
-                relation.field
-            ))
-        })?;
-
-        if field.kind().is_scalar() {
-            return Err(schema_error(format!(
-                "field `{}.{}` is not a relation and cannot appear in `include`",
-                model.name(),
-                relation.field
-            )));
-        }
-
-        let target_model =
-            resolve_schema_model(self.schema, field.ty().name(), "query").map_err(|_| {
-                schema_error(format!(
-                    "relation `{}.{}` points at unknown model `{}`",
-                    model.name(),
-                    relation.field,
-                    field.ty().name()
-                ))
-            })?;
-
-        let (nested_fields, parent_fields) = self.relation_fields(model, field, target_model)?;
-        let nested_alias = format!("t{}", self.next_alias);
-        self.next_alias += 1;
-
-        let subquery = self.relation_subquery_sql(RelationSql {
-            many: field.ty().is_many(),
-            source_model_name: model.name(),
-            relation_field_name: relation.field,
-            target_model,
-            selection: relation.selection.clone(),
-            parent_table_alias: table_alias.to_owned(),
-            nested_alias,
-            nested_fields,
-            parent_fields,
-        })?;
-
-        let alias = alias_name(prefix, relation.field);
-        Ok(format!("({subquery}) AS \"{alias}\""))
-    }
-
-    fn relation_subquery_sql(&mut self, relation: RelationSql<'a>) -> Result<String, sqlx::Error> {
-        let mut where_clauses = vec![relation_predicates(
-            &relation.nested_alias,
-            &relation.nested_fields,
-            &relation.parent_table_alias,
-            &relation.parent_fields,
-        )];
-        let row_expr = self.json_row_expr(
-            relation.target_model,
-            &relation.selection,
-            &relation.nested_alias,
-        )?;
-
-        let mut order_joins = Vec::new();
-        let order_by_clause = self.order_by_sql(
-            relation.target_model,
-            &relation.selection.order_by,
-            &relation.nested_alias,
-            &mut order_joins,
-        )?;
-        let joins_sql = if order_joins.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", order_joins.join(" "))
-        };
-
-        if let Some(filter) = relation.selection.filter.as_ref() {
-            where_clauses.push(self.filter_sql(
-                relation.target_model,
-                filter,
-                &relation.nested_alias,
-            )?);
-        }
-
-        let where_clause = where_clauses.join(" AND ");
-        let explicit_order_by_clause = order_by_clause
-            .map(|order_by_clause| format!(" ORDER BY {order_by_clause}"))
-            .unwrap_or_default();
-
-        if relation.many {
-            let aggregate_table_alias = "__vitrail_nested_rows";
-            let select_order_by_clause = if explicit_order_by_clause.is_empty() {
-                aggregate_order_by(relation.target_model, &relation.nested_alias)
-            } else {
-                explicit_order_by_clause
-            };
-            let pagination_clause = self.pagination_clause(
-                relation.selection.skip.as_ref(),
-                relation.selection.limit.as_ref(),
-            )?;
-
-            Ok(format!(
-                "SELECT COALESCE(json_group_array(json(\"{aggregate_table_alias}\".\"data\")), json('[]')) AS \"data\" FROM (SELECT {row_expr} AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}{select_order_by_clause}{pagination_clause}) AS \"{aggregate_table_alias}\"",
-                quoted_ident(relation.target_model.name()),
-                relation.nested_alias,
-                joins_sql,
-            ))
-        } else {
-            if relation.selection.skip.is_some() || relation.selection.limit.is_some() {
-                return Err(schema_error(format!(
-                    "relation `{}.{}` is to-one and cannot use `skip` or `limit`",
-                    relation.source_model_name, relation.relation_field_name
-                )));
-            }
-
-            Ok(format!(
-                "SELECT {row_expr} AS \"data\" FROM {} AS \"{}\"{} WHERE {where_clause}{explicit_order_by_clause} LIMIT 1",
-                quoted_ident(relation.target_model.name()),
-                relation.nested_alias,
-                joins_sql,
-            ))
-        }
-    }
-
-    fn json_row_expr(
-        &mut self,
-        model: &'a Model,
-        selection: &QuerySelection,
-        table_alias: &str,
-    ) -> Result<String, sqlx::Error> {
-        let mut items = Vec::new();
-
-        for field_name in &selection.scalar_fields {
-            let field = model.field_named(field_name).ok_or_else(|| {
-                schema_error(format!(
-                    "unknown field `{}.{}` in query selection",
-                    model.name(),
-                    field_name
-                ))
-            })?;
-
-            let scalar = match field.ty() {
-                FieldType::Scalar(scalar) => scalar.scalar(),
-                FieldType::Relation { .. } => {
-                    return Err(schema_error(format!(
-                        "field `{}.{}` is not scalar and cannot appear in `select`",
-                        model.name(),
-                        field_name
-                    )));
-                }
-            };
-
-            items.push(json_column_expr(table_alias, field.name(), scalar));
-        }
-
-        for relation in &selection.relations {
-            items.push(self.nested_relation_json_expr(model, relation, table_alias)?);
-        }
-
-        if items.is_empty() {
-            return Err(schema_error(format!(
-                "query selection for model `{}` must contain at least one field",
-                model.name()
-            )));
-        }
-
-        Ok(format!("json_array({})", items.join(", ")))
-    }
-
-    fn nested_relation_json_expr(
-        &mut self,
-        model: &'a Model,
-        relation: &QueryRelationSelection,
-        table_alias: &str,
-    ) -> Result<String, sqlx::Error> {
-        let field = model.field_named(relation.field).ok_or_else(|| {
-            schema_error(format!(
-                "unknown relation `{}.{}` in query include",
-                model.name(),
-                relation.field
-            ))
-        })?;
-
-        if field.kind().is_scalar() {
-            return Err(schema_error(format!(
-                "field `{}.{}` is not a relation and cannot appear in `include`",
-                model.name(),
-                relation.field
-            )));
-        }
-
-        let target_model =
-            resolve_schema_model(self.schema, field.ty().name(), "query").map_err(|_| {
-                schema_error(format!(
-                    "relation `{}.{}` points at unknown model `{}`",
-                    model.name(),
-                    relation.field,
-                    field.ty().name()
-                ))
-            })?;
-
-        let (nested_fields, parent_fields) = self.relation_fields(model, field, target_model)?;
-        let nested_alias = format!("t{}", self.next_alias);
-        self.next_alias += 1;
-
-        let subquery = self.relation_subquery_sql(RelationSql {
-            many: field.ty().is_many(),
-            source_model_name: model.name(),
-            relation_field_name: relation.field,
-            target_model,
-            selection: relation.selection.clone(),
-            parent_table_alias: table_alias.to_owned(),
-            nested_alias,
-            nested_fields,
-            parent_fields,
-        })?;
-
-        Ok(format!("json(({subquery}))"))
-    }
-
-    fn relation_fields(
-        &self,
-        model: &'a Model,
-        field: &'a crate::Field,
-        target_model: &'a Model,
-    ) -> Result<(Vec<&'a str>, Vec<&'a str>), sqlx::Error> {
-        match field.relation() {
-            Some(relation_info) => Ok((
-                relation_info
-                    .references()
-                    .iter()
-                    .map(String::as_str)
-                    .collect(),
-                relation_info.fields().iter().map(String::as_str).collect(),
-            )),
-            None => infer_relation_fields(model, field, target_model),
-        }
-    }
-
-    fn filter_sql(
-        &mut self,
-        model: &'a Model,
-        filter: &QueryFilter,
-        table_alias: &str,
-    ) -> Result<String, sqlx::Error> {
-        compile_filter_sql(self, model, filter, table_alias)
-    }
-
-    fn pagination_clause(
-        &mut self,
-        skip: Option<&QueryPagination>,
-        limit: Option<&QueryPagination>,
-    ) -> Result<String, sqlx::Error> {
-        let mut clause = String::new();
-
-        if let Some(limit) = limit {
-            let limit = self.pagination_placeholder(limit, "limit")?;
-            clause.push_str(&format!(" LIMIT {limit}"));
-        } else if skip.is_some() {
-            clause.push_str(" LIMIT -1");
-        }
-
-        if let Some(skip) = skip {
-            let skip = self.pagination_placeholder(skip, "skip")?;
-            clause.push_str(&format!(" OFFSET {skip}"));
-        }
-
-        Ok(clause)
-    }
-
-    fn pagination_placeholder(
-        &mut self,
-        pagination: &QueryPagination,
-        kind: &str,
-    ) -> Result<String, sqlx::Error> {
-        let value = match pagination {
-            QueryPagination::Value(value) => *value,
-            QueryPagination::Variable(name) => {
-                let value = self.variables.get(name).ok_or_else(|| {
-                    schema_error(format!("missing query variable `{name}` for `{kind}`"))
-                })?;
-
-                match value {
-                    QueryVariableValue::Int(value) => *value,
-                    other => {
-                        return Err(schema_error(format!(
-                            "query `{kind}` variable `{name}` must be an integer, got {other:?}"
-                        )));
-                    }
-                }
-            }
-        };
-
-        if value < 0 {
-            return Err(schema_error(format!(
-                "query `{kind}` must be greater than or equal to 0"
-            )));
-        }
-
-        self.push_binding(QueryVariableValue::Int(value), ScalarType::Int)
-    }
-
-    fn order_by_sql(
-        &mut self,
-        model: &'a Model,
-        orders: &[QueryOrder],
-        table_alias: &str,
-        joins: &mut Vec<String>,
-    ) -> Result<Option<String>, sqlx::Error> {
-        if orders.is_empty() {
-            return Ok(None);
-        }
-
-        let mut items = Vec::new();
-        let mut relation_join_aliases = HashMap::new();
-
-        for order in orders {
-            self.push_order_sql(
-                model,
-                order,
-                table_alias,
-                joins,
-                &mut relation_join_aliases,
-                &mut items,
-            )?;
-        }
-
-        Ok(Some(items.join(", ")))
-    }
-
-    fn push_order_sql(
-        &mut self,
-        model: &'a Model,
-        order: &QueryOrder,
-        table_alias: &str,
-        joins: &mut Vec<String>,
-        relation_join_aliases: &mut HashMap<String, String>,
-        items: &mut Vec<String>,
-    ) -> Result<(), sqlx::Error> {
-        match order {
-            QueryOrder::Scalar { field, direction } => {
-                let field = model.field_named(field).ok_or_else(|| {
-                    schema_error(format!(
-                        "unknown field `{}.{}` in query ordering",
-                        model.name(),
-                        field
-                    ))
-                })?;
-
-                let scalar = match field.ty() {
-                    FieldType::Scalar(scalar) => scalar.scalar(),
-                    FieldType::Relation { .. } => {
-                        return Err(schema_error(format!(
-                            "field `{}.{}` is not scalar and cannot terminate `order_by`",
-                            model.name(),
-                            field.name()
-                        )));
-                    }
-                };
-
-                items.push(format!(
-                    "{} {}",
-                    column_expr(table_alias, field.name(), scalar),
-                    match direction {
-                        QueryOrderDirection::Asc => "ASC",
-                        QueryOrderDirection::Desc => "DESC",
-                    }
-                ));
-                Ok(())
-            }
-            QueryOrder::Relation { field, orders } => {
-                let field = model.field_named(field).ok_or_else(|| {
-                    schema_error(format!(
-                        "unknown relation `{}.{}` in query ordering",
-                        model.name(),
-                        field
-                    ))
-                })?;
-
-                if field.kind().is_scalar() {
-                    return Err(schema_error(format!(
-                        "field `{}.{}` is not a relation and cannot be traversed in `order_by`",
-                        model.name(),
-                        field.name()
-                    )));
-                }
-
-                if field.ty().is_many() {
-                    return Err(schema_error(format!(
-                        "relation `{}.{}` is to-many and cannot be used in `order_by`",
-                        model.name(),
-                        field.name()
-                    )));
-                }
-
-                if orders.is_empty() {
-                    return Err(schema_error(format!(
-                        "relation `{}.{}` must contain at least one nested `order_by` entry",
-                        model.name(),
-                        field.name()
-                    )));
-                }
-
-                let target_model = resolve_schema_model(self.schema, field.ty().name(), "query")
-                    .map_err(|_| {
-                        schema_error(format!(
-                            "relation `{}.{}` points at unknown model `{}`",
-                            model.name(),
-                            field.name(),
-                            field.ty().name()
-                        ))
-                    })?;
-
-                let (nested_fields, parent_fields) =
-                    self.relation_fields(model, field, target_model)?;
-                let predicate_template = relation_predicates(
-                    "__vitrail_order_join__",
-                    &nested_fields,
-                    table_alias,
-                    &parent_fields,
-                );
-                let join_key = format!("{}::{predicate_template}", target_model.name());
-                let join_alias = if let Some(join_alias) = relation_join_aliases.get(&join_key) {
-                    join_alias.clone()
-                } else {
-                    let join_alias = format!("t{}", self.next_alias);
-                    self.next_alias += 1;
-                    joins.push(format!(
-                        "LEFT JOIN {} AS \"{join_alias}\" ON {}",
-                        quoted_ident(target_model.name()),
-                        relation_predicates(
-                            &join_alias,
-                            &nested_fields,
-                            table_alias,
-                            &parent_fields,
-                        ),
-                    ));
-                    relation_join_aliases.insert(join_key, join_alias.clone());
-                    join_alias
-                };
-
-                for nested_order in orders {
-                    self.push_order_sql(
-                        target_model,
-                        nested_order,
-                        &join_alias,
-                        joins,
-                        relation_join_aliases,
-                        items,
-                    )?;
-                }
-
-                Ok(())
-            }
-        }
-    }
-
-    fn push_binding(
-        &mut self,
-        value: QueryVariableValue,
-        scalar: ScalarType,
-    ) -> Result<String, sqlx::Error> {
-        self.bindings.push(value);
-        let placeholder = format!("?{}", self.bindings.len());
-
-        Ok(filter_binding_expr(&placeholder, scalar))
-    }
-}
-
-impl<'a> FilterBuilder<'a> for SqlBuilder<'a> {
-    fn schema(&self) -> &'a Schema {
-        self.schema
-    }
-
-    fn variables(&self) -> &'a QueryVariables {
-        self.variables
-    }
-
-    fn push_filter_binding(
-        &mut self,
-        value: QueryVariableValue,
-        scalar: ScalarType,
-    ) -> Result<String, sqlx::Error> {
-        self.push_binding(value, scalar)
-    }
-
-    fn next_filter_alias(&mut self) -> String {
-        let alias = format!("t{}", self.next_alias);
-        self.next_alias += 1;
-        alias
-    }
-
-    fn operation_name(&self) -> &'static str {
-        "query"
-    }
-}
-
-fn aggregate_order_by(model: &Model, table_alias: &str) -> String {
-    let primary_key_columns = model.primary_key_columns();
-    let field_names = if primary_key_columns.is_empty() {
-        model
-            .field_named("id")
-            .map(|field| vec![field.name()])
-            .or_else(|| {
-                model
-                    .fields()
-                    .iter()
-                    .find(|field| field.kind().is_scalar())
-                    .map(|field| vec![field.name()])
+            .map(|relation| vitrail_sqlite_dialect::QueryRelationSelection {
+                field: relation.field,
+                selection: dialect_selection(&relation.selection),
             })
-            .unwrap_or_else(|| vec!["id"])
-    } else {
-        primary_key_columns
-    };
-
-    format!(
-        " ORDER BY {}",
-        field_names
-            .into_iter()
-            .map(|field_name| format!("\"{table_alias}\".{}", quoted_ident(field_name)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
-fn relation_predicates(
-    nested_alias: &str,
-    nested_fields: &[&str],
-    parent_alias: &str,
-    parent_fields: &[&str],
-) -> String {
-    nested_fields
-        .iter()
-        .zip(parent_fields)
-        .map(|(nested_field, parent_field)| {
-            format!(
-                "\"{nested_alias}\".{} = \"{parent_alias}\".{}",
-                quoted_ident(nested_field),
-                quoted_ident(parent_field),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" AND ")
-}
-
-pub(crate) fn quoted_ident(ident: &str) -> String {
-    format!("\"{}\"", ident.replace('"', "\"\""))
-}
-
-pub(crate) fn column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> String {
-    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
-
-    match scalar {
-        ScalarType::DateTime => format!("julianday({column_sql})"),
-        ScalarType::Json => format!("json({column_sql})"),
-        _ => column_sql,
+            .collect(),
+        filter: selection.filter.as_ref().map(dialect_filter),
+        order_by: selection.order_by.clone(),
+        skip: selection.skip.clone(),
+        limit: selection.limit.clone(),
     }
 }
 
-pub(crate) fn json_column_expr(table_alias: &str, field_name: &str, scalar: ScalarType) -> String {
-    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
-
-    match scalar {
-        ScalarType::Boolean => format!(
-            "json(CASE WHEN {column_sql} IS NULL THEN NULL WHEN {column_sql} THEN 'true' ELSE 'false' END)"
-        ),
-        ScalarType::Bytes => {
-            format!("CASE WHEN {column_sql} IS NULL THEN NULL ELSE hex({column_sql}) END")
+pub(crate) fn dialect_filter(filter: &QueryFilter) -> vitrail_sqlite_dialect::QueryFilter {
+    match filter {
+        QueryFilter::And(filters) => {
+            vitrail_sqlite_dialect::QueryFilter::And(filters.iter().map(dialect_filter).collect())
         }
-        ScalarType::Json => format!("json({column_sql})"),
-        _ => column_sql,
+        QueryFilter::Or(filters) => {
+            vitrail_sqlite_dialect::QueryFilter::Or(filters.iter().map(dialect_filter).collect())
+        }
+        QueryFilter::Not(filter) => {
+            vitrail_sqlite_dialect::QueryFilter::Not(Box::new(dialect_filter(filter)))
+        }
+        QueryFilter::Eq { field, value } => vitrail_sqlite_dialect::QueryFilter::Eq {
+            field,
+            value: dialect_filter_value(value),
+        },
+        QueryFilter::Ne { field, value } => vitrail_sqlite_dialect::QueryFilter::Ne {
+            field,
+            value: dialect_filter_value(value),
+        },
+        QueryFilter::In { field, values } => vitrail_sqlite_dialect::QueryFilter::In {
+            field,
+            values: dialect_filter_values(values),
+        },
+        QueryFilter::Relation { field, filter } => vitrail_sqlite_dialect::QueryFilter::Relation {
+            field,
+            filter: Box::new(dialect_filter(filter)),
+        },
     }
 }
 
-pub(crate) fn select_expr(
-    table_alias: &str,
-    field_name: &str,
-    scalar: ScalarType,
-    alias: &str,
-) -> String {
-    let column_sql = format!("\"{table_alias}\".{}", quoted_ident(field_name));
-    let expr = if scalar == ScalarType::Json {
-        format!("json({column_sql})")
-    } else {
-        column_sql
-    };
-    format!("{expr} AS \"{alias}\"")
+fn dialect_filter_value(value: &QueryFilterValue) -> vitrail_sqlite_dialect::QueryFilterValue {
+    match value {
+        QueryFilterValue::Variable(name) => {
+            vitrail_sqlite_dialect::QueryFilterValue::Variable(name.clone())
+        }
+        QueryFilterValue::Value(value) => {
+            vitrail_sqlite_dialect::QueryFilterValue::Value(dialect_variable_value(value))
+        }
+    }
 }
 
-fn bind_query<'q>(
-    mut query: sqlx::query::Query<'q, Sqlite, SqliteArguments<'q>>,
-    bindings: &'q [QueryVariableValue],
-) -> sqlx::query::Query<'q, Sqlite, SqliteArguments<'q>> {
-    for binding in bindings {
-        query = match binding {
-            QueryVariableValue::Null => query.bind(Option::<i64>::None),
-            QueryVariableValue::Int(value) => query.bind(*value),
-            QueryVariableValue::String(value) => query.bind(value),
-            QueryVariableValue::Bool(value) => query.bind(*value),
-            QueryVariableValue::Float(value) => query.bind(*value),
-            QueryVariableValue::Bytes(value) => query.bind(value),
-            QueryVariableValue::DateTime(value) => query.bind(*value),
-            QueryVariableValue::Json(value) => query.bind(value.to_string()),
-            QueryVariableValue::List(_) => {
-                unreachable!("SQLite list filters must be expanded before SQL binding")
-            }
-        };
+fn dialect_filter_values(values: &QueryFilterValues) -> vitrail_sqlite_dialect::QueryFilterValues {
+    match values {
+        QueryFilterValues::Variable(name) => {
+            vitrail_sqlite_dialect::QueryFilterValues::Variable(name.clone())
+        }
+        QueryFilterValues::Values(values) => vitrail_sqlite_dialect::QueryFilterValues::Values(
+            values.iter().map(dialect_filter_value).collect(),
+        ),
+    }
+}
+
+pub(crate) fn dialect_variables(
+    variables: &QueryVariables,
+) -> Result<vitrail_sqlite_dialect::QueryVariables, sqlx::Error> {
+    let mut entries = variables.value_indices.iter().collect::<Vec<_>>();
+    entries.sort_by_key(|(_, index)| **index);
+
+    let mut dialect_variables = vitrail_sqlite_dialect::QueryVariables::new();
+    for (name, index) in entries {
+        dialect_variables
+            .push(
+                name.clone(),
+                dialect_variable_value(&variables.values[*index]),
+            )
+            .map_err(map_compile_error)?;
     }
 
-    query
+    Ok(dialect_variables)
+}
+
+fn dialect_variable_value(
+    value: &QueryVariableValue,
+) -> vitrail_sqlite_dialect::QueryVariableValue {
+    match value {
+        QueryVariableValue::Null => vitrail_sqlite_dialect::QueryVariableValue::Null,
+        QueryVariableValue::Int(value) => vitrail_sqlite_dialect::QueryVariableValue::Int(*value),
+        QueryVariableValue::String(value) => {
+            vitrail_sqlite_dialect::QueryVariableValue::String(value.clone())
+        }
+        QueryVariableValue::Bool(value) => vitrail_sqlite_dialect::QueryVariableValue::Bool(*value),
+        QueryVariableValue::Float(value) => {
+            vitrail_sqlite_dialect::QueryVariableValue::Float(*value)
+        }
+        QueryVariableValue::Bytes(value) => {
+            vitrail_sqlite_dialect::QueryVariableValue::Bytes(value.clone())
+        }
+        QueryVariableValue::DateTime(value) => {
+            vitrail_sqlite_dialect::QueryVariableValue::DateTime(*value)
+        }
+        QueryVariableValue::Json(value) => {
+            vitrail_sqlite_dialect::QueryVariableValue::Json(value.clone())
+        }
+        QueryVariableValue::List(values) => vitrail_sqlite_dialect::QueryVariableValue::List(
+            values.iter().map(dialect_variable_value).collect(),
+        ),
+    }
 }
 
 pub fn schema_error(message: String) -> sqlx::Error {

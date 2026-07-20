@@ -2,18 +2,14 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use serde_json::Value as JsonValue;
-use sqlx::sqlite::SqliteArguments;
-use sqlx::{Sqlite, query::Query as SqlxQuery};
 
 use crate::SqliteExecutor;
-use crate::filter::{
-    FilterBuilder, compile_filter_sql, filter_binding_expr, schema_model as resolve_schema_model,
-};
 use crate::query::{
-    BoxFuture, QueryFilter, QueryVariableSet, QueryVariableValue, QueryVariables, StringValueType,
-    quoted_ident, schema_error,
+    BoxFuture, QueryFilter, QueryVariableSet, QueryVariables, StringValueType, dialect_filter,
+    dialect_variables, schema_error,
 };
-use crate::schema::{Field, FieldType, Model, ScalarType, Schema, SchemaAccess};
+use crate::schema::{Schema, SchemaAccess};
+use crate::statement::{bind_statement, map_compile_error};
 
 /// Runtime contract implemented by executable update values.
 pub trait UpdateSpec: Send + Sync {
@@ -397,7 +393,7 @@ where
                 &self.variables,
             )?;
             let result = executor
-                .execute(bind_update(sqlx::query(&sql), &bindings))
+                .execute(bind_statement(sqlx::query(&sql), &bindings))
                 .await?;
             Ok(result.rows_affected())
         })
@@ -410,271 +406,37 @@ fn build_update_many_sql(
     values: &UpdateValues,
     filter: Option<&QueryFilter>,
     variables: &QueryVariables,
-) -> Result<(String, Vec<BoundValue>), sqlx::Error> {
-    let model = resolve_schema_model(schema, model_name, "update")?;
+) -> Result<(String, Vec<vitrail_sqlite_dialect::BindingValue>), sqlx::Error> {
+    let mut dialect_values = vitrail_sqlite_dialect::UpdateValues::new();
+    for field in values.iter() {
+        dialect_values
+            .push(field.name.clone(), dialect_update_value(&field.value))
+            .map_err(map_compile_error)?;
+    }
 
-    validate_update_values(model, values)?;
-
-    let ordered_values = ordered_update_values(model, values);
-    let mut builder = UpdateSqlBuilder {
-        schema,
-        variables,
-        bindings: Vec::new(),
-        next_alias: 1,
-    };
-
-    let assignments = ordered_values
-        .iter()
-        .map(|(field, value)| {
-            let scalar = match field.ty() {
-                FieldType::Scalar(scalar) => scalar.scalar(),
-                FieldType::Relation { .. } => {
-                    return Err(schema_error(format!(
-                        "field `{}.{}` is not scalar and cannot appear in `data`",
-                        model.name(),
-                        field.name()
-                    )));
-                }
-            };
-
-            let placeholder = builder.push_update_binding((*value).clone(), scalar)?;
-
-            Ok(format!(
-                r#"{} = {}"#,
-                quoted_ident(field.name()),
-                placeholder
-            ))
-        })
-        .collect::<Result<Vec<_>, sqlx::Error>>()?;
-
-    let where_clause = filter
-        .map(|filter| builder.filter_sql(model, filter, "t0"))
-        .transpose()?;
-
-    let sql = format!(
-        r#"UPDATE {} AS "t0" SET {}{}"#,
-        quoted_ident(model.name()),
-        assignments.join(", "),
-        where_clause
-            .map(|where_clause| format!(" WHERE {where_clause}"))
-            .unwrap_or_default(),
-    );
-
-    Ok((sql, builder.bindings))
+    let dialect_filter = filter.map(dialect_filter);
+    let dialect_variables = dialect_variables(variables)?;
+    let statement = vitrail_sqlite_dialect::compile_update_many(
+        schema.as_dialect(),
+        model_name,
+        &dialect_values,
+        dialect_filter.as_ref(),
+        &dialect_variables,
+    )
+    .map_err(map_compile_error)?;
+    let (sql, bindings, _, _) = statement.into_parts();
+    Ok((sql, bindings))
 }
 
-fn validate_update_values(model: &Model, values: &UpdateValues) -> Result<(), sqlx::Error> {
-    if values.is_empty() {
-        return Err(schema_error(format!(
-            "update on model `{}` must write at least one scalar field",
-            model.name()
-        )));
-    }
-
-    for provided in values.iter() {
-        let field = model.field_named(&provided.name).ok_or_else(|| {
-            schema_error(format!(
-                "unknown field `{}` in update for model `{}`",
-                provided.name,
-                model.name()
-            ))
-        })?;
-
-        if field.kind().is_relation() {
-            return Err(schema_error(format!(
-                "relation field `{}` cannot be written in update for model `{}`",
-                field.name(),
-                model.name()
-            )));
-        }
-
-        if !update_value_matches_field(&provided.value, field) {
-            return Err(schema_error(format!(
-                "update value for field `{}` is incompatible with schema type `{}` on model `{}`",
-                field.name(),
-                field.ty().name(),
-                model.name()
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-fn ordered_update_values<'a>(
-    model: &'a Model,
-    values: &'a UpdateValues,
-) -> Vec<(&'a Field, &'a UpdateValue)> {
-    let mut ordered = Vec::new();
-
-    for field in model.fields() {
-        if field.kind().is_relation() {
-            continue;
-        }
-
-        if let Some(value) = values.get(field.name()) {
-            ordered.push((field, value));
-        }
-    }
-
-    ordered
-}
-
-struct UpdateSqlBuilder<'a> {
-    schema: &'a Schema,
-    variables: &'a QueryVariables,
-    bindings: Vec<BoundValue>,
-    next_alias: usize,
-}
-
-impl<'a> UpdateSqlBuilder<'a> {
-    fn filter_sql(
-        &mut self,
-        model: &'a Model,
-        filter: &QueryFilter,
-        table_alias: &str,
-    ) -> Result<String, sqlx::Error> {
-        compile_filter_sql(self, model, filter, table_alias)
-    }
-
-    fn push_update_binding(
-        &mut self,
-        value: UpdateValue,
-        scalar: ScalarType,
-    ) -> Result<String, sqlx::Error> {
-        self.bindings.push(value.into());
-
-        let placeholder = format!("?{}", self.bindings.len());
-
-        match scalar {
-            ScalarType::Json => Ok(format!("json({placeholder})")),
-            _ => Ok(placeholder),
-        }
-    }
-
-    fn push_query_binding(
-        &mut self,
-        value: QueryVariableValue,
-        scalar: ScalarType,
-    ) -> Result<String, sqlx::Error> {
-        self.bindings.push(value.into());
-
-        let placeholder = format!("?{}", self.bindings.len());
-
-        Ok(filter_binding_expr(&placeholder, scalar))
-    }
-}
-
-impl<'a> FilterBuilder<'a> for UpdateSqlBuilder<'a> {
-    fn schema(&self) -> &'a Schema {
-        self.schema
-    }
-
-    fn variables(&self) -> &'a QueryVariables {
-        self.variables
-    }
-
-    fn push_filter_binding(
-        &mut self,
-        value: QueryVariableValue,
-        scalar: ScalarType,
-    ) -> Result<String, sqlx::Error> {
-        self.push_query_binding(value, scalar)
-    }
-
-    fn next_filter_alias(&mut self) -> String {
-        let alias = format!("t{}", self.next_alias);
-        self.next_alias += 1;
-        alias
-    }
-
-    fn operation_name(&self) -> &'static str {
-        "update"
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum BoundValue {
-    Null,
-    Int(i64),
-    String(String),
-    Bool(bool),
-    Float(f64),
-    Bytes(Vec<u8>),
-    DateTime(chrono::DateTime<chrono::Utc>),
-    Json(JsonValue),
-    List(Vec<QueryVariableValue>),
-}
-
-impl From<UpdateValue> for BoundValue {
-    fn from(value: UpdateValue) -> Self {
-        match value {
-            UpdateValue::Null => Self::Null,
-            UpdateValue::Int(value) => Self::Int(value),
-            UpdateValue::String(value) => Self::String(value),
-            UpdateValue::Bool(value) => Self::Bool(value),
-            UpdateValue::Float(value) => Self::Float(value),
-            UpdateValue::Bytes(value) => Self::Bytes(value),
-            UpdateValue::DateTime(value) => Self::DateTime(value),
-            UpdateValue::Json(value) => Self::Json(value),
-        }
-    }
-}
-
-impl From<QueryVariableValue> for BoundValue {
-    fn from(value: QueryVariableValue) -> Self {
-        match value {
-            QueryVariableValue::Null => Self::Null,
-            QueryVariableValue::Int(value) => Self::Int(value),
-            QueryVariableValue::String(value) => Self::String(value),
-            QueryVariableValue::Bool(value) => Self::Bool(value),
-            QueryVariableValue::Float(value) => Self::Float(value),
-            QueryVariableValue::Bytes(value) => Self::Bytes(value),
-            QueryVariableValue::DateTime(value) => Self::DateTime(value),
-            QueryVariableValue::Json(value) => Self::Json(value),
-            QueryVariableValue::List(values) => Self::List(values),
-        }
-    }
-}
-
-fn update_value_matches_field(value: &UpdateValue, field: &Field) -> bool {
-    let FieldType::Scalar(scalar) = field.ty() else {
-        return false;
-    };
-
+fn dialect_update_value(value: &UpdateValue) -> vitrail_sqlite_dialect::UpdateValue {
     match value {
-        UpdateValue::Null => scalar.optional(),
-        UpdateValue::Int(_) => {
-            matches!(scalar.scalar(), ScalarType::Int | ScalarType::BigInt)
-        }
-        UpdateValue::String(_) => scalar.scalar() == ScalarType::String,
-        UpdateValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
-        UpdateValue::Float(_) => scalar.scalar() == ScalarType::Float,
-        UpdateValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
-        UpdateValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
-        UpdateValue::Json(_) => scalar.scalar() == ScalarType::Json,
+        UpdateValue::Null => vitrail_sqlite_dialect::UpdateValue::Null,
+        UpdateValue::Int(value) => vitrail_sqlite_dialect::UpdateValue::Int(*value),
+        UpdateValue::String(value) => vitrail_sqlite_dialect::UpdateValue::String(value.clone()),
+        UpdateValue::Bool(value) => vitrail_sqlite_dialect::UpdateValue::Bool(*value),
+        UpdateValue::Float(value) => vitrail_sqlite_dialect::UpdateValue::Float(*value),
+        UpdateValue::Bytes(value) => vitrail_sqlite_dialect::UpdateValue::Bytes(value.clone()),
+        UpdateValue::DateTime(value) => vitrail_sqlite_dialect::UpdateValue::DateTime(*value),
+        UpdateValue::Json(value) => vitrail_sqlite_dialect::UpdateValue::Json(value.clone()),
     }
-}
-
-fn bind_update<'q>(
-    mut query: SqlxQuery<'q, Sqlite, SqliteArguments<'q>>,
-    bindings: &'q [BoundValue],
-) -> SqlxQuery<'q, Sqlite, SqliteArguments<'q>> {
-    for binding in bindings {
-        query = match binding {
-            BoundValue::Null => query.bind(Option::<i64>::None),
-            BoundValue::Int(value) => query.bind(*value),
-            BoundValue::String(value) => query.bind(value),
-            BoundValue::Bool(value) => query.bind(*value),
-            BoundValue::Float(value) => query.bind(*value),
-            BoundValue::Bytes(value) => query.bind(value),
-            BoundValue::DateTime(value) => query.bind(*value),
-            BoundValue::Json(value) => query.bind(value.to_string()),
-            BoundValue::List(_) => {
-                unreachable!("SQLite list filters must be expanded before update binding")
-            }
-        };
-    }
-
-    query
 }

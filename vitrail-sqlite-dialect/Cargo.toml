@@ -1,16 +1,13 @@
 [package]
-name = "vitrail-sqlite-core"
+name = "vitrail-sqlite-dialect"
 version.workspace = true
 authors = ["Jonathan LEI <me@xjonathan.dev>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
 repository.workspace = true
-description = "Core types for the vitrail-sqlite crate"
+description = "Runtime-neutral SQLite-family dialect support for Vitrail"
 
 [dependencies]
 chrono.workspace = true
-futures-util.workspace = true
 serde_json.workspace = true
-sqlx = { workspace = true, features = ["sqlite", "runtime-tokio", "chrono"] }
 vitrail-core.workspace = true
-vitrail-sqlite-dialect.workspace = true

@@ -1,16 +1,11 @@
 use std::marker::PhantomData;
 
-use sqlx::sqlite::SqliteArguments;
-use sqlx::{Sqlite, query::Query as SqlxQuery};
-
 use crate::SqliteExecutor;
-use crate::filter::{
-    FilterBuilder, compile_filter_sql, filter_binding_expr, schema_model as resolve_schema_model,
-};
 use crate::query::{
-    BoxFuture, QueryFilter, QueryVariableSet, QueryVariableValue, QueryVariables, quoted_ident,
+    BoxFuture, QueryFilter, QueryVariableSet, QueryVariables, dialect_filter, dialect_variables,
 };
-use crate::schema::{Model, ScalarType, Schema, SchemaAccess};
+use crate::schema::{Schema, SchemaAccess};
+use crate::statement::{bind_statement, map_compile_error};
 
 /// Runtime contract implemented by executable delete values.
 pub trait DeleteSpec: Send + Sync {
@@ -129,7 +124,7 @@ where
                 &self.variables,
             )?;
             let result = executor
-                .execute(bind_delete(sqlx::query(&sql), &bindings))
+                .execute(bind_statement(sqlx::query(&sql), &bindings))
                 .await?;
             Ok(result.rows_affected())
         })
@@ -141,105 +136,16 @@ fn build_delete_many_sql(
     model_name: &str,
     filter: Option<&QueryFilter>,
     variables: &QueryVariables,
-) -> Result<(String, Vec<QueryVariableValue>), sqlx::Error> {
-    let model = resolve_schema_model(schema, model_name, "delete")?;
-    let mut builder = DeleteSqlBuilder {
-        schema,
-        variables,
-        bindings: Vec::new(),
-        next_alias: 1,
-    };
-
-    let where_clause = filter
-        .map(|filter| builder.filter_sql(model, filter, "t0"))
-        .transpose()?;
-
-    let sql = format!(
-        r#"DELETE FROM {} AS "t0"{}"#,
-        quoted_ident(model.name()),
-        where_clause
-            .map(|where_clause| format!(" WHERE {where_clause}"))
-            .unwrap_or_default(),
-    );
-
-    Ok((sql, builder.bindings))
-}
-
-struct DeleteSqlBuilder<'a> {
-    schema: &'a Schema,
-    variables: &'a QueryVariables,
-    bindings: Vec<QueryVariableValue>,
-    next_alias: usize,
-}
-
-impl<'a> DeleteSqlBuilder<'a> {
-    fn filter_sql(
-        &mut self,
-        model: &'a Model,
-        filter: &QueryFilter,
-        table_alias: &str,
-    ) -> Result<String, sqlx::Error> {
-        compile_filter_sql(self, model, filter, table_alias)
-    }
-
-    fn push_query_binding(
-        &mut self,
-        value: QueryVariableValue,
-        scalar: ScalarType,
-    ) -> Result<String, sqlx::Error> {
-        self.bindings.push(value);
-        let placeholder = format!("?{}", self.bindings.len());
-        Ok(filter_binding_expr(&placeholder, scalar))
-    }
-}
-
-impl<'a> FilterBuilder<'a> for DeleteSqlBuilder<'a> {
-    fn schema(&self) -> &'a Schema {
-        self.schema
-    }
-
-    fn variables(&self) -> &'a QueryVariables {
-        self.variables
-    }
-
-    fn push_filter_binding(
-        &mut self,
-        value: QueryVariableValue,
-        scalar: ScalarType,
-    ) -> Result<String, sqlx::Error> {
-        self.push_query_binding(value, scalar)
-    }
-
-    fn next_filter_alias(&mut self) -> String {
-        let alias = format!("t{}", self.next_alias);
-        self.next_alias += 1;
-        alias
-    }
-
-    fn operation_name(&self) -> &'static str {
-        "delete"
-    }
-}
-
-fn bind_delete<'q>(
-    mut query: SqlxQuery<'q, Sqlite, SqliteArguments<'q>>,
-    bindings: &'q [QueryVariableValue],
-) -> SqlxQuery<'q, Sqlite, SqliteArguments<'q>> {
-    for binding in bindings {
-        query = match binding {
-            QueryVariableValue::Null => query.bind(Option::<i64>::None),
-            QueryVariableValue::Int(value) => query.bind(*value),
-            QueryVariableValue::String(value) => query.bind(value),
-            QueryVariableValue::Bool(value) => query.bind(*value),
-            QueryVariableValue::Float(value) => query.bind(*value),
-            QueryVariableValue::Bytes(value) => query.bind(value),
-            QueryVariableValue::DateTime(value) => query.bind(*value),
-            QueryVariableValue::Json(value) => query.bind(value.to_string()),
-            QueryVariableValue::List(_) => {
-                unreachable!("SQLite list filters must be expanded before delete binding")
-            }
-        };
-    }
-
-    query
+) -> Result<(String, Vec<vitrail_sqlite_dialect::BindingValue>), sqlx::Error> {
+    let dialect_filter = filter.map(dialect_filter);
+    let dialect_variables = dialect_variables(variables)?;
+    let statement = vitrail_sqlite_dialect::compile_delete_many(
+        schema.as_dialect(),
+        model_name,
+        dialect_filter.as_ref(),
+        &dialect_variables,
+    )
+    .map_err(map_compile_error)?;
+    let (sql, bindings, _, _) = statement.into_parts();
+    Ok((sql, bindings))
 }

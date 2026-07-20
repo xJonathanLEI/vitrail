@@ -1,3 +1,4 @@
+use crate::CompileError;
 use crate::query::{
     QueryFilter, QueryFilterValue, QueryFilterValues, QueryVariableValue, QueryVariables,
     column_expr, quoted_ident, schema_error,
@@ -13,7 +14,7 @@ pub(crate) trait FilterBuilder<'a> {
         &mut self,
         value: QueryVariableValue,
         scalar: ScalarType,
-    ) -> Result<String, sqlx::Error>;
+    ) -> Result<String, CompileError>;
 
     fn next_filter_alias(&mut self) -> String;
 
@@ -32,7 +33,7 @@ pub(crate) fn schema_model<'a>(
     schema: &'a Schema,
     requested: &str,
     operation: &str,
-) -> Result<&'a Model, sqlx::Error> {
+) -> Result<&'a Model, CompileError> {
     match schema.resolve_model(requested) {
         Resolution::Found(model) => Ok(model),
         Resolution::NotFound => Err(schema_error(format!(
@@ -57,7 +58,7 @@ pub(crate) fn compile_filter_sql<'a>(
     model: &'a Model,
     filter: &QueryFilter,
     table_alias: &str,
-) -> Result<String, sqlx::Error> {
+) -> Result<String, CompileError> {
     match filter {
         QueryFilter::And(filters) => {
             let parts = filters
@@ -248,7 +249,7 @@ pub(crate) fn compile_filter_sql<'a>(
 fn resolve_filter_value(
     variables: &QueryVariables,
     value: &QueryFilterValue,
-) -> Result<QueryVariableValue, sqlx::Error> {
+) -> Result<QueryVariableValue, CompileError> {
     match value {
         QueryFilterValue::Value(value) => Ok(value.clone()),
         QueryFilterValue::Variable(name) => variables
@@ -261,7 +262,7 @@ fn resolve_filter_value(
 fn resolve_filter_values(
     variables: &QueryVariables,
     values: &QueryFilterValues,
-) -> Result<Vec<QueryVariableValue>, sqlx::Error> {
+) -> Result<Vec<QueryVariableValue>, CompileError> {
     match values {
         QueryFilterValues::Values(values) => values
             .iter()
@@ -302,7 +303,7 @@ fn infer_relation_fields<'a>(
     model: &'a Model,
     field: &'a Field,
     target_model: &'a Model,
-) -> Result<(Vec<&'a str>, Vec<&'a str>), sqlx::Error> {
+) -> Result<(Vec<&'a str>, Vec<&'a str>), CompileError> {
     let reverse_relation = target_model
         .fields()
         .iter()
@@ -339,7 +340,7 @@ fn relation_fields<'a>(
     model: &'a Model,
     field: &'a Field,
     target_model: &'a Model,
-) -> Result<(Vec<&'a str>, Vec<&'a str>), sqlx::Error> {
+) -> Result<(Vec<&'a str>, Vec<&'a str>), CompileError> {
     match field.relation() {
         Some(relation_info) => Ok((
             relation_info

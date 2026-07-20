@@ -1,18 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use serde_json::Value as JsonValue;
-use sqlx::sqlite::{SqliteArguments, SqliteRow};
-use sqlx::{Sqlite, query::Query as SqlxQuery};
+use sqlx::sqlite::SqliteRow;
 
 use crate::SqliteExecutor;
-use crate::query::{
-    BoxFuture, StringValueType, alias_name, quoted_ident, schema_error, select_expr,
-};
-use crate::schema::{
-    Attribute, DefaultFunction, Field, FieldType, Model, Resolution, ScalarType, Schema,
-    SchemaAccess,
-};
+use crate::query::{BoxFuture, StringValueType, schema_error};
+use crate::schema::{Schema, SchemaAccess};
+use crate::statement::{bind_statement, map_compile_error};
 
 /// Runtime contract implemented by executable insert values.
 pub trait InsertSpec: Send + Sync {
@@ -346,7 +341,7 @@ where
                 T::returning_fields(),
             )?;
             let row = executor
-                .fetch_one(bind_insert(sqlx::query(&sql), &bindings))
+                .fetch_one(bind_statement(sqlx::query(&sql), &bindings))
                 .await?;
 
             T::from_row(&row, T::model_name())
@@ -359,269 +354,34 @@ fn build_insert_sql(
     model_name: &str,
     values: &InsertValues,
     returning_fields: &[&'static str],
-) -> Result<(String, Vec<InsertValue>), sqlx::Error> {
-    let model = schema_model(schema, model_name)?;
+) -> Result<(String, Vec<vitrail_sqlite_dialect::BindingValue>), sqlx::Error> {
+    let mut dialect_values = vitrail_sqlite_dialect::InsertValues::new();
+    for field in values.iter() {
+        dialect_values
+            .push(field.name.clone(), dialect_insert_value(&field.value))
+            .map_err(map_compile_error)?;
+    }
 
-    validate_insert_values(model, values)?;
-    validate_returning_fields(model, returning_fields)?;
-
-    let ordered_values = ordered_insert_values(model, values);
-    let returning_clause = build_returning_clause(model, returning_fields, model_name)?;
-
-    let sql = if ordered_values.is_empty() {
-        format!(
-            "INSERT INTO {} DEFAULT VALUES RETURNING {}",
-            quoted_ident(model.name()),
-            returning_clause.join(", "),
-        )
-    } else {
-        let columns = ordered_values
-            .iter()
-            .map(|(field, _)| quoted_ident(field.name()))
-            .collect::<Vec<_>>();
-        let placeholders = ordered_values
-            .iter()
-            .enumerate()
-            .map(|(index, (field, _))| {
-                let placeholder = format!("?{}", index + 1);
-
-                match field.ty() {
-                    FieldType::Scalar(scalar) if scalar.scalar() == ScalarType::Json => {
-                        format!("json({placeholder})")
-                    }
-                    _ => placeholder,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        format!(
-            "INSERT INTO {} ({}) VALUES ({}) RETURNING {}",
-            quoted_ident(model.name()),
-            columns.join(", "),
-            placeholders.join(", "),
-            returning_clause.join(", "),
-        )
-    };
-
-    let bindings = ordered_values
-        .into_iter()
-        .map(|(_, value)| value.clone())
-        .collect();
-
+    let statement = vitrail_sqlite_dialect::compile_insert(
+        schema.as_dialect(),
+        model_name,
+        &dialect_values,
+        returning_fields,
+    )
+    .map_err(map_compile_error)?;
+    let (sql, bindings, _, _) = statement.into_parts();
     Ok((sql, bindings))
 }
 
-fn validate_insert_values(model: &Model, values: &InsertValues) -> Result<(), sqlx::Error> {
-    for provided in values.iter() {
-        let field = model.field_named(&provided.name).ok_or_else(|| {
-            schema_error(format!(
-                "unknown field `{}` in insert for model `{}`",
-                provided.name,
-                model.name()
-            ))
-        })?;
-
-        if field.kind().is_relation() {
-            return Err(schema_error(format!(
-                "relation field `{}` cannot be written in insert for model `{}`",
-                field.name(),
-                model.name()
-            )));
-        }
-
-        if !insert_value_matches_field(&provided.value, field) {
-            return Err(schema_error(format!(
-                "insert value for field `{}` is incompatible with schema type `{}` on model `{}`",
-                field.name(),
-                field.ty().name(),
-                model.name()
-            )));
-        }
-    }
-
-    for field in model.fields() {
-        if field.kind().is_relation() {
-            continue;
-        }
-
-        if values.get(field.name()).is_none() && !field_can_be_omitted(field) {
-            return Err(schema_error(format!(
-                "missing required scalar field `{}` in insert for model `{}`",
-                field.name(),
-                model.name()
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_returning_fields(
-    model: &Model,
-    returning_fields: &[&'static str],
-) -> Result<(), sqlx::Error> {
-    if returning_fields.is_empty() {
-        return Err(schema_error(format!(
-            "insert on model `{}` must return at least one scalar field",
-            model.name()
-        )));
-    }
-
-    let mut seen = HashSet::new();
-
-    for field_name in returning_fields {
-        if !seen.insert(*field_name) {
-            return Err(schema_error(format!(
-                "duplicate returning field `{field_name}` in insert for model `{}`",
-                model.name()
-            )));
-        }
-
-        let field = model.field_named(field_name).ok_or_else(|| {
-            schema_error(format!(
-                "unknown returning field `{field_name}` in insert for model `{}`",
-                model.name()
-            ))
-        })?;
-
-        if field.kind().is_relation() {
-            return Err(schema_error(format!(
-                "relation field `{field_name}` cannot be returned from scalar insert for model `{}`",
-                model.name()
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-fn ordered_insert_values<'a>(
-    model: &'a Model,
-    values: &'a InsertValues,
-) -> Vec<(&'a Field, &'a InsertValue)> {
-    let mut ordered = Vec::new();
-
-    for field in model.fields() {
-        if field.kind().is_relation() {
-            continue;
-        }
-
-        if let Some(value) = values.get(field.name()) {
-            ordered.push((field, value));
-        }
-    }
-
-    ordered
-}
-
-fn build_returning_clause(
-    model: &Model,
-    returning_fields: &[&'static str],
-    prefix: &str,
-) -> Result<Vec<String>, sqlx::Error> {
-    let mut selections = Vec::with_capacity(returning_fields.len());
-
-    for field_name in returning_fields {
-        let field = model.field_named(field_name).ok_or_else(|| {
-            schema_error(format!(
-                "unknown returning field `{field_name}` in insert for model `{}`",
-                model.name()
-            ))
-        })?;
-
-        let scalar = scalar_field_type(field).ok_or_else(|| {
-            schema_error(format!(
-                "relation field `{field_name}` cannot be returned from scalar insert for model `{}`",
-                model.name()
-            ))
-        })?;
-
-        let alias = alias_name(prefix, field_name);
-        selections.push(select_expr(model.name(), field_name, scalar, &alias));
-    }
-
-    Ok(selections)
-}
-
-fn field_can_be_omitted(field: &Field) -> bool {
-    field.ty().is_optional() || field_has_supported_default(field)
-}
-
-fn field_has_supported_default(field: &Field) -> bool {
-    field.attributes().iter().any(|attribute| {
-        matches!(
-            attribute,
-            Attribute::Default(default)
-                if matches!(
-                    default.function(),
-                    DefaultFunction::Autoincrement | DefaultFunction::Now
-                )
-        )
-    })
-}
-
-fn scalar_field_type(field: &Field) -> Option<ScalarType> {
-    match field.ty() {
-        FieldType::Scalar(scalar) => Some(scalar.scalar()),
-        FieldType::Relation { .. } => None,
-    }
-}
-
-fn insert_value_matches_field(value: &InsertValue, field: &Field) -> bool {
-    let FieldType::Scalar(scalar) = field.ty() else {
-        return false;
-    };
-
+fn dialect_insert_value(value: &InsertValue) -> vitrail_sqlite_dialect::InsertValue {
     match value {
-        InsertValue::Null => scalar.optional(),
-        InsertValue::Int(_) => {
-            matches!(scalar.scalar(), ScalarType::Int | ScalarType::BigInt)
-        }
-        InsertValue::String(_) => scalar.scalar() == ScalarType::String,
-        InsertValue::Bool(_) => scalar.scalar() == ScalarType::Boolean,
-        InsertValue::Float(_) => scalar.scalar() == ScalarType::Float,
-        InsertValue::Bytes(_) => scalar.scalar() == ScalarType::Bytes,
-        InsertValue::DateTime(_) => scalar.scalar() == ScalarType::DateTime,
-        InsertValue::Json(_) => scalar.scalar() == ScalarType::Json,
+        InsertValue::Null => vitrail_sqlite_dialect::InsertValue::Null,
+        InsertValue::Int(value) => vitrail_sqlite_dialect::InsertValue::Int(*value),
+        InsertValue::String(value) => vitrail_sqlite_dialect::InsertValue::String(value.clone()),
+        InsertValue::Bool(value) => vitrail_sqlite_dialect::InsertValue::Bool(*value),
+        InsertValue::Float(value) => vitrail_sqlite_dialect::InsertValue::Float(*value),
+        InsertValue::Bytes(value) => vitrail_sqlite_dialect::InsertValue::Bytes(value.clone()),
+        InsertValue::DateTime(value) => vitrail_sqlite_dialect::InsertValue::DateTime(*value),
+        InsertValue::Json(value) => vitrail_sqlite_dialect::InsertValue::Json(value.clone()),
     }
-}
-
-fn schema_model<'a>(schema: &'a Schema, requested: &str) -> Result<&'a Model, sqlx::Error> {
-    match schema.resolve_model(requested) {
-        Resolution::Found(model) => Ok(model),
-        Resolution::NotFound => Err(schema_error(format!(
-            "unknown model `{requested}` in insert"
-        ))),
-        Resolution::Ambiguous(models) => {
-            let candidates = models
-                .into_iter()
-                .map(|model| format!("`{}`", model.name()))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            Err(schema_error(format!(
-                "ambiguous model `{requested}` in insert; matches {candidates}"
-            )))
-        }
-    }
-}
-
-fn bind_insert<'q>(
-    mut query: SqlxQuery<'q, Sqlite, SqliteArguments<'q>>,
-    bindings: &'q [InsertValue],
-) -> SqlxQuery<'q, Sqlite, SqliteArguments<'q>> {
-    for binding in bindings {
-        query = match binding {
-            InsertValue::Null => query.bind(Option::<i64>::None),
-            InsertValue::Int(value) => query.bind(*value),
-            InsertValue::String(value) => query.bind(value),
-            InsertValue::Bool(value) => query.bind(*value),
-            InsertValue::Float(value) => query.bind(*value),
-            InsertValue::Bytes(value) => query.bind(value),
-            InsertValue::DateTime(value) => query.bind(*value),
-            InsertValue::Json(value) => query.bind(value.to_string()),
-        };
-    }
-
-    query
 }

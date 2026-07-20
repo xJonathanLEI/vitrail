@@ -7,6 +7,7 @@ members = [
     "vitrail-pg-macros",
     "vitrail-sqlite",
     "vitrail-sqlite-core",
+    "vitrail-sqlite-dialect",
     "vitrail-sqlite-macros",
     "examples/workspace/example-app",
     "examples/workspace/example-db",
@@ -40,5 +41,6 @@ vitrail-pg-core = { version = "0.0.12", path = "./vitrail-pg-core" }
 vitrail-pg-macros = { version = "0.0.12", path = "./vitrail-pg-macros" }
 vitrail-pg = { version = "0.0.12", path = "./vitrail-pg" }
 vitrail-sqlite-core = { version = "0.0.12", path = "./vitrail-sqlite-core" }
+vitrail-sqlite-dialect = { version = "0.0.12", path = "./vitrail-sqlite-dialect" }
 vitrail-sqlite-macros = { version = "0.0.12", path = "./vitrail-sqlite-macros" }
 vitrail-sqlite = { version = "0.0.12", path = "./vitrail-sqlite" }
