@@ -5,14 +5,13 @@ use serde_json::Value as JsonValue;
 use vitrail_sqlite_dialect::{
     CompiledStatement, SqliteFamilyFlavor, compile_update_many_with_flavor,
 };
-use worker::d1::D1Database;
 
 use crate::query::{
     BoxFuture, QueryFilter, QueryVariableSet, QueryVariables, StringValueType, dialect_filter,
     dialect_variables, schema_error,
 };
 use crate::statement::execute_changes;
-use crate::{Error, Schema, SchemaAccess};
+use crate::{D1Executor, Error, Schema, SchemaAccess};
 
 /// Runtime contract implemented by executable D1 update values.
 pub trait UpdateSpec: Send + Sync {
@@ -21,7 +20,7 @@ pub trait UpdateSpec: Send + Sync {
     #[doc(hidden)]
     fn execute<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Self::Output, Error>>;
 }
 
@@ -379,7 +378,7 @@ where
 
     fn execute<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Self::Output, Error>> {
         Box::pin(async move {
             let filter = self.filter();
@@ -391,7 +390,7 @@ where
                 &self.variables,
             )?;
 
-            execute_changes(database, &statement).await
+            execute_changes(executor, &statement).await
         })
     }
 }

@@ -1,6 +1,9 @@
 use serde_json::{Value as JsonValue, json};
 #[cfg(feature = "integration-test")]
-use vitrail_d1::{DeleteMany, InsertInput, InsertResult, QueryVariables, UpdateData, UpdateMany};
+use vitrail_d1::{
+    DeleteMany, InsertInput, InsertResult, QueryVariables, SessionConstraint, UpdateData,
+    UpdateMany,
+};
 use vitrail_d1::{Error as VitrailError, QueryResult, StringValueType, VitrailClient, schema};
 use worker::{
     Context, Env, Error as WorkerError, Request, Response, Result as WorkerResult, event,
@@ -170,6 +173,8 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> WorkerResul
         "/__test/setup" => setup_test_schema(&env).await,
         #[cfg(feature = "integration-test")]
         "/__test/crud" => run_crud_probe(&env).await,
+        #[cfg(feature = "integration-test")]
+        "/__test/sessions" => run_session_probe(&env).await,
         _ => Response::error("Not found", 404),
     }
 }
@@ -406,6 +411,187 @@ async fn run_crud_probe(env: &Env) -> WorkerResult<Response> {
         },
         "updatedCount": updated,
         "deletedCount": deleted,
+    }))
+}
+
+#[cfg(feature = "integration-test")]
+async fn run_session_probe(env: &Env) -> WorkerResult<Response> {
+    let client = VitrailClient::new(env.d1("DB")?);
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-14T13:45:56.654321Z")
+        .map_err(|error| WorkerError::RustError(error.to_string()))?
+        .with_timezone(&chrono::Utc);
+
+    let first_primary = client
+        .with_session(SessionConstraint::FirstPrimary)
+        .map_err(worker_error)?;
+
+    let inserted = first_primary
+        .insert(d1_example_schema::insert::<InsertedScalarRecord>(
+            NewScalarRecord {
+                min_value: i64::MIN,
+                max_value: i64::MAX,
+                active: true,
+                score: 42.5,
+                label: RecordLabel::new("session-record"),
+                payload: vec![1, 3, 5, 7],
+                created_at,
+                metadata: json!({
+                    "kind": "session-probe",
+                    "version": 1,
+                }),
+                note: None,
+            },
+        ))
+        .await
+        .map_err(worker_error)?;
+
+    let initial_bookmark = first_primary
+        .latest_bookmark()
+        .map_err(worker_error)?
+        .ok_or_else(|| {
+            WorkerError::RustError(
+                "first-primary session did not return a bookmark after insertion".to_owned(),
+            )
+        })?;
+
+    ensure(
+        !initial_bookmark.as_str().is_empty(),
+        "first-primary session returned an empty bookmark",
+    )?;
+
+    let sequential_read = first_primary
+        .find_first(d1_example_schema::query_with_variables::<RecordByMax>(
+            RecordByMaxVariables {
+                max_value: i64::MAX,
+            },
+        ))
+        .await
+        .map_err(worker_error)?;
+
+    ensure(
+        sequential_read.id == inserted.id,
+        "sequential session read returned the wrong row",
+    )?;
+
+    let bookmark_before_update = first_primary
+        .latest_bookmark()
+        .map_err(worker_error)?
+        .ok_or_else(|| {
+            WorkerError::RustError(
+                "first-primary session lost its bookmark before mutation".to_owned(),
+            )
+        })?;
+
+    let updated = first_primary
+        .update_many(d1_example_schema::update_many_with_variables::<
+            UpdateScalarRecordById,
+        >(
+            RecordIdVariables {
+                record_id: inserted.id,
+            },
+            UpdateScalarRecord {
+                active: false,
+                note: Some("session-updated".to_owned()),
+            },
+        ))
+        .await
+        .map_err(worker_error)?;
+
+    ensure(
+        updated == 1,
+        "session update did not report one changed row",
+    )?;
+
+    let advanced_bookmark = first_primary
+        .latest_bookmark()
+        .map_err(worker_error)?
+        .ok_or_else(|| {
+            WorkerError::RustError(
+                "first-primary session did not return a bookmark after mutation".to_owned(),
+            )
+        })?;
+
+    ensure(
+        advanced_bookmark != bookmark_before_update,
+        "session bookmark did not advance after mutation",
+    )?;
+
+    let bookmark_session = client
+        .with_session(SessionConstraint::Bookmark(advanced_bookmark.clone()))
+        .map_err(worker_error)?;
+
+    let bookmark_read = bookmark_session
+        .find_first(d1_example_schema::query_with_variables::<RecordByMax>(
+            RecordByMaxVariables {
+                max_value: i64::MAX,
+            },
+        ))
+        .await
+        .map_err(worker_error)?;
+
+    ensure(
+        bookmark_read.id == inserted.id,
+        "bookmark-based session returned the wrong row",
+    )?;
+    ensure(
+        !bookmark_read.active,
+        "bookmark-based session did not observe the prior mutation",
+    )?;
+    ensure(
+        bookmark_read.note.as_deref() == Some("session-updated"),
+        "bookmark-based session did not observe the updated nullable value",
+    )?;
+
+    let first_unconstrained = client
+        .with_session(SessionConstraint::FirstUnconstrained)
+        .map_err(worker_error)?;
+
+    let unconstrained_first = first_unconstrained
+        .find_first(d1_example_schema::query_with_variables::<RecordByMax>(
+            RecordByMaxVariables {
+                max_value: i64::MAX,
+            },
+        ))
+        .await
+        .map_err(worker_error)?;
+
+    let unconstrained_second = first_unconstrained
+        .find_optional(d1_example_schema::query_with_variables::<RecordByMax>(
+            RecordByMaxVariables {
+                max_value: i64::MAX,
+            },
+        ))
+        .await
+        .map_err(worker_error)?
+        .ok_or_else(|| {
+            WorkerError::RustError(
+                "second sequential first-unconstrained read returned no row".to_owned(),
+            )
+        })?;
+
+    ensure(
+        unconstrained_first.id == inserted.id && unconstrained_second.id == inserted.id,
+        "sequential first-unconstrained reads returned inconsistent rows",
+    )?;
+
+    let unconstrained_bookmark = first_unconstrained
+        .latest_bookmark()
+        .map_err(worker_error)?
+        .ok_or_else(|| {
+            WorkerError::RustError(
+                "first-unconstrained session did not return a bookmark after reads".to_owned(),
+            )
+        })?;
+
+    Response::from_json(&json!({
+        "ok": true,
+        "insertedId": inserted.id.to_string(),
+        "initialBookmark": initial_bookmark.as_str(),
+        "advancedBookmark": advanced_bookmark.as_str(),
+        "bookmarkReadNote": bookmark_read.note,
+        "updatedCount": updated,
+        "unconstrainedBookmark": unconstrained_bookmark.as_str(),
+        "sequentialReadCount": 2,
     }))
 }
 

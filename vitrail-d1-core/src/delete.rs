@@ -3,13 +3,12 @@ use std::marker::PhantomData;
 use vitrail_sqlite_dialect::{
     CompiledStatement, SqliteFamilyFlavor, compile_delete_many_with_flavor,
 };
-use worker::d1::D1Database;
 
 use crate::query::{
     BoxFuture, QueryFilter, QueryVariableSet, QueryVariables, dialect_filter, dialect_variables,
 };
 use crate::statement::execute_changes;
-use crate::{Error, Schema, SchemaAccess};
+use crate::{D1Executor, Error, Schema, SchemaAccess};
 
 /// Runtime contract implemented by executable D1 delete values.
 pub trait DeleteSpec: Send + Sync {
@@ -18,7 +17,7 @@ pub trait DeleteSpec: Send + Sync {
     #[doc(hidden)]
     fn execute<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Self::Output, Error>>;
 }
 
@@ -119,7 +118,7 @@ where
 
     fn execute<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Self::Output, Error>> {
         Box::pin(async move {
             let filter = self.filter();
@@ -130,7 +129,7 @@ where
                 &self.variables,
             )?;
 
-            execute_changes(database, &statement).await
+            execute_changes(executor, &statement).await
         })
     }
 }

@@ -2154,6 +2154,7 @@ version = "0.0.12"
 dependencies = [
  "chrono",
  "futures-util",
+ "serde",
  "serde_json",
  "vitrail-sqlite-dialect",
  "worker",

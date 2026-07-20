@@ -1,15 +1,19 @@
 mod client;
 mod delete;
 mod error;
+mod executor;
 mod insert;
 mod query;
 mod row;
+mod session;
 mod statement;
 mod update;
 
 pub use client::VitrailClient;
 pub use delete::{DeleteMany, DeleteManyModel, DeleteSpec};
 pub use error::{DecodeError, Error, decode_error};
+#[doc(hidden)]
+pub use executor::D1Executor;
 pub use insert::{
     Insert, InsertFieldValue, InsertModel, InsertScalar, InsertSpec, InsertValue, InsertValueSet,
     InsertValues,
@@ -24,6 +28,7 @@ pub use query::{
     row_relation_json, row_value, schema_error,
 };
 pub use row::D1Row;
+pub use session::{Bookmark, SessionConstraint, VitrailSession};
 pub use update::{
     UpdateFieldValue, UpdateMany, UpdateManyModel, UpdateScalar, UpdateSpec, UpdateValue,
     UpdateValueSet, UpdateValues,

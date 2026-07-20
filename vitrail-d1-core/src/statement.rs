@@ -2,19 +2,19 @@ use std::sync::Arc;
 
 use chrono::SecondsFormat;
 use vitrail_sqlite_dialect::{BindingValue, CompiledStatement, OperationKind};
-use worker::d1::{D1Database, D1PreparedStatement};
+use worker::d1::D1PreparedStatement;
 use worker::js_sys::Uint8Array;
 use worker::wasm_bindgen::JsValue;
 
 use crate::row::D1RowMetadata;
-use crate::{D1Row, Error};
+use crate::{D1Executor, D1Row, Error};
 
 pub(crate) async fn execute_rows(
-    database: &D1Database,
+    executor: &dyn D1Executor,
     statement: &CompiledStatement,
 ) -> Result<Vec<D1Row>, Error> {
     let metadata = Arc::new(D1RowMetadata::new(statement.result_columns())?);
-    let prepared = prepare_statement(database, statement)?;
+    let prepared = prepare_statement(executor, statement)?;
     let raw_rows = prepared.raw_js_value().await?;
     let mut rows = Vec::with_capacity(raw_rows.len());
 
@@ -26,10 +26,10 @@ pub(crate) async fn execute_rows(
 }
 
 pub(crate) async fn execute_changes(
-    database: &D1Database,
+    executor: &dyn D1Executor,
     statement: &CompiledStatement,
 ) -> Result<u64, Error> {
-    let prepared = prepare_statement(database, statement)?;
+    let prepared = prepare_statement(executor, statement)?;
     let result = prepared.run().await?;
     let metadata = result.meta()?.ok_or(Error::MissingWriteMetadata {
         operation: operation_name(statement.operation()),
@@ -47,10 +47,10 @@ pub(crate) async fn execute_changes(
 }
 
 fn prepare_statement(
-    database: &D1Database,
+    executor: &dyn D1Executor,
     statement: &CompiledStatement,
 ) -> Result<D1PreparedStatement, Error> {
-    let prepared = database.prepare(statement.sql());
+    let prepared = executor.prepare(statement.sql());
 
     if statement.bindings().is_empty() {
         return Ok(prepared);

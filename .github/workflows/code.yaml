@@ -185,3 +185,4 @@ jobs:
       - name: "Run local D1 integration tests"
         run: |
           npm run test:d1:direct
+          npm run test:d1:sessions

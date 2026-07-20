@@ -1,5 +1,6 @@
 use std::error::Error as _;
 use std::fmt;
+use std::str::FromStr;
 use std::sync::OnceLock;
 
 use serde_json::json;
@@ -7,9 +8,9 @@ use serde_json::json;
 use crate::query::compile_query_statement;
 use crate::row::D1RowMetadata;
 use crate::{
-    Attribute, D1Row, Error, Field, FieldType, Insert, InsertModel, InsertValue, InsertValues,
-    Model, Query, QueryFilter, QueryModel, QuerySelection, QueryValue, QueryVariables, Schema,
-    SchemaAccess, decode_error, json_as_bool, json_as_bytes, json_as_i64,
+    Attribute, Bookmark, D1Row, Error, Field, FieldType, Insert, InsertModel, InsertValue,
+    InsertValues, Model, Query, QueryFilter, QueryModel, QuerySelection, QueryValue,
+    QueryVariables, Schema, SchemaAccess, decode_error, json_as_bool, json_as_bytes, json_as_i64,
 };
 
 struct TestSchema;
@@ -208,4 +209,51 @@ fn custom_decode_error_preserves_its_source() {
         error.source().map(ToString::to_string).as_deref(),
         Some("invalid custom string"),
     );
+}
+
+#[test]
+fn bookmark_parsing_preserves_opaque_non_empty_values() {
+    let bookmark =
+        Bookmark::from_str("opaque-bookmark-value").expect("non-empty bookmark should be accepted");
+
+    assert_eq!(bookmark.as_str(), "opaque-bookmark-value");
+    assert_eq!(bookmark.to_string(), "opaque-bookmark-value");
+    assert_eq!(
+        Bookmark::try_from("opaque-bookmark-value".to_owned())
+            .expect("owned bookmark should be accepted"),
+        bookmark,
+    );
+
+    let whitespace = Bookmark::try_from(" ")
+        .expect("bookmark contents must remain opaque rather than being trimmed");
+    assert_eq!(whitespace.as_str(), " ");
+}
+
+#[test]
+fn bookmark_parsing_rejects_empty_values() {
+    for error in [
+        Bookmark::from_str("").expect_err("empty parsed bookmark should be rejected"),
+        Bookmark::try_from(String::new()).expect_err("empty owned bookmark should be rejected"),
+        Bookmark::try_from("").expect_err("empty borrowed bookmark should be rejected"),
+    ] {
+        assert!(matches!(error, Error::InvalidBookmark(_)));
+        assert!(error.to_string().contains("bookmark must not be empty"));
+    }
+}
+
+#[test]
+fn bookmark_serde_representation_is_a_validated_string() {
+    let bookmark =
+        Bookmark::try_from("bookmark-json").expect("non-empty bookmark should be accepted");
+    let serialized = serde_json::to_string(&bookmark).expect("bookmark should serialize");
+
+    assert_eq!(serialized, r#""bookmark-json""#);
+    assert_eq!(
+        serde_json::from_str::<Bookmark>(&serialized).expect("bookmark should deserialize"),
+        bookmark,
+    );
+
+    let error = serde_json::from_str::<Bookmark>(r#""""#)
+        .expect_err("empty serialized bookmark should be rejected");
+    assert!(error.to_string().contains("bookmark must not be empty"));
 }

@@ -4,10 +4,9 @@ use std::marker::PhantomData;
 pub use futures_util::future::LocalBoxFuture as BoxFuture;
 use serde_json::Value as JsonValue;
 use vitrail_sqlite_dialect::{CompiledStatement, SqliteFamilyFlavor, compile_query_with_flavor};
-use worker::d1::D1Database;
 
 use crate::statement::execute_rows;
-use crate::{D1Row, Error, Schema, SchemaAccess};
+use crate::{D1Executor, D1Row, Error, Schema, SchemaAccess};
 
 /// Runtime contract implemented by executable D1 query values.
 pub trait QuerySpec: Send + Sync {
@@ -16,24 +15,24 @@ pub trait QuerySpec: Send + Sync {
     #[doc(hidden)]
     fn fetch_many<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Vec<Self::Output>, Error>>;
 
     #[doc(hidden)]
     fn fetch_optional<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Option<Self::Output>, Error>> {
-        Box::pin(async move { Ok(self.fetch_many(database).await?.into_iter().next()) })
+        Box::pin(async move { Ok(self.fetch_many(executor).await?.into_iter().next()) })
     }
 
     #[doc(hidden)]
     fn fetch_first<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Self::Output, Error>> {
         Box::pin(async move {
-            self.fetch_optional(database)
+            self.fetch_optional(executor)
                 .await?
                 .ok_or(Error::RowNotFound)
         })
@@ -637,12 +636,12 @@ where
 
     fn fetch_many<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Vec<Self::Output>, Error>> {
         Box::pin(async move {
             let selection = self.selection();
             let statement = compile_query_statement(S::schema(), &selection, &self.variables)?;
-            let rows = execute_rows(database, &statement).await?;
+            let rows = execute_rows(executor, &statement).await?;
             let mut values = Vec::with_capacity(rows.len());
             let root_prefix = selection.model;
 
@@ -656,14 +655,14 @@ where
 
     fn fetch_optional<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Option<Self::Output>, Error>> {
         Box::pin(async move {
             let mut selection = self.selection();
             selection.limit = Some(QueryPagination::value(1));
 
             let statement = compile_query_statement(S::schema(), &selection, &self.variables)?;
-            let row = execute_rows(database, &statement).await?.into_iter().next();
+            let row = execute_rows(executor, &statement).await?.into_iter().next();
             let root_prefix = selection.model;
 
             row.map(|row| T::from_row(&row, root_prefix)).transpose()

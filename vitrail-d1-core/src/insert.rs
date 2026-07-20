@@ -3,11 +3,10 @@ use std::marker::PhantomData;
 
 use serde_json::Value as JsonValue;
 use vitrail_sqlite_dialect::{CompiledStatement, SqliteFamilyFlavor, compile_insert_with_flavor};
-use worker::d1::D1Database;
 
 use crate::query::{BoxFuture, StringValueType, schema_error};
 use crate::statement::execute_rows;
-use crate::{D1Row, Error, Schema, SchemaAccess};
+use crate::{D1Executor, D1Row, Error, Schema, SchemaAccess};
 
 /// Runtime contract implemented by executable D1 insert values.
 pub trait InsertSpec: Send + Sync {
@@ -16,7 +15,7 @@ pub trait InsertSpec: Send + Sync {
     #[doc(hidden)]
     fn execute<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Self::Output, Error>>;
 }
 
@@ -325,7 +324,7 @@ where
 
     fn execute<'a>(
         &'a self,
-        database: &'a D1Database,
+        executor: &'a dyn D1Executor,
     ) -> BoxFuture<'a, Result<Self::Output, Error>> {
         Box::pin(async move {
             let statement = compile_insert_statement(
@@ -334,7 +333,7 @@ where
                 &self.values,
                 T::returning_fields(),
             )?;
-            let rows = execute_rows(database, &statement).await?;
+            let rows = execute_rows(executor, &statement).await?;
 
             if rows.len() != 1 {
                 return Err(Error::decode(format!(

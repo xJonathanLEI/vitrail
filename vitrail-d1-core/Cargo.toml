@@ -10,6 +10,7 @@ description = "Core Cloudflare D1 runtime support for Vitrail"
 [dependencies]
 chrono.workspace = true
 futures-util.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 vitrail-sqlite-dialect.workspace = true
 worker.workspace = true
