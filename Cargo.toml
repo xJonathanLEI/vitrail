@@ -15,6 +15,7 @@ members = [
     "examples/workspace/example-app",
     "examples/workspace/example-db",
     "examples/workspace/d1-worker",
+    "tests/d1",
 ]
 resolver = "3"
 

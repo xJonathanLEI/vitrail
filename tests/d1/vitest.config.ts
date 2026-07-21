@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 const cacheDir = fileURLToPath(
-	new URL("../../../node_modules/.vite/d1-worker", import.meta.url),
+	new URL("../../node_modules/.vite/d1-worker", import.meta.url),
 );
 const root = fileURLToPath(new URL(".", import.meta.url));
 const globalSetup = fileURLToPath(

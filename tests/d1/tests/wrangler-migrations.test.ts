@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 
 const fixtureDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repositoryRoot = resolve(fixtureDirectory, "..", "..", "..");
+const repositoryRoot = resolve(fixtureDirectory, "..", "..");
 const migrationFixtureDirectory = join(fixtureDirectory, "migrations");
 const wranglerConfigFixture = join(
 	fixtureDirectory,

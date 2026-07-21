@@ -24,12 +24,8 @@ export default function globalSetup(): void {
 
 	writeSetupMessage("Building the D1 integration-test worker");
 
-	execFileSync(
-		"worker-build",
-		["--release", "--no-panic-recovery", "--features", "integration-test"],
-		{
-			cwd: fixtureDirectory,
-			stdio: "inherit",
-		},
-	);
+	execFileSync("worker-build", ["--release", "--no-panic-recovery"], {
+		cwd: fixtureDirectory,
+		stdio: "inherit",
+	});
 }

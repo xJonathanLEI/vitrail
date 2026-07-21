@@ -405,5 +405,5 @@ fn read_nested_migrations(root: &Path) -> Vec<NestedMigration> {
 }
 
 fn checked_fixture_directory() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/workspace/d1-worker/migrations")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/d1/migrations")
 }

@@ -3,3 +3,5 @@
 /.wrangler
 /examples/workspace/d1-worker/build
 /examples/workspace/d1-worker/.wrangler
+/tests/d1/build
+/tests/d1/.wrangler

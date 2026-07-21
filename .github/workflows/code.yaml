@@ -182,9 +182,9 @@ jobs:
         run: |
           cargo nextest run
 
-      - name: "Check D1 WebAssembly target"
+      - name: "Check D1 WebAssembly targets"
         run: |
-          cargo check -p vitrail-d1 --target wasm32-unknown-unknown
+          cargo check -p vitrail-d1 -p vitrail-d1-worker --target wasm32-unknown-unknown
 
       - name: "Run local D1 integration tests"
         run: |
