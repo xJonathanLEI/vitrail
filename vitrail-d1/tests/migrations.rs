@@ -71,6 +71,58 @@ schema! {
     }
 }
 
+schema! {
+    name wide_relation_migration_schema
+
+    tables {
+        external: ["scalar_record", "author", "post"]
+    }
+
+    model wide_parent {
+        id       BigInt @id
+        children wide_child[]
+    }
+
+    model wide_child {
+        id        BigInt @id
+        parent_id BigInt
+        value_01  BigInt
+        value_02  BigInt
+        value_03  BigInt
+        value_04  BigInt
+        value_05  BigInt
+        value_06  BigInt
+        value_07  BigInt
+        value_08  BigInt
+        value_09  BigInt
+        value_10  BigInt
+        value_11  BigInt
+        value_12  BigInt
+        value_13  BigInt
+        value_14  BigInt
+        value_15  BigInt
+        value_16  BigInt
+        value_17  BigInt
+        value_18  BigInt
+        value_19  BigInt
+        value_20  BigInt
+        value_21  BigInt
+        value_22  BigInt
+        value_23  BigInt
+        value_24  BigInt
+        value_25  BigInt
+        value_26  BigInt
+        value_27  BigInt
+        value_28  BigInt
+        value_29  BigInt
+        value_30  BigInt
+        value_31  BigInt
+        value_32  BigInt
+        value_33  BigInt
+        parent    wide_parent @relation(fields: [parent_id], references: [id])
+    }
+}
+
 static NEXT_TEMPORARY_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 struct TemporaryDirectory {
@@ -214,6 +266,62 @@ async fn generates_nested_d1_migrations_and_replans_to_an_empty_diff() {
         assert_eq!(plan.to_sql(), "");
     }
 
+    let wide_relation = generator
+        .generate_migration::<wide_relation_migration_schema::Schema>("Wide Relation Fixture")
+        .await
+        .expect("wide-relation D1 migration should be generated")
+        .expect("the wide-relation schema should require a migration");
+
+    assert!(
+        wide_relation
+            .migration()
+            .name()
+            .ends_with("_wide_relation_fixture"),
+        "migration name should use shared sanitization"
+    );
+    assert!(
+        !wide_relation.sql().contains("PRAGMA defer_foreign_keys"),
+        "adding the wide relation tables should not require destructive migration pragmas"
+    );
+    assert!(
+        !wide_relation
+            .sql()
+            .to_ascii_lowercase()
+            .contains("pragma foreign_keys"),
+        "D1 migrations must not emit ineffective foreign-key toggles"
+    );
+    assert!(
+        wide_relation.sql().contains("CREATE TABLE \"wide_parent\""),
+        "wide-relation migration should create the parent table"
+    );
+    assert!(
+        wide_relation.sql().contains("CREATE TABLE \"wide_child\""),
+        "wide-relation migration should create the child table"
+    );
+    assert!(
+        wide_relation.sql().contains("\"value_33\" BIGINT NOT NULL"),
+        "wide-relation migration should include every nested result column"
+    );
+    assert!(
+        wide_relation
+            .sql()
+            .contains("CONSTRAINT \"wide_child_parent_id_fkey\""),
+        "wide-relation migration should include the parent foreign key"
+    );
+
+    for _ in 0..2 {
+        let plan = generator
+            .plan_migration::<wide_relation_migration_schema::Schema>()
+            .await
+            .expect("the wide-relation migration should apply atomically to the shadow database");
+
+        assert!(
+            plan.is_empty(),
+            "replanning the wide-relation schema should produce an empty diff"
+        );
+        assert_eq!(plan.to_sql(), "");
+    }
+
     let generated_scripts = read_nested_migrations(temporary_directory.path());
     let checked_scripts = read_nested_migrations(&checked_fixture_directory());
 
@@ -222,14 +330,22 @@ async fn generates_nested_d1_migrations_and_replans_to_an_empty_diff() {
             .iter()
             .map(|migration| migration.slug.as_str())
             .collect::<Vec<_>>(),
-        ["initial_schema", "require_post_title"],
+        [
+            "initial_schema",
+            "require_post_title",
+            "wide_relation_fixture",
+        ],
     );
     assert_eq!(
         checked_scripts
             .iter()
             .map(|migration| migration.slug.as_str())
             .collect::<Vec<_>>(),
-        ["initial_schema", "require_post_title"],
+        [
+            "initial_schema",
+            "require_post_title",
+            "wide_relation_fixture",
+        ],
     );
     assert_eq!(
         generated_scripts

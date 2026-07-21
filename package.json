@@ -10,9 +10,11 @@
     "generate:prisma-fixtures:postgres": "node scripts/prisma-fixtures.mjs postgres",
     "generate:prisma-fixtures:sqlite": "node scripts/prisma-fixtures.mjs sqlite",
     "test:d1": "vitest run --config examples/workspace/d1-worker/vitest.config.ts",
-    "test:d1:direct": "npm run test:d1 -- tests/direct-crud.test.ts",
-    "test:d1:sessions": "npm run test:d1 -- tests/sessions.test.ts",
-    "test:d1:batches": "npm run test:d1 -- tests/atomic-batches.test.ts"
+    "test:d1:direct": "npm run test:d1 -- --project miniflare tests/direct-crud.test.ts",
+    "test:d1:sessions": "npm run test:d1 -- --project miniflare tests/sessions.test.ts",
+    "test:d1:batches": "npm run test:d1 -- --project miniflare tests/atomic-batches.test.ts",
+    "test:d1:miniflare": "npm run test:d1 -- --project miniflare",
+    "test:d1:wrangler": "npm run test:d1 -- --project wrangler"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",
@@ -20,6 +22,7 @@
     "miniflare": "4.20260714.0",
     "prisma": "7.5.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wrangler": "4.112.0"
   }
 }

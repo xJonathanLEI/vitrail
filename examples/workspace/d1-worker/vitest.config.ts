@@ -17,11 +17,26 @@ export default defineConfig({
 		fileParallelism: false,
 		hookTimeout: 600_000,
 		testTimeout: 600_000,
-		globalSetup,
-		include: [
-			"tests/atomic-batches.test.ts",
-			"tests/direct-crud.test.ts",
-			"tests/sessions.test.ts",
+		projects: [
+			{
+				extends: true,
+				test: {
+					name: "miniflare",
+					globalSetup: [globalSetup],
+					include: [
+						"tests/atomic-batches.test.ts",
+						"tests/direct-crud.test.ts",
+						"tests/sessions.test.ts",
+					],
+				},
+			},
+			{
+				extends: true,
+				test: {
+					name: "wrangler",
+					include: ["tests/wrangler-migrations.test.ts"],
+				},
+			},
 		],
 	},
 });

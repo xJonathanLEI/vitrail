@@ -2,7 +2,7 @@ use serde_json::{Value as JsonValue, json};
 #[cfg(feature = "integration-test")]
 use vitrail_d1::{
     DeleteMany, InsertInput, InsertResult, QueryVariables, SessionConstraint, UpdateData,
-    UpdateMany,
+    UpdateMany, query,
 };
 use vitrail_d1::{Error as VitrailError, QueryResult, StringValueType, VitrailClient, schema};
 use worker::{
@@ -126,6 +126,155 @@ struct RecordIdOnly {
 }
 
 #[cfg(feature = "integration-test")]
+#[derive(Clone, Debug, QueryVariables)]
+struct PostIdVariables {
+    post_id: i64,
+}
+
+#[cfg(feature = "integration-test")]
+#[derive(Clone, Debug, QueryResult)]
+#[vitrail(schema = crate::d1_example_schema::Schema, model = author)]
+struct AuthorSummary {
+    id: i64,
+    name: String,
+}
+
+#[cfg(feature = "integration-test")]
+#[derive(Clone, Debug, QueryResult)]
+#[vitrail(
+    schema = crate::d1_example_schema::Schema,
+    model = post,
+    variables = PostIdVariables,
+    where(id = eq(post_id))
+)]
+struct PostWithAuthor {
+    id: i64,
+    title: String,
+    #[vitrail(include)]
+    author: AuthorSummary,
+}
+
+#[cfg(feature = "integration-test")]
+#[derive(Clone, Debug, QueryVariables)]
+struct RecordLabelVariables {
+    label: RecordLabel,
+}
+
+#[cfg(feature = "integration-test")]
+#[allow(dead_code)]
+#[derive(Clone, Debug, QueryResult)]
+#[vitrail(
+    schema = crate::d1_example_schema::Schema,
+    model = scalar_record,
+    variables = RecordLabelVariables,
+    where(label = eq(label))
+)]
+struct RecordByLabel {
+    id: i64,
+    min_value: i64,
+}
+
+#[cfg(feature = "integration-test")]
+schema! {
+    name d1_wide_test_schema
+
+    model wide_parent {
+        id       BigInt @id
+        children wide_child[]
+    }
+
+    model wide_child {
+        id        BigInt @id
+        parent_id BigInt
+        value_01  BigInt
+        value_02  BigInt
+        value_03  BigInt
+        value_04  BigInt
+        value_05  BigInt
+        value_06  BigInt
+        value_07  BigInt
+        value_08  BigInt
+        value_09  BigInt
+        value_10  BigInt
+        value_11  BigInt
+        value_12  BigInt
+        value_13  BigInt
+        value_14  BigInt
+        value_15  BigInt
+        value_16  BigInt
+        value_17  BigInt
+        value_18  BigInt
+        value_19  BigInt
+        value_20  BigInt
+        value_21  BigInt
+        value_22  BigInt
+        value_23  BigInt
+        value_24  BigInt
+        value_25  BigInt
+        value_26  BigInt
+        value_27  BigInt
+        value_28  BigInt
+        value_29  BigInt
+        value_30  BigInt
+        value_31  BigInt
+        value_32  BigInt
+        value_33  BigInt
+        parent    wide_parent @relation(fields: [parent_id], references: [id])
+    }
+}
+
+#[cfg(feature = "integration-test")]
+#[allow(dead_code)]
+#[derive(Clone, Debug, QueryResult)]
+#[vitrail(schema = crate::d1_wide_test_schema::Schema, model = wide_child)]
+struct WideChildResult {
+    id: i64,
+    parent_id: i64,
+    value_01: i64,
+    value_02: i64,
+    value_03: i64,
+    value_04: i64,
+    value_05: i64,
+    value_06: i64,
+    value_07: i64,
+    value_08: i64,
+    value_09: i64,
+    value_10: i64,
+    value_11: i64,
+    value_12: i64,
+    value_13: i64,
+    value_14: i64,
+    value_15: i64,
+    value_16: i64,
+    value_17: i64,
+    value_18: i64,
+    value_19: i64,
+    value_20: i64,
+    value_21: i64,
+    value_22: i64,
+    value_23: i64,
+    value_24: i64,
+    value_25: i64,
+    value_26: i64,
+    value_27: i64,
+    value_28: i64,
+    value_29: i64,
+    value_30: i64,
+    value_31: i64,
+    value_32: i64,
+    value_33: i64,
+}
+
+#[cfg(feature = "integration-test")]
+#[derive(Clone, Debug, QueryResult)]
+#[vitrail(schema = crate::d1_wide_test_schema::Schema, model = wide_parent)]
+struct WideParentWithChildren {
+    id: i64,
+    #[vitrail(include)]
+    children: Vec<WideChildResult>,
+}
+
+#[cfg(feature = "integration-test")]
 #[derive(Clone, Debug, InsertInput)]
 #[vitrail(schema = crate::d1_example_schema::Schema, model = scalar_record)]
 struct NewScalarRecord {
@@ -228,6 +377,10 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> WorkerResul
         #[cfg(feature = "integration-test")]
         "/__test/crud" => run_crud_probe(&env).await,
         #[cfg(feature = "integration-test")]
+        "/__test/query-coverage" => run_query_coverage_probe(&env).await,
+        #[cfg(feature = "integration-test")]
+        "/__test/direct-decode-error" => run_direct_decode_error_probe(&env).await,
+        #[cfg(feature = "integration-test")]
         "/__test/sessions" => run_session_probe(&env).await,
         #[cfg(feature = "integration-test")]
         "/__test/atomic-batches" => run_atomic_batch_probe(&env).await,
@@ -302,12 +455,16 @@ async fn setup_test_schema(env: &Env) -> WorkerResult<Response> {
         include_str!("../migrations/20260701000000_initial_schema/migration.sql");
     const REQUIRE_POST_TITLE_MIGRATION: &str =
         include_str!("../migrations/20260701000001_require_post_title/migration.sql");
+    const WIDE_RELATION_MIGRATION: &str =
+        include_str!("../migrations/20260701000002_wide_relation_fixture/migration.sql");
 
     let database = env.d1("DB")?;
 
     database
         .exec(
-            r#"DROP TABLE IF EXISTS "post";
+            r#"DROP TABLE IF EXISTS "wide_child";
+DROP TABLE IF EXISTS "wide_parent";
+DROP TABLE IF EXISTS "post";
 DROP TABLE IF EXISTS "author";
 DROP TABLE IF EXISTS "scalar_record";"#,
         )
@@ -317,6 +474,9 @@ DROP TABLE IF EXISTS "scalar_record";"#,
         .await?;
     database
         .exec(&d1_binding_setup_sql(REQUIRE_POST_TITLE_MIGRATION))
+        .await?;
+    database
+        .exec(&d1_binding_setup_sql(WIDE_RELATION_MIGRATION))
         .await?;
 
     Response::from_json(&json!({ "ok": true }))
@@ -513,6 +673,290 @@ async fn run_crud_probe(env: &Env) -> WorkerResult<Response> {
         },
         "updatedCount": updated,
         "deletedCount": deleted,
+    }))
+}
+
+#[cfg(feature = "integration-test")]
+async fn run_query_coverage_probe(env: &Env) -> WorkerResult<Response> {
+    const WIDE_VALUE_COUNT: usize = 33;
+
+    let database = env.d1("DB")?;
+    let author_id = i64::MAX - 1;
+    let primary_post_id = i64::MIN;
+    let paginated_post_id = i64::MIN + 1;
+    let wide_parent_id = i64::MAX;
+    let wide_child_id = i64::MIN;
+
+    let relation_sql = format!(
+        r#"INSERT INTO "author" ("id", "name") VALUES ({author_id}, 'Boundary Author');
+INSERT INTO "post" ("id", "title", "author_id") VALUES ({primary_post_id}, 'Zulu post', {author_id});
+INSERT INTO "post" ("id", "title", "author_id") VALUES ({paginated_post_id}, 'Alpha post', {author_id});"#,
+    );
+    database.exec(&relation_sql).await?;
+
+    let wide_columns = (1..=WIDE_VALUE_COUNT)
+        .map(|index| format!("\"value_{index:02}\""))
+        .collect::<Vec<_>>();
+    let wide_values = (1..=WIDE_VALUE_COUNT)
+        .map(|index| if index % 2 == 0 { i64::MAX } else { i64::MIN }.to_string())
+        .collect::<Vec<_>>();
+    let wide_sql = format!(
+        r#"INSERT INTO "wide_parent" ("id") VALUES ({wide_parent_id});
+INSERT INTO "wide_child" ("id", "parent_id", {}) VALUES ({wide_child_id}, {wide_parent_id}, {});"#,
+        wide_columns.join(", "),
+        wide_values.join(", "),
+    );
+    database.exec(&wide_sql).await?;
+
+    let client = VitrailClient::new(database);
+
+    let post_with_author = client
+        .find_first(d1_example_schema::query_with_variables::<PostWithAuthor>(
+            PostIdVariables {
+                post_id: primary_post_id,
+            },
+        ))
+        .await
+        .map_err(worker_error)?;
+
+    ensure(
+        post_with_author.id == i64::MIN,
+        "model-first relation query changed the root i64::MIN value",
+    )?;
+    ensure(
+        post_with_author.title == "Zulu post",
+        "model-first relation query returned the wrong post",
+    )?;
+    ensure(
+        post_with_author.author.id == author_id,
+        "nested to-one relation changed the exact author ID",
+    )?;
+    ensure(
+        post_with_author.author.name == "Boundary Author",
+        "nested to-one relation returned the wrong author",
+    )?;
+
+    let helper_authors = client
+        .find_many(query! {
+            crate::d1_example_schema,
+            author {
+                select: {
+                    id: true,
+                    name: true,
+                },
+                include: {
+                    posts: {
+                        select: {
+                            id: true,
+                            title: true,
+                        },
+                        order_by: [
+                            { title: desc },
+                        ],
+                        skip: 1_i64,
+                        limit: 1_i64,
+                    },
+                },
+                where: {
+                    id: {
+                        eq: author_id
+                    }
+                },
+            }
+        })
+        .await
+        .map_err(worker_error)?;
+
+    ensure(
+        helper_authors.len() == 1,
+        "helper-macro relation query returned the wrong author count",
+    )?;
+    let helper_author = &helper_authors[0];
+    ensure(
+        helper_author.id == author_id,
+        "helper-macro relation query changed the exact root author ID",
+    )?;
+    ensure(
+        helper_author.name == "Boundary Author",
+        "helper-macro relation query returned the wrong author name",
+    )?;
+    ensure(
+        helper_author.posts.len() == 1,
+        "nested ordering and pagination returned the wrong post count",
+    )?;
+    ensure(
+        helper_author.posts[0].id == paginated_post_id
+            && helper_author.posts[0].title == "Alpha post",
+        "nested ordering and pagination returned the wrong post",
+    )?;
+
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-14T16:02:03.123456Z")
+        .map_err(|error| WorkerError::RustError(error.to_string()))?
+        .with_timezone(&chrono::Utc);
+
+    for (label, note, min_value, max_value) in [
+        ("alpha-null", None, 11_i64, 501_i64),
+        ("charlie-null", None, 12_i64, 502_i64),
+        ("bravo-present", Some("present"), 13_i64, 503_i64),
+    ] {
+        let mut record = batch_test_record(label, min_value, max_value, created_at);
+        record.note = note.map(ToOwned::to_owned);
+
+        client
+            .insert(d1_example_schema::insert::<InsertedScalarRecord>(record))
+            .await
+            .map_err(worker_error)?;
+    }
+
+    let null_records = client
+        .find_many(query! {
+            crate::d1_example_schema,
+            scalar_record {
+                select: {
+                    id: true,
+                    label: true,
+                    note: true,
+                },
+                where: {
+                    note: null
+                },
+                order_by: [
+                    { label: asc },
+                ],
+                skip: 1_i64,
+                limit: 1_i64,
+            }
+        })
+        .await
+        .map_err(worker_error)?;
+
+    ensure(
+        null_records.len() == 1,
+        "null filtering with ordering and pagination returned the wrong row count",
+    )?;
+    ensure(
+        null_records[0].label.as_str() == "charlie-null",
+        "custom string ordering or pagination returned the wrong row",
+    )?;
+    ensure(
+        null_records[0].note.is_none(),
+        "null filtering returned a non-null value",
+    )?;
+
+    let accepted_bindings = client
+        .find_many(d1_example_schema::query_with_variables::<RecordIdOnly>(
+            RecordIdsVariables {
+                record_ids: (0_i64..100_i64).collect(),
+            },
+        ))
+        .await
+        .map_err(worker_error)?;
+    ensure(
+        accepted_bindings.len() == 3,
+        "direct query with 100 bindings returned the wrong rows",
+    )?;
+
+    let rejected_binding_error = match client
+        .find_many(d1_example_schema::query_with_variables::<RecordIdOnly>(
+            RecordIdsVariables {
+                record_ids: (0_i64..101_i64).collect(),
+            },
+        ))
+        .await
+    {
+        Ok(_) => {
+            return Err(WorkerError::RustError(
+                "direct query accepted a statement with 101 bindings".to_owned(),
+            ));
+        }
+        Err(error) => error,
+    };
+    ensure(
+        matches!(&rejected_binding_error, VitrailError::Compile(_)),
+        "direct query returned the wrong error for 101 bindings",
+    )?;
+
+    let wide_query = d1_wide_test_schema::query::<WideParentWithChildren>();
+    let compiled_wide_sql = wide_query.to_sql().map_err(worker_error)?;
+    let json_insert_count = compiled_wide_sql.match_indices("json_insert(").count();
+    ensure(
+        json_insert_count == 3,
+        "wide nested query did not use the expected D1 JSON chunking",
+    )?;
+
+    let wide_parent = client.find_first(wide_query).await.map_err(worker_error)?;
+    ensure(
+        wide_parent.id == i64::MAX,
+        "wide relation query changed the root i64::MAX value",
+    )?;
+    ensure(
+        wide_parent.children.len() == 1,
+        "wide relation query returned the wrong child count",
+    )?;
+
+    let wide_child = &wide_parent.children[0];
+    ensure(
+        wide_child.id == i64::MIN && wide_child.parent_id == i64::MAX,
+        "wide nested relation changed exact integer IDs",
+    )?;
+    ensure(
+        wide_child.value_01 == i64::MIN
+            && wide_child.value_02 == i64::MAX
+            && wide_child.value_33 == i64::MIN,
+        "wide nested relation changed exact integer field values",
+    )?;
+
+    Response::from_json(&json!({
+        "ok": true,
+        "modelFirstPostId": post_with_author.id.to_string(),
+        "nestedAuthorId": post_with_author.author.id.to_string(),
+        "helperAuthorId": helper_author.id.to_string(),
+        "paginatedPostId": helper_author.posts[0].id.to_string(),
+        "nullLabel": null_records[0].label.as_str(),
+        "acceptedBindingCount": 100,
+        "acceptedBindingRows": accepted_bindings.len(),
+        "rejectedBindingError": rejected_binding_error.to_string(),
+        "wideParentId": wide_parent.id.to_string(),
+        "wideChildId": wide_child.id.to_string(),
+        "wideJsonInsertCount": json_insert_count,
+    }))
+}
+
+#[cfg(feature = "integration-test")]
+async fn run_direct_decode_error_probe(env: &Env) -> WorkerResult<Response> {
+    let database = env.d1("DB")?;
+
+    database
+        .exec(
+            r#"INSERT INTO "scalar_record" ("min_value", "max_value", "active", "score", "label", "payload", "created_at", "metadata", "note") VALUES ('not-an-integer', 1, 1, 1.0, 'malformed-direct-row', X'00', '2026-07-14T16:03:04.000000Z', json('{}'), NULL);"#,
+        )
+        .await?;
+
+    let client = VitrailClient::new(database);
+    let decode_error = match client
+        .find_many(d1_example_schema::query_with_variables::<RecordByLabel>(
+            RecordLabelVariables {
+                label: RecordLabel::new("malformed-direct-row"),
+            },
+        ))
+        .await
+    {
+        Ok(_) => {
+            return Err(WorkerError::RustError(
+                "direct query decoded a malformed integer row".to_owned(),
+            ));
+        }
+        Err(error) => error,
+    };
+
+    ensure(
+        matches!(&decode_error, VitrailError::Decode(_)),
+        "malformed direct row returned a non-decoding error",
+    )?;
+
+    Response::from_json(&json!({
+        "ok": true,
+        "error": decode_error.to_string(),
     }))
 }
 
