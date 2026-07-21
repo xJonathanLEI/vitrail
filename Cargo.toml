@@ -12,9 +12,9 @@ members = [
     "vitrail-sqlite-core",
     "vitrail-sqlite-dialect",
     "vitrail-sqlite-macros",
+    "examples/d1-worker",
     "examples/workspace/example-app",
     "examples/workspace/example-db",
-    "examples/workspace/d1-worker",
     "tests/d1",
 ]
 resolver = "3"

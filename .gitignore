@@ -1,7 +1,7 @@
 /target
 /node_modules
 /.wrangler
-/examples/workspace/d1-worker/build
-/examples/workspace/d1-worker/.wrangler
+/examples/d1-worker/build
+/examples/d1-worker/.wrangler
 /tests/d1/build
 /tests/d1/.wrangler

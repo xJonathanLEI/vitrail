@@ -1,5 +1,5 @@
 [package]
-name = "vitrail-d1-worker"
+name = "vitrail-d1-worker-example"
 version = "0.0.0"
 publish = false
 edition = "2024"
