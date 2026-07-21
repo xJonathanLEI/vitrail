@@ -1,7 +1,7 @@
 use serde_json::{Value as JsonValue, json};
 use vitrail_d1::{
     DeleteMany, InsertInput, InsertResult, QueryVariables, SessionConstraint, UpdateData,
-    UpdateMany, query,
+    UpdateMany, delete, insert, query, update,
 };
 use vitrail_d1::{Error as VitrailError, QueryResult, StringValueType, VitrailClient, schema};
 use worker::{
@@ -355,6 +355,7 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> WorkerResul
         "/__test/direct-decode-error" => run_direct_decode_error_probe(&env).await,
         "/__test/sessions" => run_session_probe(&env).await,
         "/__test/atomic-batches" => run_atomic_batch_probe(&env).await,
+        "/__test/high-level-batches" => run_high_level_batch_probe(&env).await,
         "/__test/atomic-batch-rollback" => run_atomic_batch_rollback_probe(&env).await,
         "/__test/atomic-batch-decode-error" => run_atomic_batch_decode_error_probe(&env).await,
         _ => Response::error("Not found", 404),
@@ -1317,6 +1318,289 @@ async fn run_atomic_batch_probe(env: &Env) -> WorkerResult<Response> {
         "acceptedBindingRows": accepted_binding_rows.len(),
         "acceptedBindingIdSum": accepted_binding_id_sum.to_string(),
         "rejectedBindingError": rejected_binding_error.to_string(),
+    }))
+}
+
+async fn run_high_level_batch_probe(env: &Env) -> WorkerResult<Response> {
+    const DIRECT_NAME_BEFORE: &str = "high-level-direct-before";
+    const DIRECT_NAME_AFTER: &str = "high-level-direct-after";
+    const SESSION_NAME: &str = "high-level-session-author";
+    const QUEUE_FAILURE_NAME: &str = "high-level-queue-failure";
+
+    let client = VitrailClient::new(env.d1("DB")?);
+
+    let (direct_inserted, direct_before, direct_updated_count, direct_after, direct_deleted_count) =
+        client
+            .batch(|batch| {
+                (
+                    batch.insert(insert! {
+                        crate::d1_test_schema,
+                        author {
+                            data: {
+                                name: DIRECT_NAME_BEFORE.to_owned(),
+                            },
+                        }
+                    }),
+                    batch.find_first(query! {
+                        crate::d1_test_schema,
+                        author {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                            where: {
+                                name: {
+                                    eq: DIRECT_NAME_BEFORE.to_owned(),
+                                },
+                            },
+                        }
+                    }),
+                    batch.update_many(update! {
+                        crate::d1_test_schema,
+                        author {
+                            data: {
+                                name: DIRECT_NAME_AFTER.to_owned(),
+                            },
+                            where: {
+                                name: {
+                                    eq: DIRECT_NAME_BEFORE.to_owned(),
+                                },
+                            },
+                        }
+                    }),
+                    batch.find_first(query! {
+                        crate::d1_test_schema,
+                        author {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                            where: {
+                                name: {
+                                    eq: DIRECT_NAME_AFTER.to_owned(),
+                                },
+                            },
+                        }
+                    }),
+                    batch.delete_many(delete! {
+                        crate::d1_test_schema,
+                        author {
+                            where: {
+                                name: {
+                                    eq: DIRECT_NAME_AFTER.to_owned(),
+                                },
+                            },
+                        }
+                    }),
+                )
+            })
+            .await
+            .map_err(worker_error)?;
+
+    ensure(
+        direct_inserted.name == DIRECT_NAME_BEFORE,
+        "high-level batch insert returned the wrong author name",
+    )?;
+    ensure(
+        direct_before.id == direct_inserted.id && direct_before.name == DIRECT_NAME_BEFORE,
+        "high-level batch first read did not observe its preceding insert",
+    )?;
+    ensure(
+        direct_updated_count == 1,
+        "high-level batch update did not report one changed row",
+    )?;
+    ensure(
+        direct_after.id == direct_inserted.id && direct_after.name == DIRECT_NAME_AFTER,
+        "high-level batch second read did not observe its preceding update",
+    )?;
+    ensure(
+        direct_deleted_count == 1,
+        "high-level batch delete did not report one changed row",
+    )?;
+
+    let direct_remaining = client
+        .find_many(query! {
+            crate::d1_test_schema,
+            author {
+                select: {
+                    id: true,
+                },
+                where: {
+                    id: {
+                        eq: direct_inserted.id,
+                    },
+                },
+            }
+        })
+        .await
+        .map_err(worker_error)?;
+    ensure(
+        direct_remaining.is_empty(),
+        "high-level batch delete left the direct-client author in the database",
+    )?;
+
+    let session = client
+        .with_session(SessionConstraint::FirstPrimary)
+        .map_err(worker_error)?;
+    let (session_inserted, session_queried, session_deleted_count) = session
+        .batch(|batch| {
+            (
+                batch.insert(insert! {
+                    crate::d1_test_schema,
+                    author {
+                        data: {
+                            name: SESSION_NAME.to_owned(),
+                        },
+                    }
+                }),
+                batch.find_first(query! {
+                    crate::d1_test_schema,
+                    author {
+                        select: {
+                            id: true,
+                            name: true,
+                        },
+                        where: {
+                            name: {
+                                eq: SESSION_NAME.to_owned(),
+                            },
+                        },
+                    }
+                }),
+                batch.delete_many(delete! {
+                    crate::d1_test_schema,
+                    author {
+                        where: {
+                            name: {
+                                eq: SESSION_NAME.to_owned(),
+                            },
+                        },
+                    }
+                }),
+            )
+        })
+        .await
+        .map_err(worker_error)?;
+
+    ensure(
+        session_inserted.name == SESSION_NAME,
+        "high-level session batch insert returned the wrong author name",
+    )?;
+    ensure(
+        session_queried.id == session_inserted.id && session_queried.name == SESSION_NAME,
+        "high-level session batch query did not observe its preceding insert",
+    )?;
+    ensure(
+        session_deleted_count == 1,
+        "high-level session batch delete did not report one changed row",
+    )?;
+
+    let session_bookmark = session
+        .latest_bookmark()
+        .map_err(worker_error)?
+        .ok_or_else(|| {
+            WorkerError::RustError("high-level session batch did not produce a bookmark".to_owned())
+        })?;
+    ensure(
+        !session_bookmark.as_str().is_empty(),
+        "high-level session batch returned an empty bookmark",
+    )?;
+
+    let session_remaining = session
+        .find_many(query! {
+            crate::d1_test_schema,
+            author {
+                select: {
+                    id: true,
+                },
+                where: {
+                    id: {
+                        eq: session_inserted.id,
+                    },
+                },
+            }
+        })
+        .await
+        .map_err(worker_error)?;
+    ensure(
+        session_remaining.is_empty(),
+        "high-level session batch delete left its author in the database",
+    )?;
+
+    let queue_error = match client
+        .batch(|batch| {
+            (
+                batch.insert(insert! {
+                    crate::d1_test_schema,
+                    author {
+                        data: {
+                            name: QUEUE_FAILURE_NAME.to_owned(),
+                        },
+                    }
+                }),
+                batch.find_many(d1_test_schema::query_with_variables::<RecordIdOnly>(
+                    RecordIdsVariables {
+                        record_ids: (0_i64..101_i64).collect(),
+                    },
+                )),
+            )
+        })
+        .await
+    {
+        Ok(_) => {
+            return Err(WorkerError::RustError(
+                "high-level batch accepted a statement with 101 bindings".to_owned(),
+            ));
+        }
+        Err(error) => error,
+    };
+
+    ensure(
+        matches!(&queue_error, VitrailError::Compile(_)),
+        "high-level batch returned the wrong error for a queue-time compilation failure",
+    )?;
+
+    let queue_failure_remaining = client
+        .find_many(query! {
+            crate::d1_test_schema,
+            author {
+                select: {
+                    id: true,
+                },
+                where: {
+                    name: {
+                        eq: QUEUE_FAILURE_NAME.to_owned(),
+                    },
+                },
+            }
+        })
+        .await
+        .map_err(worker_error)?;
+    ensure(
+        queue_failure_remaining.is_empty(),
+        "queue-time compilation failure submitted an earlier high-level batch operation",
+    )?;
+
+    Response::from_json(&json!({
+        "ok": true,
+        "directInsertedId": direct_inserted.id.to_string(),
+        "directInsertedName": direct_inserted.name,
+        "directBeforeId": direct_before.id.to_string(),
+        "directBeforeName": direct_before.name,
+        "directUpdatedCount": direct_updated_count,
+        "directAfterId": direct_after.id.to_string(),
+        "directAfterName": direct_after.name,
+        "directDeletedCount": direct_deleted_count,
+        "directRemainingRows": direct_remaining.len(),
+        "sessionInsertedId": session_inserted.id.to_string(),
+        "sessionInsertedName": session_inserted.name,
+        "sessionQueriedId": session_queried.id.to_string(),
+        "sessionQueriedName": session_queried.name,
+        "sessionDeletedCount": session_deleted_count,
+        "sessionBookmark": session_bookmark.as_str(),
+        "sessionRemainingRows": session_remaining.len(),
+        "compileError": queue_error.to_string(),
+        "queueFailureRemainingRows": queue_failure_remaining.len(),
     }))
 }
 

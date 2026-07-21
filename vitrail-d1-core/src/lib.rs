@@ -10,6 +10,8 @@ mod session;
 mod statement;
 mod update;
 
+#[doc(hidden)]
+pub use batch::BatchOutput;
 pub use batch::{AtomicBatch, BatchHandle, BatchResults};
 pub use client::VitrailClient;
 pub use delete::{DeleteMany, DeleteManyModel, DeleteSpec};

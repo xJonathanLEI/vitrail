@@ -16,6 +16,29 @@ type BoxBatchValue = Box<dyn Any + Send>;
 type BatchDecoder =
     Box<dyn FnOnce(&CompiledStatement, D1Result) -> Result<BoxBatchValue, Error> + Send + 'static>;
 
+/// Internal adapter from queued batch operations to their resolved outputs.
+///
+/// This trait is sealed and exists only as the generic bound used by the
+/// high-level atomic-batch convenience API.
+#[doc(hidden)]
+pub trait BatchOutput: private::Sealed {
+    /// The concrete value returned after the atomic batch executes.
+    type Output;
+
+    #[doc(hidden)]
+    type Handles: Send + 'static;
+
+    #[doc(hidden)]
+    fn into_handles(self) -> Result<Self::Handles, Error>;
+
+    #[doc(hidden)]
+    fn extract(handles: Self::Handles, results: &mut BatchResults) -> Result<Self::Output, Error>;
+}
+
+mod private {
+    pub trait Sealed {}
+}
+
 #[derive(Debug)]
 struct BatchIdentity;
 
@@ -190,6 +213,15 @@ impl<'a> AtomicBatch<'a> {
             let output = delete.decode_batch_delete(changes)?;
             Ok(Box::new(output))
         }))
+    }
+
+    pub(crate) async fn execute_outputs<O>(self, output: O) -> Result<O::Output, Error>
+    where
+        O: BatchOutput,
+    {
+        let handles = output.into_handles()?;
+        let mut results = self.execute().await?;
+        O::extract(handles, &mut results)
     }
 
     /// Executes all queued operations through exactly one D1 `batch()` call.
@@ -375,6 +407,139 @@ impl BatchResults {
     }
 }
 
+impl<T> private::Sealed for BatchHandle<T> where T: Send + 'static {}
+
+impl<T> BatchOutput for BatchHandle<T>
+where
+    T: Send + 'static,
+{
+    type Output = T;
+    type Handles = Self;
+
+    fn into_handles(self) -> Result<Self::Handles, Error> {
+        Ok(self)
+    }
+
+    fn extract(handle: Self::Handles, results: &mut BatchResults) -> Result<Self::Output, Error> {
+        results.take(handle)
+    }
+}
+
+impl<O> private::Sealed for Result<O, Error> where O: BatchOutput {}
+
+impl<O> BatchOutput for Result<O, Error>
+where
+    O: BatchOutput,
+{
+    type Output = O::Output;
+    type Handles = O::Handles;
+
+    fn into_handles(self) -> Result<Self::Handles, Error> {
+        match self {
+            Ok(output) => output.into_handles(),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn extract(handles: Self::Handles, results: &mut BatchResults) -> Result<Self::Output, Error> {
+        O::extract(handles, results)
+    }
+}
+
+impl private::Sealed for () {}
+
+impl BatchOutput for () {
+    type Output = ();
+    type Handles = ();
+
+    fn into_handles(self) -> Result<Self::Handles, Error> {
+        Ok(())
+    }
+
+    fn extract((): Self::Handles, _results: &mut BatchResults) -> Result<Self::Output, Error> {
+        Ok(())
+    }
+}
+
+macro_rules! impl_batch_output_tuple {
+    ($(($output:ident, $value:ident)),+ $(,)?) => {
+        impl<$($output),+> private::Sealed for ($($output,)+)
+        where
+            $($output: BatchOutput,)+
+        {
+        }
+
+        impl<$($output),+> BatchOutput for ($($output,)+)
+        where
+            $($output: BatchOutput,)+
+        {
+            type Output = ($(<$output as BatchOutput>::Output,)+);
+            type Handles = ($(<$output as BatchOutput>::Handles,)+);
+
+            fn into_handles(self) -> Result<Self::Handles, Error> {
+                let ($($value,)+) = self;
+
+                $(
+                    let $value = $value.into_handles()?;
+                )+
+
+                Ok(($($value,)+))
+            }
+
+            fn extract(
+                handles: Self::Handles,
+                results: &mut BatchResults,
+            ) -> Result<Self::Output, Error> {
+                let ($($value,)+) = handles;
+
+                $(
+                    let $value = <$output as BatchOutput>::extract($value, results)?;
+                )+
+
+                Ok(($($value,)+))
+            }
+        }
+    };
+}
+
+macro_rules! impl_batch_output_tuples {
+    (@next [$($implemented:tt)*] []) => {};
+    (
+        @next
+        [$($implemented:tt)*]
+        [($output:ident, $value:ident) $(, ($remaining_output:ident, $remaining_value:ident))*]
+    ) => {
+        impl_batch_output_tuple!($($implemented)* ($output, $value));
+        impl_batch_output_tuples!(
+            @next
+            [$($implemented)* ($output, $value),]
+            [$(($remaining_output, $remaining_value)),*]
+        );
+    };
+    ($(($output:ident, $value:ident)),+ $(,)?) => {
+        impl_batch_output_tuples!(@next [] [$(($output, $value)),+]);
+    };
+}
+
+impl_batch_output_tuples!(
+    (A, a),
+    (B, b),
+    (C, c),
+    (D, d),
+    (E, e),
+    (F, f),
+    (G, g),
+    (H, h),
+    (I, i),
+    (J, j),
+    (K, k),
+    (L, l),
+    (M, m),
+    (N, n),
+    (O, o),
+    (P, p),
+);
+
 fn validated_row_metadata(statement: &CompiledStatement) -> Result<Arc<D1RowMetadata>, Error> {
     D1RowMetadata::new(statement.result_columns()).map(Arc::new)
 }
@@ -451,6 +616,172 @@ mod tests {
         };
 
         (results, handle)
+    }
+
+    fn result_handle<T>(identity: &Arc<BatchIdentity>, slot: usize) -> BatchHandle<T> {
+        BatchHandle {
+            identity: Arc::clone(identity),
+            slot,
+            generation: 0,
+            _output: PhantomData,
+        }
+    }
+
+    fn batch_results(identity: Arc<BatchIdentity>, values: Vec<BoxBatchValue>) -> BatchResults {
+        BatchResults {
+            identity,
+            slots: values
+                .into_iter()
+                .map(|value| BatchResultSlot {
+                    generation: 0,
+                    value: Some(value),
+                })
+                .collect(),
+        }
+    }
+
+    fn resolve_outputs<O>(output: O, results: &mut BatchResults) -> Result<O::Output, Error>
+    where
+        O: BatchOutput,
+    {
+        let handles = output.into_handles()?;
+        O::extract(handles, results)
+    }
+
+    #[test]
+    fn batch_outputs_resolve_heterogeneous_tuple_in_order() {
+        let identity = Arc::new(BatchIdentity);
+        let number = result_handle::<u64>(&identity, 0);
+        let text = result_handle::<String>(&identity, 1);
+        let flags = result_handle::<Vec<bool>>(&identity, 2);
+        let mut results = batch_results(
+            identity,
+            vec![
+                Box::new(7_u64),
+                Box::new("decoded".to_owned()),
+                Box::new(vec![true, false]),
+            ],
+        );
+
+        let output = resolve_outputs(
+            (
+                Ok::<_, Error>(number),
+                Ok::<_, Error>(text),
+                Ok::<_, Error>(flags),
+            ),
+            &mut results,
+        )
+        .expect("heterogeneous outputs should resolve");
+
+        assert_eq!(output, (7_u64, "decoded".to_owned(), vec![true, false]));
+    }
+
+    #[test]
+    fn batch_outputs_follow_callback_order_instead_of_slot_order() {
+        let identity = Arc::new(BatchIdentity);
+        let number = result_handle::<u64>(&identity, 0);
+        let text = result_handle::<String>(&identity, 1);
+        let flag = result_handle::<bool>(&identity, 2);
+        let mut results = batch_results(
+            identity,
+            vec![
+                Box::new(41_u64),
+                Box::new("second slot".to_owned()),
+                Box::new(true),
+            ],
+        );
+
+        let output = resolve_outputs(
+            (
+                Ok::<_, Error>(flag),
+                Ok::<_, Error>(number),
+                Ok::<_, Error>(text),
+            ),
+            &mut results,
+        )
+        .expect("reordered handles should resolve");
+
+        assert_eq!(output, (true, 41_u64, "second slot".to_owned()));
+    }
+
+    #[test]
+    fn batch_output_queue_error_prevents_result_extraction() {
+        let identity = Arc::new(BatchIdentity);
+        let handle = result_handle::<u64>(&identity, 0);
+        let retained_handle = handle.clone();
+        let mut results = batch_results(identity, vec![Box::new(7_u64)]);
+        let queued = (
+            Ok::<_, Error>(handle),
+            Err::<BatchHandle<String>, Error>(Error::Binding(
+                "second queue operation failed".to_owned(),
+            )),
+            Err::<BatchHandle<bool>, Error>(Error::Binding(
+                "third queue operation failed".to_owned(),
+            )),
+        );
+
+        let error = queued
+            .into_handles()
+            .expect_err("the first queue error should be returned");
+
+        assert!(matches!(
+            error,
+            Error::Binding(ref message) if message == "second queue operation failed"
+        ));
+        assert_eq!(
+            results
+                .take(retained_handle)
+                .expect("queue conversion must not extract result slots"),
+            7_u64
+        );
+    }
+
+    #[test]
+    fn batch_outputs_support_unit_and_single_operation_shapes() {
+        let identity = Arc::new(BatchIdentity);
+        let mut empty_results = batch_results(identity, Vec::new());
+
+        assert_eq!(
+            resolve_outputs((), &mut empty_results).expect("unit output should resolve"),
+            ()
+        );
+
+        let (mut single_results, single_handle) = one_result("single".to_owned());
+        assert_eq!(
+            resolve_outputs(Ok::<_, Error>(single_handle), &mut single_results)
+                .expect("a single queue result should resolve"),
+            "single"
+        );
+
+        let (mut tuple_results, tuple_handle) = one_result(23_u64);
+        assert_eq!(
+            resolve_outputs((Ok::<_, Error>(tuple_handle),), &mut tuple_results)
+                .expect("a one-element tuple should resolve"),
+            (23_u64,)
+        );
+    }
+
+    #[test]
+    fn batch_outputs_support_fallible_callback_tuples() {
+        let identity = Arc::new(BatchIdentity);
+        let number = result_handle::<u64>(&identity, 0);
+        let text = result_handle::<String>(&identity, 1);
+        let mut results = batch_results(
+            identity,
+            vec![Box::new(9_u64), Box::new("callback".to_owned())],
+        );
+
+        let callback_output = (|| {
+            let number = Ok::<_, Error>(number)?;
+            let text = Ok::<_, Error>(text)?;
+
+            Ok((number, text))
+        })();
+
+        let output = resolve_outputs(callback_output, &mut results)
+            .expect("a fallible callback tuple should resolve");
+
+        assert_eq!(output, (9_u64, "callback".to_owned()));
     }
 
     #[test]
