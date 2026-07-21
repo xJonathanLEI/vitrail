@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://crates.io/crates/vitrail-pg"><img alt="vitrail-pg crate" src="https://img.shields.io/crates/v/vitrail-pg.svg"></a>
   <a href="https://crates.io/crates/vitrail-sqlite"><img alt="vitrail-sqlite crate" src="https://img.shields.io/crates/v/vitrail-sqlite.svg"></a>
+  <a href="https://crates.io/crates/vitrail-d1"><img alt="vitrail-d1 crate" src="https://img.shields.io/crates/v/vitrail-d1.svg"></a>
 </p>
 
 <p align="center">
@@ -23,12 +24,13 @@
 
 - PostgreSQL: `vitrail-pg`
 - SQLite: `vitrail-sqlite`
+- Cloudflare D1 for Rust Workers: `vitrail-d1`
 
 ## Core features
 
 - Prisma-like syntax for running compile-time validated SQL queries and getting type-safe data
-- Transaction support
-- Migration script generation and management - [via the CLI](./examples/pg_migration_cli.rs) or programmatically (with easy embedding via the `embed_migrations!()` macro)
+- Interactive transaction support for PostgreSQL and SQLite, plus typed atomic batches backed by D1 `batch()` for Rust Workers
+- Migration generation for every backend: PostgreSQL and SQLite can manage and embed migrations, while D1 generates nested scripts for Wrangler to apply and track
 - [Custom Rust type support](./examples/pg_custom_string_types.rs) with arbitrary mapping logic via trait implementation
 
 ## The API
