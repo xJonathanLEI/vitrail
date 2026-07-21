@@ -31,7 +31,7 @@
 - Prisma-like syntax for running compile-time validated SQL queries and getting type-safe data
 - Interactive transaction support for PostgreSQL and SQLite, plus typed atomic batches backed by D1 `batch()` for Rust Workers
 - Migration generation for every backend: PostgreSQL and SQLite can manage and embed migrations, while D1 generates nested scripts for Wrangler to apply and track
-- [Custom Rust type support](./examples/pg_custom_string_types.rs) with arbitrary mapping logic via trait implementation
+- [Custom Rust type support](./examples/pg/custom_string_types.rs) with arbitrary mapping logic via trait implementation
 
 ## The API
 
@@ -41,7 +41,7 @@ This section only serves as a brief demonstration of the core API. For full runn
 >
 > The macros shown below (`query!`, `insert!`, `update!`, `delete!`) are only thin wrappers that define relevant types and applying derive macros.
 >
-> It's always possible to manually define the relevant model types first and use the derived methods. See the [model-first example](./examples/pg_query_model_first.rs).
+> It's always possible to manually define the relevant model types first and use the derived methods. See the [model-first example](./examples/pg/query_model_first.rs).
 
 ### Schema DSL
 

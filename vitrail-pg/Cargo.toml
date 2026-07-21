@@ -19,20 +19,20 @@ vitrail-pg-macros.workspace = true
 
 [[example]]
 name = "pg_query_ad_hoc"
-path = "../examples/pg_query_ad_hoc.rs"
+path = "../examples/pg/query_ad_hoc.rs"
 
 [[example]]
 name = "pg_query_model_first"
-path = "../examples/pg_query_model_first.rs"
+path = "../examples/pg/query_model_first.rs"
 
 [[example]]
 name = "pg_migration_cli"
-path = "../examples/pg_migration_cli.rs"
+path = "../examples/pg/migration_cli.rs"
 
 [[example]]
 name = "pg_custom_string_types"
-path = "../examples/pg_custom_string_types.rs"
+path = "../examples/pg/custom_string_types.rs"
 
 [[example]]
 name = "pg_transaction"
-path = "../examples/pg_transaction.rs"
+path = "../examples/pg/transaction.rs"

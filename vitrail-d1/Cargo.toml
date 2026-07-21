@@ -25,4 +25,4 @@ tokio.workspace = true
 
 [[example]]
 name = "d1_migration_cli"
-path = "../examples/d1_migration_cli.rs"
+path = "../examples/d1/migration_cli.rs"

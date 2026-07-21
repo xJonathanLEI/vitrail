@@ -12,7 +12,7 @@ members = [
     "vitrail-sqlite-core",
     "vitrail-sqlite-dialect",
     "vitrail-sqlite-macros",
-    "examples/d1-worker",
+    "examples/d1/worker",
     "examples/workspace/example-app",
     "examples/workspace/example-db",
     "tests/d1",

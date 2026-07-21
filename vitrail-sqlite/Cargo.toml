@@ -20,4 +20,4 @@ tokio.workspace = true
 
 [[example]]
 name = "sqlite_migration_cli"
-path = "../examples/sqlite_migration_cli.rs"
+path = "../examples/sqlite/migration_cli.rs"
