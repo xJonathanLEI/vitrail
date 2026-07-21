@@ -50,7 +50,7 @@ jobs:
           cargo clippy --all --all-targets -- -D warnings
 
   biome:
-    name: "Check script format"
+    name: "Check scripts"
     runs-on: "ubuntu-latest"
 
     steps:
@@ -70,6 +70,10 @@ jobs:
       - name: "Run Biome format check"
         run: |
           npm run format:check
+
+      - name: "Run TypeScript checks"
+        run: |
+          npm run typecheck
 
   prisma-fixtures:
     name: "Generate Prisma fixtures"
@@ -184,6 +188,4 @@ jobs:
 
       - name: "Run local D1 integration tests"
         run: |
-          npm run test:d1:direct
-          npm run test:d1:sessions
-          npm run test:d1:batches
+          npm run test:d1

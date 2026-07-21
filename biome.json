@@ -3,7 +3,9 @@
 	"files": {
 		"includes": [
 			"scripts/**/*.mjs",
-			"examples/workspace/d1-worker/tests/**/*.mjs"
+			"examples/workspace/d1-worker/tests/**/*.ts",
+			"examples/workspace/d1-worker/tsconfig.json",
+			"examples/workspace/d1-worker/vitest.config.ts"
 		]
 	},
 	"formatter": {

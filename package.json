@@ -5,16 +5,21 @@
     "prisma": "prisma",
     "format": "biome format --write .",
     "format:check": "biome check --formatter-enabled=true .",
+    "typecheck": "tsc --project examples/workspace/d1-worker/tsconfig.json",
     "generate:prisma-fixtures": "node scripts/prisma-fixtures.mjs generate",
     "generate:prisma-fixtures:postgres": "node scripts/prisma-fixtures.mjs postgres",
     "generate:prisma-fixtures:sqlite": "node scripts/prisma-fixtures.mjs sqlite",
-    "test:d1:direct": "node --test examples/workspace/d1-worker/tests/direct-crud.mjs",
-    "test:d1:sessions": "node --test examples/workspace/d1-worker/tests/sessions.mjs",
-    "test:d1:batches": "node --test examples/workspace/d1-worker/tests/atomic-batches.mjs"
+    "test:d1": "vitest run --config examples/workspace/d1-worker/vitest.config.ts",
+    "test:d1:direct": "npm run test:d1 -- tests/direct-crud.test.ts",
+    "test:d1:sessions": "npm run test:d1 -- tests/sessions.test.ts",
+    "test:d1:batches": "npm run test:d1 -- tests/atomic-batches.test.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",
+    "@types/node": "^24.13.3",
     "miniflare": "4.20260714.0",
-    "prisma": "7.5.0"
+    "prisma": "7.5.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }
